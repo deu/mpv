@@ -71,6 +71,7 @@ static int validate_3dlut_size_opt(struct mp_log *log, const m_option_t *opt,
 const struct m_sub_options mp_icc_conf = {
     .opts = (m_option_t[]) {
         OPT_STRING("icc-profile", profile, 0),
+        OPT_FLAG("icc-profile-auto", profile_auto_flag, 0),
         OPT_STRING("icc-cache", cache, 0),
         OPT_INT("icc-intent", intent, 0),
         OPT_STRING_VALIDATE("3dlut-size", size_str, 0, validate_3dlut_size_opt),
@@ -111,11 +112,14 @@ static struct bstr load_file(void *talloc_ctx, const char *filename,
 struct lut3d *mp_load_icc(struct mp_icc_opts *opts, struct mp_log *log,
                           struct mpv_global *global)
 {
+    char *profile_path = opts->profile_auto_flag ?
+                         opts->profile_auto :
+                         opts->profile;
     int s_r, s_g, s_b;
     if (!parse_3dlut_size(opts->size_str, &s_r, &s_g, &s_b))
         return NULL;
 
-    if (!opts->profile)
+    if (!profile_path)
         return NULL;
 
     void *tmp = talloc_new(NULL);
@@ -123,8 +127,8 @@ struct lut3d *mp_load_icc(struct mp_icc_opts *opts, struct mp_log *log,
     struct lut3d *lut = NULL;
     bool locked = false;
 
-    mp_msg(log, MSGL_INFO, "Opening ICC profile '%s'\n", opts->profile);
-    struct bstr iccdata = load_file(tmp, opts->profile, global);
+    mp_msg(log, MSGL_INFO, "Opening ICC profile '%s'\n", profile_path);
+    struct bstr iccdata = load_file(tmp, profile_path, global);
     if (!iccdata.len)
         goto error_exit;
 

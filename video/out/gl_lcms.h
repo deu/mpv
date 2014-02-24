@@ -5,6 +5,8 @@ extern const struct m_sub_options mp_icc_conf;
 
 struct mp_icc_opts {
     char *profile;
+    int profile_auto_flag;
+    char *profile_auto;
     char *cache;
     char *size_str;
     int intent;

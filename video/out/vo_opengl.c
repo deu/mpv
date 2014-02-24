@@ -397,7 +397,25 @@ static int preinit(struct vo *vo)
                               p->glctx->depth_b);
     gl_video_set_options(p->renderer, p->renderer_opts);
 
-    if (p->icc_opts->profile) {
+    if (p->icc_opts->profile_auto_flag) {
+        char *profile_path;
+        int r = p->glctx->vo_control(vo, 0, VOCTRL_GET_ICC_PROFILE_PATH,
+                                     &profile_path);
+        if (r == VO_NOTIMPL) {
+            MP_ERR(vo, "selected backend doesn't support icc-profile-auto\n");
+            goto err_out;
+        }
+
+        if (r == VO_FALSE) {
+            MP_ERR(vo, "selected backend failed to icc-profile auto selection\n");
+            goto err_out;
+        }
+
+        if (r == VO_TRUE)
+            p->icc_opts->profile_auto = talloc_steal(vo, profile_path);
+    }
+
+    if (p->icc_opts->profile || p->icc_opts->profile_auto) {
         struct lut3d *lut3d = mp_load_icc(p->icc_opts, vo->log, vo->global);
         if (!lut3d)
             goto err_out;

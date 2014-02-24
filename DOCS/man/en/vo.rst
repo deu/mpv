@@ -449,6 +449,13 @@ Available video output drivers are:
         property, as using both is somewhat redundant. It also enables linear
         light scaling.
 
+
+    ``icc-profile-auto``
+        Automatically select an ICC profile to use. The used profile depends
+        the screen where mpv is initialized and it is not changed at runtime.
+
+        Only implemented on OS X (through ColorSync's API).
+
     ``icc-cache=<file>``
         Store and load the 3D LUT created from the ICC profile in this file.
         This can be used to speed up loading, since LittleCMS2 can take a while

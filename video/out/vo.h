@@ -80,6 +80,8 @@ enum mp_voctrl {
     VOCTRL_SCREENSHOT,                  // struct voctrl_screenshot_args*
 
     VOCTRL_SET_COMMAND_LINE,            // char**
+
+    VOCTRL_GET_ICC_PROFILE_PATH,        // char**
 };
 
 // VOCTRL_SET_EQUALIZER
