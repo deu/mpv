@@ -407,7 +407,7 @@ static int preinit(struct vo *vo)
         }
 
         if (r == VO_FALSE) {
-            MP_ERR(vo, "selected backend failed to icc-profile auto selection\n");
+            MP_ERR(vo, "selected backend failed icc-profile auto selection\n");
             goto err_out;
         }
 
