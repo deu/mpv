@@ -516,9 +516,7 @@ static char *cocoa_get_icc_profile_path(struct vo *vo)
     struct vo_cocoa_state *s = vo->cocoa;
     NSScreen *screen = vo->opts->fullscreen ? s->fs_screen : s->current_screen;
     char *result = NULL;
-    CFDictionaryRef device_info         = NULL,
-                    factory_info        = NULL,
-                    custom_profile_info = NULL;
+    CFDictionaryRef device_info = NULL;
 
     CGDirectDisplayID displayID = (CGDirectDisplayID)
         [[screen deviceDescription][@"NSScreenNumber"] unsignedLongValue];
@@ -539,7 +537,8 @@ static char *cocoa_get_icc_profile_path(struct vo *vo)
         goto get_icc_profile_path_err_out;
     }
 
-    factory_info = CFDictionaryGetValue(device_info, kColorSyncFactoryProfiles);
+    CFDictionaryRef factory_info =
+        CFDictionaryGetValue(device_info, kColorSyncFactoryProfiles);
     if (!factory_info) {
         MP_ERR(s, "cannot get display factory settings.\n");
         goto get_icc_profile_path_err_out;
@@ -550,11 +549,10 @@ static char *cocoa_get_icc_profile_path(struct vo *vo)
     if (!default_profile_id) {
         MP_ERR(s, "cannot get display default profile ID.\n");
         goto get_icc_profile_path_err_out;
-        return NULL;
     }
 
     CFURLRef icc_url;
-    custom_profile_info =
+    CFDictionaryRef custom_profile_info =
         CFDictionaryGetValue(device_info, kColorSyncCustomProfiles);
     if (custom_profile_info) {
         icc_url = CFDictionaryGetValue(custom_profile_info, default_profile_id);
@@ -588,8 +586,6 @@ static char *cocoa_get_icc_profile_path(struct vo *vo)
        MP_ERR(s, "cannot get display profile path.\n");
 
 get_icc_profile_path_err_out:
-    CF_RELEASE(custom_profile_info);
-    CF_RELEASE(factory_info);
     CF_RELEASE(device_info);
     return result;
 }
