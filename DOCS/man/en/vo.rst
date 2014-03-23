@@ -451,10 +451,12 @@ Available video output drivers are:
 
 
     ``icc-profile-auto``
-        Automatically select an ICC profile to use. The used profile depends
-        the screen where mpv is initialized and it is not changed at runtime.
+        Automatically select the ICC display profile currently specified by
+        the display settings of the operating system. The profile setting
+        refers to the screen where mpv is initialized and is not changed at
+        runtime.
 
-        Only implemented on OS X (through ColorSync's API).
+        NOTE: Only implemented on OS X with Cocoa.
 
     ``icc-cache=<file>``
         Store and load the 3D LUT created from the ICC profile in this file.
