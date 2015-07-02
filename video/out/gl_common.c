@@ -142,7 +142,6 @@ static const struct gl_functions gl_functions[] = {
             DEF_FN(Flush),
             DEF_FN(GenBuffers),
             DEF_FN(GenTextures),
-            DEF_FN(GetBooleanv),
             DEF_FN(GetAttribLocation),
             DEF_FN(GetError),
             DEF_FN(GetIntegerv),
@@ -529,6 +528,7 @@ struct backend {
 };
 
 extern const struct mpgl_driver mpgl_driver_x11;
+extern const struct mpgl_driver mpgl_driver_x11egl;
 
 static const struct backend backends[] = {
 #if HAVE_RPI_GLES
@@ -549,7 +549,7 @@ static const struct backend backends[] = {
     {.driver = &mpgl_driver_x11},
 #endif
 #if HAVE_EGL_X11
-    {"x11egl", mpgl_set_backend_x11egl},
+    {.driver = &mpgl_driver_x11egl},
 #endif
 };
 

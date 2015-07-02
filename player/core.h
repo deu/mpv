@@ -26,6 +26,7 @@
 #include "options/options.h"
 #include "sub/osd.h"
 #include "demux/timeline.h"
+#include "video/out/vo.h"
 
 // definitions used internally by the core player code
 
@@ -36,7 +37,7 @@ enum stop_play_reason {
     PT_NEXT_ENTRY,      // prepare to play next entry in playlist
     PT_CURRENT_ENTRY,   // prepare to play mpctx->playlist->current
     PT_STOP,            // stop playback, clear playlist
-    PT_RELOAD_DEMUXER,  // restart playback, but keep stream open
+    PT_RELOAD_FILE,     // restart playback
     PT_QUIT,            // stop playback, quit player
     PT_ERROR,           // play next playlist entry (due to an error)
 };
@@ -227,7 +228,8 @@ typedef struct MPContext {
 
     struct vo *video_out;
     // next_frame[0] is the next frame, next_frame[1] the one after that.
-    struct mp_image *next_frame[2];
+    struct mp_image *next_frames[2 + VO_MAX_FUTURE_FRAMES];
+    int num_next_frames;
     struct mp_image *saved_frame;   // for hrseek_lastframe
 
     enum playback_status video_status, audio_status;
@@ -423,7 +425,7 @@ float mp_get_cache_percent(struct MPContext *mpctx);
 bool mp_get_cache_idle(struct MPContext *mpctx);
 void update_window_title(struct MPContext *mpctx, bool force);
 void error_on_track(struct MPContext *mpctx, struct track *track);
-void stream_dump(struct MPContext *mpctx);
+int stream_dump(struct MPContext *mpctx, const char *source_filename);
 int mpctx_run_reentrant(struct MPContext *mpctx, void (*thread_fn)(void *arg),
                         void *thread_arg);
 struct mpv_global *create_sub_global(struct MPContext *mpctx);

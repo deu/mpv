@@ -561,7 +561,7 @@ Input Commands that are Possibly Subject to Change
     different memory region to prevent tearing).
 
     It is also possible to pass a raw memory address for use as bitmap memory
-    by passing a memory address as integer prefixed with a ``&`` character.
+    by passing a memory address as integer prefixed with an ``&`` character.
     Passing the wrong thing here will crash the player. This mode might be
     useful for use with libmpv. The ``offset`` parameter is simply added to the
     memory address (since mpv 0.8.0, ignored before).
@@ -1196,13 +1196,12 @@ Property list
 
     ::
 
-        MPV_FORMAT_NODE_ARRAY
-            MPV_FORMAT_NODE_MAP (for each track)
-                "format"            MPV_FORMAT_STRING
-                "samplerate"        MPV_FORMAT_INT64
-                "channels"          MPV_FORMAT_STRING
-                "channel-count"     MPV_FORMAT_INT64
-                "hr-channels"       MPV_FORMAT_STRING
+        MPV_FORMAT_NODE_MAP
+            "format"            MPV_FORMAT_STRING
+            "samplerate"        MPV_FORMAT_INT64
+            "channels"          MPV_FORMAT_STRING
+            "channel-count"     MPV_FORMAT_INT64
+            "hr-channels"       MPV_FORMAT_STRING
 
 ``audio-out-params``
     Same as ``audio-params``, but the format of the data written to the audio
@@ -1364,21 +1363,20 @@ Property list
 
     ::
 
-        MPV_FORMAT_NODE_ARRAY
-            MPV_FORMAT_NODE_MAP (for each track)
-                "pixelformat"       MPV_FORMAT_STRING
-                "w"                 MPV_FORMAT_INT64
-                "h"                 MPV_FORMAT_INT64
-                "dw"                MPV_FORMAT_INT64
-                "dh"                MPV_FORMAT_INT64
-                "aspect"            MPV_FORMAT_DOUBLE
-                "par"               MPV_FORMAT_DOUBLE
-                "colormatrix"       MPV_FORMAT_STRING
-                "colorlevels"       MPV_FORMAT_STRING
-                "primaries"         MPV_FORMAT_STRING
-                "chroma-location"   MPV_FORMAT_STRING
-                "rotate"            MPV_FORMAT_INT64
-                "stereo-in"         MPV_FORMAT_STRING
+        MPV_FORMAT_NODE_MAP
+            "pixelformat"       MPV_FORMAT_STRING
+            "w"                 MPV_FORMAT_INT64
+            "h"                 MPV_FORMAT_INT64
+            "dw"                MPV_FORMAT_INT64
+            "dh"                MPV_FORMAT_INT64
+            "aspect"            MPV_FORMAT_DOUBLE
+            "par"               MPV_FORMAT_DOUBLE
+            "colormatrix"       MPV_FORMAT_STRING
+            "colorlevels"       MPV_FORMAT_STRING
+            "primaries"         MPV_FORMAT_STRING
+            "chroma-location"   MPV_FORMAT_STRING
+            "rotate"            MPV_FORMAT_INT64
+            "stereo-in"         MPV_FORMAT_STRING
 
 ``dwidth``, ``dheight``
     Video display size. This is the video size after filters and aspect scaling
