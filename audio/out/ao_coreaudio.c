@@ -39,6 +39,7 @@ struct priv {
     AudioStreamID original_asbd_stream;
 
     int change_physical_format;
+    int exclusive;
 };
 
 static int64_t ca_get_hardware_latency(struct ao *ao) {
@@ -151,8 +152,8 @@ static int init(struct ao *ao)
 {
     struct priv *p = ao->priv;
 
-    if (af_fmt_is_spdif(ao->format)) {
-        MP_WARN(ao, "detected IEC61937, redirecting to coreaudio_exclusive\n");
+    if (!af_fmt_is_pcm(ao->format) || p->exclusive) {
+        MP_VERBOSE(ao, "redirecting to coreaudio_exclusive\n");
         ao->redirect = "coreaudio_exclusive";
         return CONTROL_ERROR;
     }
@@ -235,7 +236,8 @@ static void init_physical_format(struct ao *ao)
                          &p->original_asbd);
             CHECK_CA_WARN("could not get current physical stream format");
 
-            ca_change_physical_format_sync(ao, streams[i], best_asbd);
+            if (!ca_change_physical_format_sync(ao, streams[i], best_asbd))
+                p->original_asbd = (AudioStreamBasicDescription){0};
             break;
         }
     }
@@ -345,9 +347,12 @@ static void uninit(struct ao *ao)
 
 static OSStatus hotplug_cb(AudioObjectID id, UInt32 naddr,
                            const AudioObjectPropertyAddress addr[],
-                           void *ctx) {
-    reinit_device(ctx);
-    ao_hotplug_event(ctx);
+                           void *ctx)
+{
+    struct ao *ao = ctx;
+    MP_VERBOSE(ao, "Handling potential hotplug event...\n");
+    reinit_device(ao);
+    ao_hotplug_event(ao);
     return noErr;
 }
 
@@ -419,6 +424,7 @@ const struct ao_driver audio_out_coreaudio = {
     .priv_size      = sizeof(struct priv),
     .options = (const struct m_option[]){
         OPT_FLAG("change-physical-format", change_physical_format, 0),
+        OPT_FLAG("exclusive", exclusive, 0),
         {0}
     },
 };
