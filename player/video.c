@@ -333,7 +333,9 @@ void mp_force_video_refresh(struct MPContext *mpctx)
         return;
 
     // If not paused, the next frame should come soon enough.
-    if (opts->pause && mpctx->last_vo_pts != MP_NOPTS_VALUE) {
+    if (opts->pause && mpctx->video_status == STATUS_PLAYING &&
+        mpctx->last_vo_pts != MP_NOPTS_VALUE)
+    {
         queue_seek(mpctx, MPSEEK_ABSOLUTE, mpctx->last_vo_pts,
                    MPSEEK_VERY_EXACT, true);
     }
@@ -926,7 +928,7 @@ void write_video(struct MPContext *mpctx, double endpts)
             if (!mpctx->step_frames && !opts->pause)
                 pause_player(mpctx);
         }
-        if (mpctx->max_frames == 0)
+        if (mpctx->max_frames == 0 && !mpctx->stop_play)
             mpctx->stop_play = AT_END_OF_FILE;
         if (mpctx->max_frames > 0)
             mpctx->max_frames--;

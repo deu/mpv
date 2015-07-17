@@ -591,6 +591,22 @@ Video
         codecs. See ``--hwdec-codecs`` to enable hardware decoding for more
         codecs.
 
+``--hwdec-preload=<api>``
+    This is useful for the ``opengl`` and ``opengl-cb`` VOs for creating the
+    hardware decoding OpenGL interop context, but without actually enabling
+    hardware decoding itself (like ``--hwdec`` does).
+
+    If set to ``no`` (default), the ``--hwdec`` option is used.
+
+    For ``opengl``, if set, do not create the interop context on demand, but
+    when the VO is created.
+
+    For ``opengl-cb``, if set, load the interop context as soon as the OpenGL
+    context is created. Since ``opengl-cb`` has no on-demand loading, this
+    allows enabling hardware decoding at runtime at all, without having to
+    to temporarily set the ``hwdec`` option just during OpenGL context
+    initialization with ``mpv_opengl_cb_init_gl()``.
+
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
     video to make it fit a 4:3 display without black bands). The range
@@ -651,16 +667,16 @@ Video
     which means the value ``0`` would rotate the video according to the
     rotation metadata.)
 
-``--video-stereo-mode=<mode>``
+``--video-stereo-mode=<no|mode>``
     Set the stereo 3D output mode (default: ``mono``). This is done by inserting
     the ``stereo3d`` conversion filter.
+
+    The pseudo-mode ``no`` disables automatic conversion completely.
 
     The mode ``mono`` is an alias to ``ml``, which refers to the left frame in
     2D. This is the default, which means mpv will try to show 3D movies in 2D,
     instead of the mangled 3D image not intended for consumption (such as
     showing the left and right frame side by side, etc.).
-
-    The pseudo-mode ``none`` disables automatic conversion completely.
 
     Use ``--video-stereo-mode=help`` to list all available modes. Check with
     the ``stereo3d`` filter documentation to see what the names mean. Note that
@@ -2133,12 +2149,17 @@ Demuxer
 ``--demuxer-mkv-subtitle-preroll-secs=<value>``
     See ``--demuxer-mkv-subtitle-preroll``.
 
-``--demuxer-mkv-probe-video-duration``
+``--demuxer-mkv-probe-video-duration=<yes|no|full>``
     When opening the file, seek to the end of it, and check what timestamp the
     last video packet has, and report that as file duration. This is strictly
     for compatibility with Haali only. In this mode, it's possible that opening
     will be slower (especially when playing over http), or that behavior with
     broken files is much worse. So don't use this option.
+
+    The ``yes`` mode merely uses the index and reads a small number of blocks
+    from the end of the file. The ``full`` mode actually traverses the entire
+    file and can make a reliable estimate even without an index present (such
+    as partial files).
 
 ``--demuxer-mkv-fix-timestamps=<yes|no>``
     Fix rounded Matroska timestamps (enabled by default). Matroska usually
@@ -2225,6 +2246,11 @@ Demuxer
 ``--demuxer-readahead-bytes=<bytes>``
     See ``--demuxer-readahead-packets``.
 
+``--force-seekable=<yes|no>``
+    If the player thinks that the media is not seekable (e.g. playing from a
+    pipe, or it's a http stream with a server that doesn't support range
+    requests), seeking will be disabled. This option can forcibly enable it.
+    For seeks within the cache, there's a good chance of success.
 
 Input
 -----
@@ -2649,7 +2675,7 @@ Screenshot
 
         .. note::
 
-            This is a simple way for getting unique per-frame timestamps. Frame
+            This is a simple way for getting unique per-frame timestamps. (Frame
             numbers would be more intuitive, but are not easily implementable
             because container formats usually use time stamps for identifying
             frames.)
@@ -3178,7 +3204,7 @@ Network
     network transport when playing ``rtsp://...`` URLs. The value ``lavf``
     leaves the decision to libavformat.
 
-``--hls-bitrate=<no|min|max>``
+``--hls-bitrate=<no|min|max|<rate>>``
     If HLS streams are played, this option controls what streams are selected
     by default. The option allows the following parameters:
 
@@ -3186,6 +3212,9 @@ Network
                 first audio/video streams it can find.
     :min:       Pick the streams with the lowest bitrate.
     :max:       Same, but highest bitrate. (Default.)
+
+    Additionally, if the option is a number, the stream with the highest rate
+    equal or below the option value is selected.
 
     The bitrate as used is sent by the server, and there's no guarantee it's
     actually meaningful.

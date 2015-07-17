@@ -789,27 +789,37 @@ static int decode_peak(demuxer_t *demuxer, const char *tag, float *out)
     return 0;
 }
 
+static void apply_replaygain(demuxer_t *demuxer, struct replaygain_data *rg)
+{
+    for (int n = 0; n < demuxer->num_streams; n++) {
+        struct sh_stream *sh = demuxer->streams[n];
+        if (sh->audio && !sh->audio->replaygain_data) {
+            MP_VERBOSE(demuxer, "Replaygain: Track=%f/%f Album=%f/%f\n",
+                       rg->track_gain, rg->track_peak,
+                       rg->album_gain, rg->album_peak);
+            sh->audio->replaygain_data = talloc_memdup(demuxer, rg, sizeof(*rg));
+        }
+    }
+}
+
 static void demux_export_replaygain(demuxer_t *demuxer)
 {
-    float tg, tp, ag, ap;
+    struct replaygain_data rg = {0};
 
-    if (!decode_gain(demuxer, "REPLAYGAIN_TRACK_GAIN", &tg) &&
-        !decode_peak(demuxer, "REPLAYGAIN_TRACK_PEAK", &tp) &&
-        !decode_gain(demuxer, "REPLAYGAIN_ALBUM_GAIN", &ag) &&
-        !decode_peak(demuxer, "REPLAYGAIN_ALBUM_PEAK", &ap))
+    if (!decode_gain(demuxer, "REPLAYGAIN_TRACK_GAIN", &rg.track_gain) &&
+        !decode_peak(demuxer, "REPLAYGAIN_TRACK_PEAK", &rg.track_peak) &&
+        !decode_gain(demuxer, "REPLAYGAIN_ALBUM_GAIN", &rg.album_gain) &&
+        !decode_peak(demuxer, "REPLAYGAIN_ALBUM_PEAK", &rg.album_peak))
     {
-        struct replaygain_data *rgain = talloc_ptrtype(demuxer, rgain);
+        apply_replaygain(demuxer, &rg);
+    }
 
-        rgain->track_gain = tg;
-        rgain->track_peak = tp;
-        rgain->album_gain = ag;
-        rgain->album_peak = ap;
-
-        for (int n = 0; n < demuxer->num_streams; n++) {
-            struct sh_stream *sh = demuxer->streams[n];
-            if (sh->audio && !sh->audio->replaygain_data)
-                sh->audio->replaygain_data = rgain;
-        }
+    if (!decode_gain(demuxer, "REPLAYGAIN_GAIN", &rg.track_gain) &&
+        !decode_peak(demuxer, "REPLAYGAIN_PEAK", &rg.track_peak))
+    {
+        rg.album_gain = rg.track_gain;
+        rg.album_peak = rg.track_peak;
+        apply_replaygain(demuxer, &rg);
     }
 }
 
@@ -990,9 +1000,8 @@ static struct demuxer *open_given_type(struct mpv_global *global,
             mp_verbose(log, "Detected file format: %s\n", desc->desc);
         if (!in->d_thread->seekable)
             mp_verbose(log, "Stream is not seekable.\n");
-        // Pretend we can seek if we can't seek, but there's a cache.
-        if (!in->d_thread->seekable && stream->uncached_stream) {
-            mp_verbose(log, "Enabling seeking because stream cache is active.\n");
+        if (!in->d_thread->seekable && demuxer->opts->force_seekable) {
+            mp_warn(log, "Not seekable, but enabling seeking on user request.\n");
             in->d_thread->seekable = true;
             in->d_thread->partially_seekable = true;
         }

@@ -222,6 +222,7 @@ void mp_destroy(struct MPContext *mpctx)
         pthread_detach(pthread_self());
 
     mp_msg_uninit(mpctx->global);
+    pthread_mutex_destroy(&mpctx->ass_lock);
     talloc_free(mpctx);
 }
 
@@ -329,6 +330,8 @@ struct MPContext *mp_create(void)
         .playback_abort = mp_cancel_new(mpctx),
     };
 
+    pthread_mutex_init(&mpctx->ass_lock, NULL);
+
     mpctx->global = talloc_zero(mpctx, struct mpv_global);
 
     // Nothing must call mp_msg*() and related before this
@@ -431,7 +434,7 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         mpctx->encode_lavc_ctx = encode_lavc_init(opts->encode_opts,
                                                   mpctx->global);
         if(!mpctx->encode_lavc_ctx) {
-            MP_INFO(mpctx, "Encoding initialization failed.");
+            MP_INFO(mpctx, "Encoding initialization failed.\n");
             return -1;
         }
         m_config_set_profile(mpctx->mconfig, "encoding", 0);

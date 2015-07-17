@@ -62,7 +62,7 @@ static struct gl_hwdec *load_hwdec_driver(struct mp_log *log, GL *gl,
         .gl_texture_target = GL_TEXTURE_2D,
         .reject_emulated = is_auto,
     };
-    mp_verbose(log, "Trying hwdec driver '%s'\n", drv->api_name);
+    mp_verbose(log, "Loading hwdec driver '%s'\n", drv->api_name);
     if (hwdec->driver->create(hwdec) < 0) {
         talloc_free(hwdec);
         mp_verbose(log, "Loading failed.\n");
@@ -84,6 +84,12 @@ struct gl_hwdec *gl_hwdec_load_api(struct mp_log *log, GL *gl,
         }
     }
     return NULL;
+}
+
+// Like gl_hwdec_load_api(), but use HWDEC_... identifiers.
+struct gl_hwdec *gl_hwdec_load_api_id(struct mp_log *log, GL *gl, int id)
+{
+    return gl_hwdec_load_api(log, gl, m_opt_choice_str(mp_hwdec_names, id));
 }
 
 void gl_hwdec_uninit(struct gl_hwdec *hwdec)

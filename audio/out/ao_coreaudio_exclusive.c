@@ -288,8 +288,9 @@ static int init(struct ao *ao)
                  &p->original_asbd);
     CHECK_CA_ERROR("could not get stream's original physical format");
 
-    if (!ca_change_physical_format_sync(ao, p->stream, hwfmt))
-        goto coreaudio_error;
+    // Even if changing the physical format fails, we can try using the current
+    // virtual format.
+    ca_change_physical_format_sync(ao, p->stream, hwfmt);
 
     if (!ca_init_chmap(ao, p->device))
         goto coreaudio_error;
@@ -319,24 +320,7 @@ static int init(struct ao *ao)
         goto coreaudio_error;
     }
 
-    uint32_t latency_frames = 0;
-    uint32_t latency_properties[] = {
-        kAudioDevicePropertyLatency,
-        kAudioDevicePropertyBufferFrameSize,
-        kAudioDevicePropertySafetyOffset,
-    };
-    for (int n = 0; n < MP_ARRAY_SIZE(latency_properties); n++) {
-        uint32_t temp;
-        err = CA_GET_O(p->device, latency_properties[n], &temp);
-        CHECK_CA_WARN("cannot get device latency");
-        if (err == noErr) {
-            latency_frames += temp;
-            MP_VERBOSE(ao, "Latency property %s: %d frames\n",
-                       fourcc_repr(latency_properties[n]), (int)temp);
-        }
-    }
-
-    p->hw_latency_us = ca_frames_to_us(ao, latency_frames);
+    p->hw_latency_us = ca_get_device_latency_us(ao, p->device);
     MP_VERBOSE(ao, "base latency: %d microseconds\n", (int)p->hw_latency_us);
 
     err = enable_property_listener(ao, true);

@@ -38,6 +38,7 @@
 #include "common/common.h"
 #include "stream/stream.h"
 #include "video/csputils.h"
+#include "video/hwdec.h"
 #include "sub/osd.h"
 #include "audio/mixer.h"
 #include "audio/filter/af.h"
@@ -78,6 +79,18 @@ extern const struct m_obj_list vf_obj_list;
 extern const struct m_obj_list af_obj_list;
 extern const struct m_obj_list vo_obj_list;
 extern const struct m_obj_list ao_obj_list;
+
+const struct m_opt_choice_alternatives mp_hwdec_names[] = {
+    {"no",          HWDEC_NONE},
+    {"auto",        HWDEC_AUTO},
+    {"vdpau",       HWDEC_VDPAU},
+    {"vda",         HWDEC_VDA},
+    {"vaapi",       HWDEC_VAAPI},
+    {"vaapi-copy",  HWDEC_VAAPI_COPY},
+    {"dxva2-copy",  HWDEC_DXVA2_COPY},
+    {"rpi",         HWDEC_RPI},
+    {0}
+};
 
 #define OPT_BASE_STRUCT struct MPOpts
 
@@ -211,8 +224,8 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE("audio-display", audio_display, 0,
                ({"no", 0}, {"attachment", 1})),
 
-    OPT_CHOICE("hls-bitrate", hls_bitrate, 0,
-               ({"no", 0}, {"min", 1}, {"max", 2})),
+    OPT_CHOICE_OR_INT("hls-bitrate", hls_bitrate, 0, 0, INT_MAX,
+                      ({"no", -1}, {"min", 0}, {"max", INT_MAX})),
 
     OPT_STRINGLIST("display-tags*", display_tags, 0),
 
@@ -230,6 +243,8 @@ const m_option_t mp_opts[] = {
     OPT_DOUBLE("demuxer-readahead-secs", demuxer_min_secs, M_OPT_MIN, .min = 0),
     OPT_INTRANGE("demuxer-readahead-packets", demuxer_min_packs, 0, 0, MAX_PACKS),
     OPT_INTRANGE("demuxer-readahead-bytes", demuxer_min_bytes, 0, 0, MAX_PACK_BYTES),
+
+    OPT_FLAG("force-seekable", force_seekable, 0),
 
     OPT_DOUBLE("cache-secs", demuxer_min_secs_cache, M_OPT_MIN, .min = 0),
     OPT_FLAG("cache-pause", cache_pausing, 0),
@@ -284,15 +299,8 @@ const m_option_t mp_opts[] = {
 
     OPT_FLAG("ad-spdif-dtshd", dtshd, 0),
 
-    OPT_CHOICE("hwdec", hwdec_api, 0,
-               ({"no", 0},
-                {"auto", -1},
-                {"vdpau", 1},
-                {"vda", 2},
-                {"vaapi", 4},
-                {"vaapi-copy", 5},
-                {"dxva2-copy", 6},
-                {"rpi", 7})),
+    OPT_CHOICE_C("hwdec", hwdec_api, 0, mp_hwdec_names),
+    OPT_CHOICE_C("hwdec-preload", vo.hwdec_preload_api, 0, mp_hwdec_names),
     OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
 
     OPT_SUBSTRUCT("sws", vo.sws_opts, sws_conf, 0),
@@ -715,7 +723,7 @@ const struct MPOpts mp_default_opts = {
     .demuxer_min_secs = 1.0,
     .network_rtsp_transport = 2,
     .network_timeout = 0.0,
-    .hls_bitrate = 2,
+    .hls_bitrate = INT_MAX,
     .demuxer_min_secs_cache = 10.0,
     .cache_pausing = 1,
     .chapterrange = {-1, -1},

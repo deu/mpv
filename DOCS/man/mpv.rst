@@ -614,6 +614,11 @@ PROTOCOLS
     ``PATH`` itself should start with a third ``/`` to make the path an
     absolute path.
 
+``fd://123``
+    Read data from the given UNIX FD (for example 123). This is similar to
+    piping data to stdin via ``-``, but can use an arbitrary file descriptor.
+    Will not work correctly on MS Windows.
+
 ``edl://[edl specification as in edl-mpv.rst]``
     Stitch together parts of multiple files and play them.
 
@@ -803,7 +808,8 @@ If errors happen, the following exit codes can be returned:
         immediately after initialization.
     :3: There were some files that could be played, and some files which
         couldn't (using the definition of success from above).
-    :4: The ``quit`` command was issued (default exit code).
+    :4: Quit due to a signal, Ctrl+c in a VO window (by default), or from the
+        default quit key bindings in encoding mode.
 
 Note that quitting the player manually will always lead to exit code 0,
 overriding the exit code that would be returned normally. Also, the ``quit``

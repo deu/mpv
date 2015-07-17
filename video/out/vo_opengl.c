@@ -293,9 +293,8 @@ static bool reparse_cmdline(struct gl_priv *p, char *args)
     }
 
     if (r >= 0) {
-        int queue = 1;
-        gl_video_set_options(p->renderer, opts->renderer_opts, &queue);
-        vo_set_queue_params(p->vo, 0, opts->renderer_opts->interpolation, queue);
+        gl_video_set_options(p->renderer, opts->renderer_opts);
+        gl_video_configure_queue(p->renderer, p->vo);
         p->vo->want_redraw = true;
     }
 
@@ -426,9 +425,8 @@ static int preinit(struct vo *vo)
     gl_video_set_osd_source(p->renderer, vo->osd);
     gl_video_set_output_depth(p->renderer, p->glctx->depth_r, p->glctx->depth_g,
                               p->glctx->depth_b);
-    int queue = 0;
-    gl_video_set_options(p->renderer, p->renderer_opts, &queue);
-    vo_set_queue_params(p->vo, 0, p->renderer_opts->interpolation, queue);
+    gl_video_set_options(p->renderer, p->renderer_opts);
+    gl_video_configure_queue(p->renderer, vo);
 
     p->cms = gl_lcms_init(p, vo->log, vo->global);
     if (!p->cms)
@@ -439,6 +437,14 @@ static int preinit(struct vo *vo)
 
     p->hwdec_info.load_api = call_request_hwdec_api;
     p->hwdec_info.load_api_ctx = vo;
+
+    if (vo->opts->hwdec_preload_api != HWDEC_NONE) {
+        p->hwdec =
+            gl_hwdec_load_api_id(p->vo->log, p->gl, vo->opts->hwdec_preload_api);
+        gl_video_set_hwdec(p->renderer, p->hwdec);
+        if (p->hwdec)
+            p->hwdec_info.hwctx = p->hwdec->hwctx;
+    }
 
     return 0;
 

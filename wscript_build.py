@@ -321,6 +321,7 @@ def build(ctx):
         ( "video/filter/vf_vapoursynth.c",       "vapoursynth-core" ),
         ( "video/filter/vf_vavpp.c",             "vaapi-vpp"),
         ( "video/filter/vf_vdpaupp.c",           "vdpau" ),
+        ( "video/filter/vf_vdpaurb.c",           "vdpau" ),
         ( "video/filter/vf_yadif.c",             "libavfilter"),
         ( "video/out/aspect.c" ),
         ( "video/out/bitmap_packer.c" ),
@@ -416,6 +417,10 @@ def build(ctx):
             ctx.add_manual_dependency(
                 ctx.path.find_node('osdep/mpv.rc'),
                 ctx.path.find_node(node))
+
+        ctx.add_manual_dependency(
+            ctx.path.find_node('osdep/mpv.rc'),
+            ctx.bldnode.find_node('version.h'))
 
     if ctx.dependency_satisfied('cplayer') or ctx.dependency_satisfied('test'):
         ctx(

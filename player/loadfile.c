@@ -476,10 +476,16 @@ static bool compare_track(struct track *t1, struct track *t2,
         return t1->default_track;
     if (t1->attached_picture != t2->attached_picture)
         return !t1->attached_picture;
-    if (t1->stream && t2->stream && opts->hls_bitrate) {
-        int d = t1->stream->hls_bitrate - t2->stream->hls_bitrate;
-        if (d)
-            return opts->hls_bitrate == 1 ? d < 0 : d > 0;
+    if (t1->stream && t2->stream && opts->hls_bitrate >= 0 &&
+        t1->stream->hls_bitrate != t2->stream->hls_bitrate)
+    {
+        bool t1_ok = t1->stream->hls_bitrate <= opts->hls_bitrate;
+        bool t2_ok = t2->stream->hls_bitrate <= opts->hls_bitrate;
+        if (t1_ok != t2_ok)
+            return t1_ok;
+        if (t1_ok && t2_ok)
+            return t1->stream->hls_bitrate > t2->stream->hls_bitrate;
+        return t1->stream->hls_bitrate < t2->stream->hls_bitrate;
     }
     return t1->user_tid <= t2->user_tid;
 }
@@ -1230,7 +1236,8 @@ reopen_file:
     MP_VERBOSE(mpctx, "Starting playback...\n");
 
     if (mpctx->max_frames == 0) {
-        mpctx->stop_play = PT_NEXT_ENTRY;
+        if (!mpctx->stop_play)
+            mpctx->stop_play = PT_NEXT_ENTRY;
         mpctx->error_playing = 0;
         goto terminate_playback;
     }
@@ -1438,5 +1445,6 @@ void mp_set_playlist_entry(struct MPContext *mpctx, struct playlist_entry *e)
     assert(!e || playlist_entry_to_index(mpctx->playlist, e) >= 0);
     mpctx->playlist->current = e;
     mpctx->playlist->current_was_replaced = false;
-    mpctx->stop_play = PT_CURRENT_ENTRY;
+    if (!mpctx->stop_play)
+        mpctx->stop_play = PT_CURRENT_ENTRY;
 }
