@@ -247,8 +247,8 @@ function get_tracklist(type)
             local lang, title, channels, selected = "unknown", "", "", "○"
             if not(track.lang == nil) then lang = track.lang end
             if not(track.title == nil) then title = track.title end
-            if not(track.audio-channels == nil) then
-                channels = "-"..track.audio-channels.."ch"
+            if not(track["audio-channels"] == nil) then
+                channels = "-"..track["audio-channels"].."ch"
             end
             if (track.id == tonumber(mp.get_property(type))) then
                 selected = "●"
