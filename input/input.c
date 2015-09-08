@@ -1016,7 +1016,7 @@ void mp_input_define_section(struct input_ctx *ictx, char *name, char *location,
     // Delete:
     struct cmd_bind_section *bs = get_bind_section(ictx, bstr0(name));
     remove_binds(bs, builtin);
-    if (contents) {
+    if (contents && contents[0]) {
         // Redefine:
         parse_config(ictx, builtin, bstr0(contents), location, name);
     } else {
@@ -1229,7 +1229,7 @@ void mp_input_load(struct input_ctx *ictx)
     bool config_ok = false;
     if (input_conf->config_file)
         config_ok = parse_config_file(ictx, input_conf->config_file, true);
-    if (!config_ok && ictx->global->opts->load_config) {
+    if (!config_ok) {
         // Try global conf dir
         void *tmp = talloc_new(NULL);
         char **files = mp_find_all_config_files(tmp, ictx->global, "input.conf");

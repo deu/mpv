@@ -206,7 +206,7 @@ const struct m_sub_options demux_mkv_conf = {
     .size = sizeof(struct demux_mkv_opts),
     .defaults = &(const struct demux_mkv_opts){
         .subtitle_preroll_secs = 1.0,
-        .fix_timestamps = 1,
+        .fix_timestamps = 0,
     },
 };
 
@@ -724,7 +724,7 @@ static int demux_mkv_read_cues(demuxer_t *demuxer)
     mkv_demuxer_t *mkv_d = (mkv_demuxer_t *) demuxer->priv;
     stream_t *s = demuxer->stream;
 
-    if (opts->index_mode != 1) {
+    if (opts->index_mode != 1 || mkv_d->index_complete) {
         ebml_read_skip(demuxer->log, -1, s);
         return 0;
     }
@@ -735,15 +735,25 @@ static int demux_mkv_read_cues(demuxer_t *demuxer)
     if (ebml_read_element(s, &parse_ctx, &cues, &ebml_cues_desc) < 0)
         return -1;
 
+    for (int i = 0; i < cues.n_cue_point; i++) {
+        struct ebml_cue_point *cuepoint = &cues.cue_point[i];
+        if (cuepoint->n_cue_time != 1 || !cuepoint->n_cue_track_positions) {
+            MP_WARN(demuxer, "Malformed CuePoint element\n");
+            goto done;
+        }
+        if (cuepoint->cue_time / 1e9 > mkv_d->duration / mkv_d->tc_scale * 10 &&
+            mkv_d->duration != 0)
+            goto done;
+    }
+    if (cues.n_cue_point <= 3) // probably too sparse and will just break seeking
+        goto done;
+
+    // Discard incremental index.
     mkv_d->num_indexes = 0;
     mkv_d->index_has_durations = false;
 
     for (int i = 0; i < cues.n_cue_point; i++) {
         struct ebml_cue_point *cuepoint = &cues.cue_point[i];
-        if (cuepoint->n_cue_time != 1 || !cuepoint->n_cue_track_positions) {
-            MP_WARN(demuxer, "Malformed CuePoint element\n");
-            continue;
-        }
         uint64_t time = cuepoint->cue_time;
         for (int c = 0; c < cuepoint->n_cue_track_positions; c++) {
             struct ebml_cue_track_positions *trackpos =
@@ -763,6 +773,9 @@ static int demux_mkv_read_cues(demuxer_t *demuxer)
     // Do not attempt to create index on the fly.
     mkv_d->index_complete = true;
 
+done:
+    if (!mkv_d->index_complete)
+        MP_WARN(demuxer, "Discarding potentially broken or useless index.\n");
     talloc_free(parse_ctx.talloc_ctx);
     return 0;
 }
@@ -1345,6 +1358,72 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     return 0;
 }
 
+// Parse VorbisComment and look for WAVEFORMATEXTENSIBLE_CHANNEL_MASK.
+// Do not change *channels if nothing found or an error happens.
+static void parse_vorbis_chmap(struct mp_chmap *channels, unsigned char *data,
+                               int size)
+{
+    // Skip the useless vendor string.
+    if (size < 4)
+        return;
+    uint32_t vendor_length = AV_RL32(data);
+    if (vendor_length + 4 > size) // also check for the next AV_RB32 below
+        return;
+    size -= vendor_length + 4;
+    data += vendor_length + 4;
+    uint32_t num_headers = AV_RL32(data);
+    size -= 4;
+    data += 4;
+    for (int n = 0; n < num_headers; n++) {
+        if (size < 4)
+            return;
+        uint32_t len = AV_RL32(data);
+        size -= 4;
+        data += 4;
+        if (len > size)
+            return;
+        if (len > 34 && !memcmp(data, "WAVEFORMATEXTENSIBLE_CHANNEL_MASK=", 34)) {
+            char smask[80];
+            snprintf(smask, sizeof(smask), "%.*s", (int)(len - 34), data + 34);
+            char *end = NULL;
+            uint32_t mask = strtol(smask, &end, 0);
+            if (!end || end[0])
+                mask = 0;
+            struct mp_chmap chmask = {0};
+            mp_chmap_from_waveext(&chmask, mask);
+            if (mp_chmap_is_valid(&chmask))
+                *channels = chmask;
+        }
+        size -= len;
+        data += len;
+    }
+}
+
+// Parse VorbisComment-in-FLAC and look for WAVEFORMATEXTENSIBLE_CHANNEL_MASK.
+// Do not change *channels if nothing found or an error happens.
+static void parse_flac_chmap(struct mp_chmap *channels, unsigned char *data,
+                             int size)
+{
+    // Skip FLAC header.
+    if (size < 4)
+        return;
+    data += 4;
+    size -= 4;
+    // Parse FLAC blocks...
+    while (size >= 4) {
+        unsigned btype = data[0] & 0x7F;
+        unsigned bsize = AV_RB24(data + 1);
+        data += 4;
+        size -= 4;
+        if (bsize > size)
+            return;
+        if (btype == 4) // VORBIS_COMMENT
+            parse_vorbis_chmap(channels, data, bsize);
+        data += bsize;
+        size -= bsize;
+    }
+}
+
 static const char *const mkv_audio_tags[][2] = {
     { "A_MPEG/L2",              "mp3" },
     { "A_MPEG/L3",              "mp3" },
@@ -1542,11 +1621,8 @@ static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
             extradata = talloc_size(sh_a, 4);
             extradata_len = 4;
             memcpy(extradata, "fLaC", 4);
-        } else {
-            extradata = talloc_size(sh_a, size);
-            extradata_len = size;
-            memcpy(extradata, ptr, size);
         }
+        parse_flac_chmap(&sh_a->channels, extradata, extradata_len);
     } else if (!strcmp(codec, "alac")) {
         if (track->private_size) {
             extradata_len = track->private_size + 12;
@@ -1705,9 +1781,7 @@ static int read_mkv_segment_header(demuxer_t *demuxer, int64_t *segment_end)
         MP_VERBOSE(demuxer, "  (skipping)\n");
         if (*segment_end <= 0)
             break;
-        int64_t end = 0;
-        stream_control(s, STREAM_CTRL_GET_SIZE, &end);
-        if (*segment_end >= end)
+        if (*segment_end >= stream_get_size(s))
             return 0;
         if (!stream_seek(s, *segment_end)) {
             MP_WARN(demuxer, "Failed to seek in file\n");
@@ -1771,8 +1845,7 @@ static int demux_mkv_open(demuxer_t *demuxer, enum demux_check check)
             return -1;
     }
 
-    int64_t end = 0;
-    stream_control(s, STREAM_CTRL_GET_SIZE, &end);
+    int64_t end = stream_get_size(s);
 
     // Read headers that come after the first cluster (i.e. require seeking).
     // Note: reading might increase ->num_headers.
@@ -2737,9 +2810,7 @@ static void demux_mkv_seek(demuxer_t *demuxer, double rel_seek_secs, int flags)
 
         read_deferred_cues(demuxer);
 
-        int64_t size = 0;
-        stream_control(s, STREAM_CTRL_GET_SIZE, &size);
-
+        int64_t size = stream_get_size(s);
         int64_t target_filepos = size * MPCLAMP(rel_seek_secs, 0, 1);
 
         mkv_index_t *index = NULL;
@@ -2761,7 +2832,7 @@ static void demux_mkv_seek(demuxer_t *demuxer, double rel_seek_secs, int flags)
             stream_seek(s, index->filepos);
             mkv_d->skip_to_timecode = index->timecode * mkv_d->tc_scale;
         } else {
-            stream_seek(s, target_filepos);
+            stream_seek(s, MPMAX(target_filepos, 0));
             if (ebml_resync_cluster(mp_null_log, s) < 0) {
                 // Assume EOF
                 mkv_d->cluster_end = size;
@@ -2814,8 +2885,7 @@ static void probe_last_timestamp(struct demuxer *demuxer)
                 return;
         } else {
             // No index -> just try to find a random cluster towards file end.
-            int64_t size = 0;
-            stream_control(demuxer->stream, STREAM_CTRL_GET_SIZE, &size);
+            int64_t size = stream_get_size(demuxer->stream);
             stream_seek(demuxer->stream, MPMAX(size - 10 * 1024 * 1024, 0));
             if (ebml_resync_cluster(mp_null_log, demuxer->stream) < 0)
                 stream_seek(demuxer->stream, old_pos); // full scan otherwise

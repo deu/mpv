@@ -17,6 +17,8 @@
  * with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+// Note: handles both VDA and VideoToolbox
+
 #include <IOSurface/IOSurface.h>
 #include <CoreVideo/CoreVideo.h>
 #include <OpenGL/OpenGL.h>
@@ -85,7 +87,7 @@ static struct mp_image *download_image(struct mp_hwdec_ctx *ctx,
                                        struct mp_image *hw_image,
                                        struct mp_image_pool *swpool)
 {
-    if (hw_image->imgfmt != IMGFMT_VDA)
+    if (hw_image->imgfmt != IMGFMT_VDA && hw_image->imgfmt != IMGFMT_VIDEOTOOLBOX)
         return NULL;
 
     CVPixelBufferRef pbuf = (CVPixelBufferRef)hw_image->planes[3];
@@ -94,6 +96,10 @@ static struct mp_image *download_image(struct mp_hwdec_ctx *ctx,
     size_t height = CVPixelBufferGetHeight(pbuf);
     uint32_t cvpixfmt = CVPixelBufferGetPixelFormatType(pbuf);
     struct vda_format *f = vda_get_gl_format(cvpixfmt);
+    if (!f) {
+        CVPixelBufferUnlockBaseAddress(pbuf, 0);
+        return NULL;
+    }
 
     struct mp_image img = {0};
     mp_image_setfmt(&img, f->imgfmt);
@@ -116,8 +122,8 @@ static struct mp_image *download_image(struct mp_hwdec_ctx *ctx,
 
 static bool check_hwdec(struct gl_hwdec *hw)
 {
-    if (hw->gl_texture_target != GL_TEXTURE_RECTANGLE) {
-        MP_ERR(hw, "must use rectangle video textures with VDA\n");
+    if (hw->gl->version < 300) {
+        MP_ERR(hw, "need >= OpenGL 3.0 for core rectangle texture support\n");
         return false;
     }
 
@@ -129,30 +135,39 @@ static bool check_hwdec(struct gl_hwdec *hw)
     return true;
 }
 
-static int create(struct gl_hwdec *hw)
+static int create_common(struct gl_hwdec *hw, struct vda_format *format)
 {
     struct priv *p = talloc_zero(hw, struct priv);
 
     hw->priv = p;
     hw->gl_texture_target = GL_TEXTURE_RECTANGLE;
 
-#if HAVE_VDA_DEFAULT_INIT2
-    struct vda_format *f = vda_get_gl_format_from_imgfmt(IMGFMT_NV12);
-#else
-    struct vda_format *f = vda_get_gl_format_from_imgfmt(IMGFMT_UYVY);
-#endif
-
-    hw->converted_imgfmt = f->imgfmt;
+    hw->converted_imgfmt = format->imgfmt;
 
     if (!check_hwdec(hw))
         return -1;
 
     hw->hwctx = &p->hwctx;
-    hw->hwctx->type = HWDEC_VDA;
     hw->hwctx->download_image = download_image;
 
     GL *gl = hw->gl;
     gl->GenTextures(MP_MAX_PLANES, p->gl_planes);
+
+    return 0;
+}
+
+static int create(struct gl_hwdec *hw)
+{
+    // For videotoolbox, we always request NV12.
+#if HAVE_VDA_DEFAULT_INIT2
+    struct vda_format *f = vda_get_gl_format_from_imgfmt(IMGFMT_NV12);
+#else
+    struct vda_format *f = vda_get_gl_format_from_imgfmt(IMGFMT_UYVY);
+#endif
+    if (create_common(hw, f))
+        return -1;
+
+    hw->hwctx->type = HWDEC_VIDEOTOOLBOX;
 
     return 0;
 }
@@ -219,9 +234,9 @@ static void destroy(struct gl_hwdec *hw)
     gl->DeleteTextures(MP_MAX_PLANES, p->gl_planes);
 }
 
-const struct gl_hwdec_driver gl_hwdec_vda = {
-    .api_name = "vda",
-    .imgfmt = IMGFMT_VDA,
+const struct gl_hwdec_driver gl_hwdec_videotoolbox = {
+    .api_name = "videotoolbox",
+    .imgfmt = IMGFMT_VIDEOTOOLBOX,
     .create = create,
     .reinit = reinit,
     .map_image = map_image,

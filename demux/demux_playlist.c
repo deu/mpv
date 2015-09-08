@@ -54,6 +54,7 @@ struct pl_parser {
     bool add_base;
     enum demux_check check_level;
     struct stream *real_stream;
+    char *format;
 };
 
 static char *pl_get_line0(struct pl_parser *p)
@@ -120,6 +121,8 @@ ok:
                 talloc_free(title);
                 title = bstrto0(NULL, btitle);
             }
+        } else if (bstr_startswith0(line, "#EXT-X-")) {
+            p->format = "hls";
         } else if (line.len > 0 && !bstr_startswith0(line, "#")) {
             char *fn = bstrto0(NULL, line);
             struct playlist_entry *e = playlist_entry_new(fn);
@@ -250,7 +253,7 @@ static int parse_dir(struct pl_parser *p)
 
     struct dirent *ep;
     while ((ep = readdir(dp))) {
-        if (strcmp(ep->d_name, ".") == 0 || strcmp(ep->d_name, "..") == 0)
+        if (ep->d_name[0] == '.')
             continue;
         MP_TARRAY_APPEND(p, files, num_files, talloc_strdup(p, ep->d_name));
     }
@@ -338,7 +341,7 @@ static int open_file(struct demuxer *demuxer, enum demux_check check)
     if (p->add_base)
         playlist_add_base_path(p->pl, mp_dirname(demuxer->filename));
     demuxer->playlist = talloc_steal(demuxer, p->pl);
-    demuxer->filetype = fmt->name;
+    demuxer->filetype = p->format ? p->format : fmt->name;
     demuxer->fully_read = true;
     talloc_free(p);
     return ok ? 0 : -1;

@@ -90,7 +90,7 @@ static void uninit_demuxer(struct MPContext *mpctx)
     timeline_destroy(mpctx->tl);
     mpctx->tl = NULL;
 
-    free_demuxer(mpctx->master_demuxer);
+    free_demuxer_and_stream(mpctx->master_demuxer);
     mpctx->master_demuxer = NULL;
 
     talloc_free(mpctx->sources);
@@ -827,13 +827,20 @@ void prepare_playlist(struct MPContext *mpctx, struct playlist *pl)
 {
     struct MPOpts *opts = mpctx->opts;
 
+    pl->current = NULL;
+
+    if (opts->playlist_pos >= 0)
+        pl->current = playlist_entry_from_index(pl, opts->playlist_pos);
+
     if (opts->shuffle)
         playlist_shuffle(pl);
 
     if (opts->merge_files)
         merge_playlist_files(pl);
 
-    pl->current = mp_check_playlist_resume(mpctx, pl);
+    if (!pl->current)
+        pl->current = mp_check_playlist_resume(mpctx, pl);
+
     if (!pl->current)
         pl->current = pl->first;
 }
@@ -939,55 +946,35 @@ static void load_per_file_options(m_config_t *conf,
     }
 }
 
-struct stream_open_args {
-    struct mp_cancel *cancel;
-    struct mpv_global *global;  // contains copy of global options
-    char *filename;
-    int stream_flags;
-    struct stream *stream;      // result
-};
-
-static void open_stream_thread(void *pctx)
-{
-    struct stream_open_args *args = pctx;
-    args->stream = stream_create(args->filename, args->stream_flags,
-                                 args->cancel, args->global);
-}
-
-static struct stream *open_stream_reentrant(struct MPContext *mpctx,
-                                            char *filename, int stream_flags)
-{
-    struct stream_open_args args = {
-        .cancel = mpctx->playback_abort,
-        .global = create_sub_global(mpctx),
-        .filename = filename,
-        .stream_flags = stream_flags,
-    };
-    mpctx_run_reentrant(mpctx, open_stream_thread, &args);
-    if (args.stream) {
-        talloc_steal(args.stream, args.global);
-    } else {
-        talloc_free(args.global);
-    }
-    return args.stream;
-}
-
 struct demux_open_args {
-    struct stream *stream;
+    int stream_flags;
+    char *url;
     struct mpv_global *global;
+    struct mp_cancel *cancel;
     struct mp_log *log;
     // results
     struct demuxer *demux;
     struct timeline *tl;
+    int err;
 };
 
 static void open_demux_thread(void *pctx)
 {
     struct demux_open_args *args = pctx;
-    struct stream *s = args->stream;
     struct mpv_global *global = args->global;
-    struct demuxer_params p = {.force_format = global->opts->demuxer_name};
-    args->demux = demux_open(s, &p, global);
+    struct demuxer_params p = {
+        .force_format = global->opts->demuxer_name,
+        .allow_capture = true,
+        .stream_flags = args->stream_flags,
+    };
+    args->demux = demux_open_url(args->url, &p, args->cancel, global);
+    if (!args->demux) {
+        if (p.demuxer_failed) {
+            args->err = MPV_ERROR_UNKNOWN_FORMAT;
+        } else {
+            args->err = MPV_ERROR_LOADING_FAILED;
+        }
+    }
     if (args->demux)
         args->tl = timeline_load(global, args->log, args->demux);
 }
@@ -996,17 +983,23 @@ static void open_demux_reentrant(struct MPContext *mpctx)
 {
     struct demux_open_args args = {
         .global = create_sub_global(mpctx),
-        .stream = mpctx->stream,
+        .cancel = mpctx->playback_abort,
         .log = mpctx->log,
+        .stream_flags = mpctx->playing->stream_flags,
+        .url = talloc_strdup(NULL, mpctx->stream_open_filename),
     };
+    if (mpctx->opts->load_unsafe_playlists)
+        args.stream_flags = 0;
     mpctx_run_reentrant(mpctx, open_demux_thread, &args);
     if (args.demux) {
         talloc_steal(args.demux, args.global);
         mpctx->master_demuxer = args.demux;
         mpctx->tl = args.tl;
     } else {
+        mpctx->error_playing = args.err;
         talloc_free(args.global);
     }
+    talloc_free(args.url);
 }
 
 static void load_timeline(struct MPContext *mpctx)
@@ -1060,6 +1053,12 @@ static void play_current_file(struct MPContext *mpctx)
     mpctx->playing_msg_shown = false;
     mpctx->backstep_active = false;
     mpctx->max_frames = -1;
+    mpctx->video_speed = mpctx->audio_speed = opts->playback_speed;
+    mpctx->speed_factor_a = mpctx->speed_factor_v = 1.0;
+    mpctx->display_sync_frameduration = 0.0;
+    mpctx->display_sync_error = 0.0;
+    mpctx->broken_fps_header = false;
+    mpctx->display_sync_active = false;
     mpctx->seek = (struct seek_params){ 0 };
 
     reset_playback_state(mpctx);
@@ -1116,34 +1115,9 @@ reopen_file:
         goto terminate_playback;
     }
 
-    int stream_flags = STREAM_READ;
-    if (!opts->load_unsafe_playlists)
-        stream_flags |= mpctx->playing->stream_flags;
-    mpctx->stream = open_stream_reentrant(mpctx, mpctx->stream_open_filename,
-                                          stream_flags);
-    if (!mpctx->stream)
-        goto terminate_playback;
-
-    // Must be called before enabling cache.
-    mp_nav_init(mpctx);
-
-    stream_enable_cache(&mpctx->stream, &opts->stream_cache);
-
-    mp_notify(mpctx, MP_EVENT_CHANGE_ALL, NULL);
-    mp_process_input(mpctx);
-    if (mpctx->stop_play)
-        goto terminate_playback;
-
-    stream_set_capture_file(mpctx->stream, opts->stream_capture);
-
-    mp_nav_reset(mpctx);
-
     open_demux_reentrant(mpctx);
-    if (!mpctx->master_demuxer) {
-        MP_ERR(mpctx, "Failed to recognize file format.\n");
-        mpctx->error_playing = MPV_ERROR_UNKNOWN_FORMAT;
+    if (!mpctx->master_demuxer)
         goto terminate_playback;
-    }
     mpctx->demuxer = mpctx->master_demuxer;
 
     load_timeline(mpctx);
@@ -1274,8 +1248,6 @@ terminate_playback:
 
     process_unload_hooks(mpctx);
 
-    mp_nav_destroy(mpctx);
-
     if (mpctx->stop_play == KEEP_PLAYING)
         mpctx->stop_play = AT_END_OF_FILE;
 
@@ -1286,8 +1258,6 @@ terminate_playback:
         opts->pause = 1;
 
     mp_cancel_trigger(mpctx->playback_abort);
-
-    MP_INFO(mpctx, "\n");
 
     // time to uninit all, except global stuff:
     uninit_audio_chain(mpctx);
@@ -1345,6 +1315,12 @@ terminate_playback:
     case PT_QUIT:           end_event.reason = MPV_END_FILE_REASON_QUIT; break;
     };
     mp_notify(mpctx, MPV_EVENT_END_FILE, &end_event);
+
+    MP_VERBOSE(mpctx, "finished playback, %s (reason %d)\n",
+               mpv_error_string(end_event.error), end_event.reason);
+    if (mpctx->error_playing == MPV_ERROR_UNKNOWN_FORMAT)
+        MP_ERR(mpctx, "Failed to recognize file format.\n");
+    MP_INFO(mpctx, "\n");
 
     if (mpctx->playing)
         playlist_entry_unref(mpctx->playing);

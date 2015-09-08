@@ -4,6 +4,13 @@
 # Cleanups all over the place (c) 2001 pl
 # Rewritten for mpv in 2014.
 #
+#
+# Warning: this is not officially supported. Use on your own risk. Might require
+#          modifications when used on systems other than Linux. Contributors
+#          are not expected to update these files when making changes to the
+#          normal/preferred waf build system.
+#
+#
 # This configure script is *not* autoconf-based and has different semantics.
 # It attempts to autodetect all settings and options where possible. It is
 # possible to override autodetection with the --enable-option/--disable-option
@@ -176,6 +183,7 @@ options_state_machine() {
     opt_yes_no _dvdread     "libdvdread"
     opt_yes_no _dvdnav      "libdvdnav"
     opt_yes_no _enca        "ENCA charset oracle library"
+    opt_yes_no _uchardet    "uchardet charset detection library"
     opt_yes_no _libass      "subtitle rendering with libass"
     opt_yes_no _libavdevice "libavdevice demuxers"
     opt_yes_no _libavfilter "libavfilter"
@@ -183,8 +191,6 @@ options_state_machine() {
     opt_yes_no _libcdio     "libcdio support"
     opt_yes_no _librubberband "librubberband support"
     opt_yes_no _ffmpeg      "skip FFmpeg/Libav autodetection"
-    opt_yes_no _ladspa      "LADSPA plugin support"
-    opt_yes_no _libbs2b     "libbs2b audio filter support"
     opt_yes_no _libavresample "libavresample (preferred over libswresample)"
     opt_yes_no _libswresample "libswresample"
     opt_yes_no _caca        "CACA  video output"
@@ -208,6 +214,7 @@ options_state_machine() {
     opt_yes_no _lua         "Lua scripting"
     opt_yes_no _vapoursynth "VapourSynth filter bridge (Python)"
     opt_yes_no _vapoursynth_lazy "VapourSynth filter bridge (Lua)"
+    opt_yes_no _libarchive  "libarchive"
     opt_yes_no _encoding    "encoding functionality" yes
     opt_yes_no _build_man   "building manpage"
 }
@@ -506,9 +513,12 @@ check_statement_libs "compiler support for __sync built-ins" $_sync SYNC_BUILTIN
     stdint.h 'int64_t test = 0; test = __sync_add_and_fetch(&test, 1)'
 _sync=$(defretval)
 
+_any_atomic=yes
 if test "$_atomic" = no && test "$_sync" = no && test "$_stdatomic" = no ; then
   echo "your compiler must support either stdatomic.h, or __atomic, or __sync built-ins."
+  _any_atomic=no
 fi
+define_yes_no $_any_atomic HAVE_ATOMICS
 
 check_compile "iconv" $_iconv ICONV waftools/fragments/iconv.c " " "-liconv" "-liconv $_ld_dl"
 _iconv=$(defretval)
@@ -732,14 +742,10 @@ echo "LIBASS_OSD = $_libass" >> $CONFIG_MAK
 echo "DUMMY_OSD = $_dummy_osd" >> $CONFIG_MAK
 
 check_pkg_config "ENCA" $_enca ENCA 'enca'
+check_pkg_config "uchardet" $_uchardet UCHARDET 'uchardet'
 
 check_pkg_config "zlib" auto ZLIB 'zlib'
 test $(defretval) = no && die "Unable to find development files for zlib."
-
-test "$_dl" = no && _ladspa=no
-check_statement_libs "LADSPA plugin support" $_ladspa LADSPA ladspa.h 'LADSPA_Descriptor ld = {0}'
-
-check_pkg_config "libbs2b audio filter support" $_libbs2b LIBBS2B 'libbs2b'
 
 check_pkg_config "LCMS2 support" $_lcms2 LCMS2 'lcms2 >= 2.6'
 
@@ -823,9 +829,9 @@ test_lua "lua >= 5.1.0 lua < 5.2.0"
 test_lua "lua5.1 >= 5.1.0" # debian
 test_lua "lua51 >= 5.1.0" # OpenBSD
 test_lua "luajit >= 2.0.0"
-test_lua "lua >= 5.2.0"
 test_lua "lua5.2 >= 5.2.0" # debian
 test_lua "lua52 >= 5.2.0" # OpenBSD
+test_lua "lua >= 5.2.0"
 
 test "$_lua" != yes && check_yes_no no LUA
 
@@ -846,6 +852,8 @@ if test "$_vapoursynth" = no && test "$_vapoursynth_lazy" = no ; then
     _vapoursynth_core=no
 fi
 check_trivial "VapourSynth core" $_vapoursynth_core VAPOURSYNTH_CORE
+
+check_pkg_config "libarchive support" $_libarchive LIBARCHIVE 'libarchive >= 3.0.0'
 
 check_trivial "encoding" $_encoding ENCODING
 
@@ -911,7 +919,7 @@ cat > $TMPC << EOF
 /* we didn't bother to add actual config checks for this, or they are
    for platforms not supported by this configure script */
 #define HAVE_BSD_FSTATFS 0
-#define HAVE_LINUX_FSTATFS 0
+#define HAVE_LINUX_FSTATFS 1
 #define HAVE_VDA_AV_VDA_ALLOC_CONTEXT 0
 #define HAVE_VDA_HWACCEL 0
 #define HAVE_VDA_LIBAVCODEC_REFCOUNTING 0
@@ -942,6 +950,9 @@ cat > $TMPC << EOF
 #define HAVE_RPI_GLES 0
 #define HAVE_AV_PIX_FMT_MMAL 0
 #define HAVE_DRM 0
+#define HAVE_VIDEOTOOLBOX_HWACCEL 0
+#define HAVE_VIDEOTOOLBOX_GL 0
+#define HAVE_VIDEOTOOLBOX_VDA_GL 0
 
 #ifdef __OpenBSD__
 #define DEFAULT_CDROM_DEVICE "/dev/rcd0c"

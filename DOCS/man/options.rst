@@ -141,6 +141,17 @@ Playback Control
     Specify which chapter to start playing at. Optionally specify which
     chapter to end playing at. Also see ``--start``.
 
+``--playlist-pos=<no|index>``
+    Set which file on the internal playlist to start playback with. The index
+    is an integer, with 0 meaning the first file. The value ``no`` means that
+    the selection of the entry to play is left to the playback resume mechanism
+    (default). If an entry with the given index doesn't exist, the behavior is
+    unspecified and might change in future mpv versions. The same applies if
+    the playlist contains further playlists (don't expect any reasonable
+    behavior). Passing a playlist file to mpv should work with this option,
+    though. E.g. ``mpv playlist.m3u --playlist-pos=123`` will work as expected,
+    as long as ``playlist.m3u`` does not link to further playlists.
+
 ``--playlist=<filename>``
     Play files according to a playlist file (Supports some common formats. If
     no format is detected, it will be treated as list of files, separated by
@@ -571,6 +582,7 @@ Video
     :vaapi:     requires ``--vo=opengl`` or ``--vo=vaapi`` (Linux with Intel GPUs only)
     :vaapi-copy: copies video back into system RAM (Linux with Intel GPUs only)
     :vda:       requires ``--vo=opengl`` (OS X only)
+    :videotoolbox: requires ``--vo=opengl`` (newer OS X only)
     :dxva2-copy: copies video back to system RAM (Windows only)
     :rpi:      requires ``--vo=rpi`` (Raspberry Pi only - default if available)
 
@@ -632,6 +644,23 @@ Video
 ``--no-video-aspect``
     Ignore aspect ratio information from video file and assume the video has
     square pixels. See also ``--video-aspect``.
+
+``--video-aspect-method=<hybrid|bitstream|container>``
+    This sets the default video aspect determination method (if the aspect is
+    _not_ overridden by the user with ``--video-aspect`` or others).
+
+    :hybrid:    Prefer the container aspect ratio. If the bitstream aspect
+                switches mid-stream, switch to preferring the bitstream aspect.
+                This is the default behavior in mpv and mplayer2.
+    :container: Strictly prefer the container aspect ratio. This is apparently
+                the default behavior with VLC, at least with Matroska.
+    :bitstream: Strictly prefer the bitstream aspect ratio, unless the bitstream
+                aspect ratio is not set. This is apparently the default behavior
+                with XBMC/kodi, at least with Matroska.
+
+    Normally you should not set this. Try the ``container`` and ``bitstream``
+    choices if you encounter video that has the wrong aspect ratio in mpv,
+    but seems to be correct in other players.
 
 ``--video-unscaled``
     Disable scaling of the video. If the window is larger than the video,
@@ -836,10 +865,11 @@ Video
     Set framedropping mode used with ``--framedrop`` (see skiploopfilter for
     available skip values).
 
-``--vd-lavc-threads=<0-16>``
+``--vd-lavc-threads=<N>``
     Number of threads to use for decoding. Whether threading is actually
-    supported depends on codec. 0 means autodetect number of cores on the
-    machine and use that, up to the maximum of 16 (default: 0).
+    supported depends on codec (default: 0). 0 means autodetect number of cores
+    on the machine and use that, up to the maximum of 16. You can set more than
+    16 threads manually.
 
 
 
@@ -1038,6 +1068,14 @@ Audio
 
     If the channel layout of the media file (i.e. the decoder) and the AO's
     channel layout don't match, mpv will attempt to insert a conversion filter.
+
+    .. admonition:: Warning
+
+        Using ``auto`` can cause issues when using audio over HDMI. The OS will
+        typically report all channel layouts that _can_ go over HDMI, even if
+        the receiver does not support them. If a receiver gets an unsupported
+        channel layout, random things can happen, such as dropping the
+        additional channels, or adding noise.
 
 ``--audio-display=<no|attachment>``
     Setting this option to ``attachment`` (default) will display image
@@ -1400,6 +1438,18 @@ Subtitles
 
     Disabled by default.
 
+``--stretch-image-subs-to-screen=<yes|no>``
+    Stretch DVD and other image subtitles to the screen, ignoring the video
+    margins. This has a similar effect as ``--sub-use-margins`` for text
+    subtitles, except that the text itself will be stretched, not only just
+    repositioned. (At least in general it is unavoidable, as an image bitmap
+    can in theory consist of a single bitmap covering the whole screen, and
+    the player won't know where exactly the text parts are located.)
+
+    This option does not display subtitles correctly. Use with care.
+
+    Disabled by default.
+
 ``--sub-ass``, ``--no-sub-ass``
     Render ASS subtitles natively (enabled by default).
 
@@ -1429,10 +1479,11 @@ Subtitles
 
 ``--sub-codepage=<codepage>``
     If your system supports ``iconv(3)``, you can use this option to specify
-    the subtitle codepage. By default, ENCA will be used to guess the charset.
-    If mpv is not compiled with ENCA, ``UTF-8:UTF-8-BROKEN`` is the default,
-    which means it will try to use UTF-8, otherwise the ``UTF-8-BROKEN``
-    pseudo codepage (see below).
+    the subtitle codepage. By default, uchardet will be used to guess the
+    charset. If mpv is not compiled with uchardet, enca will be used.
+    If mpv is compiled with neither uchardet nor enca, ``UTF-8:UTF-8-BROKEN``
+    is the default, which means it will try to use UTF-8, otherwise the
+    ``UTF-8-BROKEN`` pseudo codepage (see below).
 
     The default value for this option is ``auto``, whose actual effect depends
     on whether ENCA is compiled.
@@ -1481,6 +1532,12 @@ Subtitles
     libguess always needs a language. There is no universal detection
     mode. Use ``--sub-codepage=guess:help`` to get a list of
     languages subject to the same caveat as with ENCA above.
+
+    If the player was compiled with uchardet support you can use it with:
+
+    ``--sub-codepage=uchardet``
+
+    This mode doesn't take language or fallback codepage.
 
 ``--sub-fix-timing``, ``--no-sub-fix-timing``
     By default, external text subtitles are preprocessed to remove minor gaps
@@ -2162,7 +2219,7 @@ Demuxer
     as partial files).
 
 ``--demuxer-mkv-fix-timestamps=<yes|no>``
-    Fix rounded Matroska timestamps (enabled by default). Matroska usually
+    Fix rounded Matroska timestamps (disabled by default). Matroska usually
     stores timestamps rounded to milliseconds. This means timestamps jitter
     by some amount around the intended timestamp. mpv can correct the timestamps
     based on the framerate value stored in the file: the timestamp is rounded
@@ -2213,6 +2270,20 @@ Demuxer
 ``--demuxer-rawvideo-size=<value>``
     Frame size in bytes when using ``--demuxer=rawvideo``.
 
+``--demuxer-max-packets=<packets>``, ``--demuxer-max-bytes=<bytes>``
+    This controls how much the demuxer is allowed to buffer ahead. The demuxer
+    will normally try to read ahead as much as necessary, or as much is
+    requested with ``--demuxer-readahead-secs``. The ``--demuxer-max-...``
+    options can be used to restrict the maximum readahead. This limits excessive
+    readahead in case of broken files or desynced playback. The demuxer will
+    stop reading additional packets as soon as one of the limits is reached.
+    (The limits still can be slightly overstepped due to technical reasons.)
+
+    Set these limits highher if you get a packet queue overflow warning, and
+    you think normal playback would be possible with a larger packet queue.
+
+    See ``--list-options`` for defaults and value range.
+
 ``--demuxer-thread=<yes|no>``
     Run the demuxer in a separate thread, and let it prefetch a certain amount
     of packets (default: yes). Having this enabled may lead to smoother
@@ -2230,21 +2301,6 @@ Demuxer
 
     (This value tends to be fuzzy, because many file formats don't store linear
     timestamps.)
-
-``--demuxer-readahead-packets=<packets>``
-    If ``--demuxer-thread`` is enabled, this controls how much the demuxer
-    should buffer ahead. As long as the number of packets in the packet queue
-    doesn't exceed ``--demuxer-readahead-packets``, and the total number of
-    bytes doesn't exceed ``--demuxer-readahead-bytes``, the thread keeps
-    reading ahead.
-
-    Note that if you set these options near the maximum, you might get a
-    packet queue overflow warning.
-
-    See ``--list-options`` for defaults and value range.
-
-``--demuxer-readahead-bytes=<bytes>``
-    See ``--demuxer-readahead-packets``.
 
 ``--force-seekable=<yes|no>``
     If the player thinks that the media is not seekable (e.g. playing from a
@@ -2620,7 +2676,7 @@ Screenshot
 
     Note that not all formats are supported.
 
-    Default: ``yes``.
+    Default: ``no``.
 
 ``--screenshot-high-bit-depth=<yes|no>``
     If possible, write screenshots with a bit depth similar to the source
@@ -3064,13 +3120,13 @@ Cache
     seeking, such as MP4.
 
     Note that half the cache size will be used to allow fast seeking back. This
-    is also the reason why a full cache is usually reported as 50% full. The
-    cache fill display does not include the part of the cache reserved for
-    seeking back. Likewise, when starting a file the cache will be at 100%,
-    because no space is reserved for seeking back yet.
+    is also the reason why a full cache is usually not reported as 100% full.
+    The cache fill display does not include the part of the cache reserved for
+    seeking back. The actual maximum percentage will usually be the ratio
+    between readahead and backbuffer sizes.
 
 ``--cache-default=<kBytes|no>``
-    Set the size of the cache in kilobytes (default: 150000 KB). Using ``no``
+    Set the size of the cache in kilobytes (default: 75000 KB). Using ``no``
     will not automatically enable the cache e.g. when playing from a network
     stream. Note that using ``--cache`` will always override this option.
 
@@ -3089,6 +3145,12 @@ Cache
     position and seek destination, or performing an actual seek. Depending
     on the situation, either of these might be slower than the other method.
     This option allows control over this.
+
+``--cache-backbuffer=<kBytes>``
+    Size of the cache back buffer (default: 75000 KB). This will add to the total
+    cache size, and reserved the amount for seeking back. The reserved amount
+    will not be used for readahead, and instead preserves already read data to
+    enable fast seeking back.
 
 ``--cache-file=<TMP|path>``
     Create a cache file on the filesystem.
@@ -3340,6 +3402,72 @@ Miscellaneous
     sync offsets occur, they will only take about 1 or 2 seconds to settle
     out. This delay in reaction time to sudden A/V offsets should be the only
     side-effect of turning this option on, for all sound drivers.
+
+``--video-sync=<audio|...>``
+    How the player synchronizes audio and video.
+
+    The modes starting with ``display-`` try to output video frames completely
+    synchronously to the display, using the detected display vertical refresh
+    rate as a hint how fast frames will be displayed on average. These modes
+    change video speed slightly to match the display. See ``--video-sync-...``
+    options for fine tuning. The robustness of this mode is further reduced by
+    making a some idealized assumptions, which may not always apply in reality.
+    Behavior can depend on the VO and the system's video and audio drivers.
+    Media files must use constant framerate. Section-wise VFR might work as well
+    with some container formats (but not e.g. mkv). If the sync code detects
+    severe A/V desync, or the framerate cannot be detected, the player
+    automatically reverts to ``audio`` mode for some time or permanently.
+
+    The modes with ``desync`` in their names do not attempt to keep audio/video
+    in sync. They will slowly (or quickly) desync, until e.g. the next seek
+    happens. These modes are meant for testing, not serious use.
+
+    :audio:             Time video frames to audio. This is the most robust
+                        mode, because the player doesn't have to assume anything
+                        about how the display behaves. The disadvantage is that
+                        it can lead to occasional frame drops or repeats. If
+                        audio is disabled, this uses the system clock. This is
+                        the default mode.
+    :display-resample:  Resample audio to match the video. This mode will also
+                        try to adjust audio speed to compensate for other drift.
+                        (This means it will play the audio at a different speed
+                        every once in a while to reduce the A/V difference.)
+    :display-resample-vdrop:  Resample audio to match the video. Drop video
+                        frames to compensate for drift.
+    :display-resample-desync: Like the previous mode, but no A/V compensation.
+    :display-vdrop:     Drop or repeat video frames to compensate desyncing
+                        video. (Although it should have the same effects as
+                        ``audio``, the implementation is very different.)
+    :display-desync:    Sync video to display, and let audio play on its own.
+    :desync:            Sync video according to system clock, and let audio play
+                        on its own.
+
+``--video-sync-max-video-change=<value>``
+    Maximum speed difference in percent that is applied to video with
+    ``--video-sync=display-...`` (default: 1). Display sync mode will be
+    disabled if the monitor and video refresh way do not match within the
+    given range. It tries multiples as well: playing 30 fps video on a 60 Hz
+    screen will duplicate every second frame. Playing 24 fps video on a 60 Hz
+    screen will play video in a 2-3-2-3-... pattern.
+
+    The default settings are not loose enough to speed up 23.976 fps video to
+    25 fps. We consider the pitch change too extreme to allow this behavior
+    by default. Set this option to a value of ``5`` to enable it.
+
+    Note that in the ``--video-sync=display-resample`` mode, audio speed will
+    additionally be changed by a small amount if necessary for A/V sync. See
+    ``--video-sync-max-audio-change``.
+
+``--video-sync-max-audio-change=<value>``
+    Maximum *additional* speed difference in percent that is applied to audio
+    with ``--video-sync=display-...`` (default: 0.125). Normally, the player
+    play the audio at the speed of the video. But if the difference between
+    audio and video position is too high, e.g. due to drift or other timing
+    errors, it will attempt to speed up or slow down audio by this additional
+    factor. Too low values could lead to video frame dropping or repeating if
+    the A/V desync cannot be compensated, too high values could lead to chaotic
+    frame dropping due to the audio "overshooting" and skipping multiple video
+    frames before the sync logic can react.
 
 ``--mf-fps=<value>``
     Framerate used when decoding from multiple PNG or JPEG files with ``mf://``

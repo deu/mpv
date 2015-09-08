@@ -191,7 +191,7 @@ static const struct gl_functions gl_functions[] = {
     // Framebuffers, extension in GL 2.x, core in GL 3.x core.
     {
         .ver_core = 300,
-        .ver_es_core = 300,
+        .ver_es_core = 200,
         .extension = "GL_ARB_framebuffer_object",
         .provides = MPGL_CAP_FB,
         .functions = (const struct gl_function[]) {
@@ -356,12 +356,6 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
     if (shader)
         mp_verbose(log, "GL_SHADING_LANGUAGE_VERSION='%s'\n", shader);
 
-    // Note: This code doesn't handle CONTEXT_FORWARD_COMPATIBLE_BIT_ARB
-    //       on OpenGL 3.0 correctly. Apparently there's no way to detect this
-    //       situation, because GL_ARB_compatibility is specified only for 3.1
-    //       and above.
-
-    bool has_legacy = false;
     if (gl->version >= 300) {
         gl->GetStringi = get_fn(fn_ctx, "glGetStringi");
         gl->GetIntegerv = get_fn(fn_ctx, "glGetIntegerv");
@@ -374,38 +368,22 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
         for (int n = 0; n < exts; n++) {
             const char *ext = gl->GetStringi(GL_EXTENSIONS, n);
             gl->extensions = talloc_asprintf_append(gl->extensions, " %s", ext);
-            if (strcmp(ext, "GL_ARB_compatibility") == 0)
-                has_legacy = true;
         }
 
-        // This version doesn't have GL_ARB_compatibility yet, and always
-        // includes legacy (except with CONTEXT_FORWARD_COMPATIBLE_BIT_ARB).
-        if (gl->version == 300)
-            has_legacy = true;
     } else {
         const char *ext = (char*)gl->GetString(GL_EXTENSIONS);
         gl->extensions = talloc_asprintf_append(gl->extensions, " %s", ext);
-
-        has_legacy = true;
     }
 
-    if (gl->es)
-        has_legacy = false;
-
-    if (has_legacy)
-        mp_verbose(log, "OpenGL legacy compat. found.\n");
     mp_dbg(log, "Combined OpenGL extensions string:\n%s\n", gl->extensions);
 
-    for (int n = 0; n < sizeof(gl_functions) / sizeof(gl_functions[0]); n++) {
+    for (int n = 0; n < MP_ARRAY_SIZE(gl_functions); n++) {
         const struct gl_functions *section = &gl_functions[n];
         int version = gl->es ? gl->es : gl->version;
         int ver_core = gl->es ? section->ver_es_core : section->ver_core;
         int ver_removed = gl->es ? section->ver_es_removed : section->ver_removed;
 
-        // With has_legacy, the legacy functions are still available, and
-        // functions are never actually removed. (E.g. the context could be at
-        // version >= 3.0, but functions like glBegin still exist and work.)
-        if (!has_legacy && ver_removed && version >= ver_removed)
+        if (ver_removed && version >= ver_removed)
             continue;
 
         // NOTE: Function entrypoints can exist, even if they do not work.
@@ -436,10 +414,8 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
                         section->extension ? section->extension : "builtin",
                         MPGL_VER_GET_MAJOR(ver_core),
                         MPGL_VER_GET_MINOR(ver_core));
-                if (must_exist) {
-                    gl->mpgl_caps = 0;
+                if (must_exist)
                     goto error;
-                }
                 break;
             }
             assert(i < MAX_FN_COUNT);
@@ -518,7 +494,7 @@ extern const struct mpgl_driver mpgl_driver_x11;
 extern const struct mpgl_driver mpgl_driver_x11egl;
 
 static const struct backend backends[] = {
-#if HAVE_RPI_GLES
+#if HAVE_RPI
     {"rpi", mpgl_set_backend_rpi},
 #endif
 #if HAVE_GL_COCOA

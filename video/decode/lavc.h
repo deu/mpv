@@ -20,6 +20,7 @@ typedef struct lavc_ctx {
     enum AVDiscard skip_frame;
     const char *software_fallback_decoder;
     bool hwdec_failed;
+    bool hwdec_notified;
 
     // From VO
     struct mp_hwdec_info *hwdec_info;
@@ -43,12 +44,11 @@ struct vd_lavc_hwdec {
     int (*probe)(struct vd_lavc_hwdec *hwdec, struct mp_hwdec_info *info,
                  const char *decoder);
     int (*init)(struct lavc_ctx *ctx);
-    int (*init_decoder)(struct lavc_ctx *ctx, int fmt, int w, int h);
+    int (*init_decoder)(struct lavc_ctx *ctx, int w, int h);
     void (*uninit)(struct lavc_ctx *ctx);
     // Note: if init_decoder is set, this will always use the values from the
     //       last successful init_decoder call. Otherwise, it's up to you.
-    struct mp_image *(*allocate_image)(struct lavc_ctx *ctx, int fmt,
-                                       int w, int h);
+    struct mp_image *(*allocate_image)(struct lavc_ctx *ctx, int w, int h);
     // Process the image returned by the libavcodec decoder.
     struct mp_image *(*process_image)(struct lavc_ctx *ctx, struct mp_image *img);
     // For horrible Intel shit-drivers only

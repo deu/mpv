@@ -39,6 +39,7 @@ struct scaler_config {
     struct scaler_fun window;
     float radius;
     float antiring;
+    int clamp;
 };
 
 struct gl_video_opts {
@@ -53,12 +54,12 @@ struct gl_video_opts {
     float sigmoid_center;
     float sigmoid_slope;
     int scaler_resizes_only;
-    int npot;
     int pbo;
     int dither_depth;
     int dither_algo;
     int dither_size;
     int temporal_dither;
+    int temporal_dither_period;
     int fbo_format;
     int alpha_mode;
     int chroma_location;
@@ -70,6 +71,7 @@ struct gl_video_opts {
     char *scale_shader;
     char **pre_shaders;
     char **post_shaders;
+    int dumb_mode;
 };
 
 extern const struct m_sub_options gl_video_conf;

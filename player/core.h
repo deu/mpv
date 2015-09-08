@@ -76,6 +76,25 @@ enum seek_precision {
     MPSEEK_VERY_EXACT,
 };
 
+// Comes from the assumption that some formats round timestamps to ms.
+#define FRAME_DURATION_TOLERANCE 0.0011
+
+enum video_sync {
+    VS_DEFAULT = 0,
+    VS_DISP_RESAMPLE,
+    VS_DISP_RESAMPLE_VDROP,
+    VS_DISP_RESAMPLE_NONE,
+    VS_DISP_VDROP,
+    VS_DISP_NONE,
+    VS_NONE,
+};
+
+#define VS_IS_DISP(x) ((x) == VS_DISP_RESAMPLE ||       \
+                       (x) == VS_DISP_RESAMPLE_VDROP || \
+                       (x) == VS_DISP_RESAMPLE_NONE ||  \
+                       (x) == VS_DISP_VDROP ||          \
+                       (x) == VS_DISP_NONE)
+
 struct track {
     enum stream_type type;
 
@@ -229,12 +248,25 @@ typedef struct MPContext {
 
     struct vo *video_out;
     // next_frame[0] is the next frame, next_frame[1] the one after that.
-    struct mp_image *next_frames[2 + VO_MAX_FUTURE_FRAMES];
+    struct mp_image *next_frames[VO_MAX_REQ_FRAMES];
     int num_next_frames;
     struct mp_image *saved_frame;   // for hrseek_lastframe
 
     enum playback_status video_status, audio_status;
     bool restart_complete;
+    // Factors to multiply with opts->playback_speed to get the total audio or
+    // video speed (usually 1.0, but can be set to by the sync code).
+    double speed_factor_v, speed_factor_a;
+    // Redundant values set from opts->playback_speed and speed_factor_*.
+    // update_playback_speed() updates them from the other fields.
+    double audio_speed, video_speed;
+    bool display_sync_active;
+    bool broken_fps_header;
+    double display_sync_frameduration;
+    int display_sync_drift_dir;
+    // Timing error (in seconds) due to rounding on vsync boundaries
+    double display_sync_error;
+    int display_sync_disable_counter;
     /* Set if audio should be timed to start with video frame after seeking,
      * not set when e.g. playing cover art */
     bool sync_audio_to_video;
@@ -344,7 +376,6 @@ typedef struct MPContext {
     struct screenshot_ctx *screenshot_ctx;
     struct command_ctx *command_ctx;
     struct encode_lavc_context *encode_lavc_ctx;
-    struct mp_nav_state *nav_state;
 
     struct mp_ipc_ctx *ipc_ctx;
 
@@ -359,7 +390,7 @@ double playing_audio_pts(struct MPContext *mpctx);
 void fill_audio_out_buffers(struct MPContext *mpctx, double endpts);
 double written_audio_pts(struct MPContext *mpctx);
 void clear_audio_output_buffers(struct MPContext *mpctx);
-void set_playback_speed(struct MPContext *mpctx, double new_speed);
+void update_playback_speed(struct MPContext *mpctx);
 void uninit_audio_out(struct MPContext *mpctx);
 void uninit_audio_chain(struct MPContext *mpctx);
 
@@ -371,15 +402,6 @@ void mp_load_playback_resume(struct MPContext *mpctx, const char *file);
 void mp_write_watch_later_conf(struct MPContext *mpctx);
 struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
                                                 struct playlist *playlist);
-
-// discnav.c
-void mp_nav_init(struct MPContext *mpctx);
-void mp_nav_reset(struct MPContext *mpctx);
-void mp_nav_destroy(struct MPContext *mpctx);
-void mp_nav_user_input(struct MPContext *mpctx, char *command);
-void mp_handle_nav(struct MPContext *mpctx);
-int mp_nav_in_menu(struct MPContext *mpctx);
-bool mp_nav_mouse_on_button(struct MPContext *mpctx);
 
 // loadfile.c
 void uninit_player(struct MPContext *mpctx, unsigned int mask);
@@ -498,5 +520,6 @@ void write_video(struct MPContext *mpctx, double endpts);
 void mp_force_video_refresh(struct MPContext *mpctx);
 void uninit_video_out(struct MPContext *mpctx);
 void uninit_video_chain(struct MPContext *mpctx);
+double stabilize_frame_duration(struct MPContext *mpctx, bool require_exact);
 
 #endif /* MPLAYER_MP_CORE_H */

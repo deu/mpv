@@ -118,10 +118,6 @@ o (also P)
 O
     Toggle OSD states between normal and playback time/duration.
 
-d
-    Toggle frame dropping states: none / skip display / skip decoding (see
-    ``--framedrop``).
-
 v
     Toggle subtitle visibility.
 
@@ -175,7 +171,7 @@ Shift+PGUP and Shift+PGDWN
     Seek backward or forward by 10 minutes. (This used to be mapped to
     PGUP/PGDWN without Shift.)
 
-D
+d
     Activate/deactivate deinterlacer.
 
 A
@@ -420,7 +416,7 @@ but option values still need to be quoted as a whole if it contains certain
 characters like spaces. A config entry can be quoted with ``"`` and ``'``,
 as well as with the fixed-length syntax (``%n%``) mentioned before. This is like
 passing the exact contents of the quoted string as command line option. C-style
-escapes are currently _not_ interpreted on this level, although some options to
+escapes are currently _not_ interpreted on this level, although some options do
 this manually. (This is a mess and should probably be changed at some point.)
 
 Putting Command Line Options into the Configuration File
@@ -530,6 +526,14 @@ listed.
   if there is audio "missing", or not enough frames can be dropped. Usually
   this will indicate a problem. (``total-avsync-change`` property.)
 - Encoding state in ``{...}``, only shown in encoding mode.
+- Display sync state. If display sync is active (``display-sync-active``
+  property), this shows ``DS: +0.02598%``, where the number is the speed change
+  factor applied to audio to achieve sync to display, expressed in percent
+  deviation from 1.0 (``audio-speed-correction`` property). In sync modes which
+  don't resample, this will always be ``+0.00000%``.
+- Missed frames, e.g. ``Missed: 4``. (``vo-missed-frame-count`` property.) Shows
+  up in display sync mode only. This is incremented each time a frame took
+  longer to display than intended.
 - Dropped frames, e.g. ``Dropped: 4``. Shows up only if the count is not 0. Can
   grow if the video framerate is higher than that of the display, or if video
   rendering is too slow. Also can be incremented on "hiccups" and when the video
@@ -880,6 +884,14 @@ Other config files (such as ``input.conf``) are in the same directory. See the
 
 The environment variable ``$MPV_HOME`` completely overrides these, like on
 UNIX.
+
+If a directory named ``portable_config`` next to the mpv.exe exists, all
+config will be loaded from this directory only. Watch later config files are
+written to this directory as well. (This exists on Windows only and is redundant
+with ``$MPV_HOME``. However, since Windows is very scripting unfriendly, a
+wrapper script just setting ``$MPV_HOME``, like you could do it on other
+systems, won't work. ``portable_config`` is provided for convenience to get
+around this restriction.)
 
 Config files located in the same directory as ``mpv.exe`` are loaded with
 lower priority. Some config files are loaded only once, which means that

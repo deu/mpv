@@ -277,10 +277,6 @@ iconv support use --disable-iconv.",
         'func': check_statement('sys/vfs.h',
                                 'struct statfs fs; fstatfs(0, &fs); fs.f_namelen')
     }, {
-        'name': '--libguess',
-        'desc': 'libguess support',
-        'func': check_pkg_config('libguess', '>= 1.0'),
-    }, {
         'name': '--libsmbclient',
         'desc': 'Samba support',
         'deps': [ 'libdl' ],
@@ -339,19 +335,22 @@ iconv support use --disable-iconv.",
     }, {
         'name': '--enca',
         'desc': 'ENCA support',
+        'deps': [ 'iconv' ],
         'func': check_statement('enca.h', 'enca_get_languages(NULL)', lib='enca'),
     }, {
-        'name': '--ladspa',
-        'desc': 'LADSPA plugin support',
-        'func': check_statement('ladspa.h', 'LADSPA_Descriptor ld = {0}'),
+        'name': '--libguess',
+        'desc': 'libguess support',
+        'deps': [ 'iconv' ],
+        'func': check_pkg_config('libguess', '>= 1.0'),
+    }, {
+        'name': '--uchardet',
+        'desc': 'uchardet support',
+        'deps': [ 'iconv' ],
+        'func': check_pkg_config('uchardet'),
     }, {
         'name': '--rubberband',
         'desc': 'librubberband support',
         'func': check_pkg_config('rubberband', '>= 1.8.0'),
-    }, {
-        'name': '--libbs2b',
-        'desc': 'libbs2b audio filter support',
-        'func': check_pkg_config('libbs2b'),
     }, {
         'name': '--lcms2',
         'desc': 'LCMS2 support',
@@ -370,6 +369,11 @@ iconv support use --disable-iconv.",
         'desc': 'VapourSynth filter bridge (Lazy Lua)',
         'deps': ['vapoursynth-core', 'lua'],
         'func': check_true,
+    }, {
+        'name': '--libarchive',
+        'desc': 'libarchive wrapper for reading zip files and more',
+        'func': check_pkg_config('libarchive >= 3.0.0'),
+        'default': 'disable',
     }
 ]
 
@@ -664,7 +668,7 @@ video_output_features = [
         # including them (compensate with -isystem and -fgnu89-inline).
         'name': '--rpi',
         'desc': 'Raspberry Pi support',
-        'func':
+        'func': compose_checks(
             check_cc(cflags="-isystem/opt/vc/include/ "+
                             "-isystem/opt/vc/include/interface/vcos/pthreads " +
                             "-isystem/opt/vc/include/interface/vmcs_host/linux " +
@@ -672,23 +676,17 @@ video_output_features = [
                      linkflags="-L/opt/vc/lib",
                      header_name="bcm_host.h",
                      lib=['mmal_core', 'mmal_util', 'mmal_vc_client', 'bcm_host']),
-    }, {
-        'name': '--rpi-gles',
-        'desc': 'GLES on Raspberry Pi',
-        'groups': [ 'gl' ],
-        'deps': ['rpi'],
-        # We still need all OpenGL symbols, because the vo_opengl code is
-        # generic and supports anything from GLES2/OpenGL 2.1 to OpenGL 4 core.
-        'func': compose_checks(
+            # We still need all OpenGL symbols, because the vo_opengl code is
+            # generic and supports anything from GLES2/OpenGL 2.1 to OpenGL 4 core.
             check_cc(lib="EGL"),
             check_cc(lib="GLESv2"),
             check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
             check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
-            ),
+        ),
     } , {
         'name': '--gl',
         'desc': 'OpenGL video outputs',
-        'deps_any': [ 'gl-cocoa', 'gl-x11', 'gl-win32', 'gl-wayland', 'rpi-gles' ],
+        'deps_any': [ 'gl-cocoa', 'gl-x11', 'gl-win32', 'gl-wayland', 'rpi' ],
         'func': check_true
     }
 ]
@@ -721,19 +719,30 @@ hwaccel_features = [
         'deps': [ 'gl-cocoa', 'vda-hwaccel' ],
         'func': check_true
     }, {
+        'name': '--videotoolbox-hwaccel',
+        'desc': 'libavcodec videotoolbox hwaccel',
+        'func': compose_checks(
+            check_headers('VideoToolbox/VideoToolbox.h'),
+            check_statement('libavcodec/videotoolbox.h',
+                            'av_videotoolbox_alloc_context()',
+                            framework='IOSurface',
+                            use='libav')),
+    } , {
+        'name': '--videotoolbox-gl',
+        'desc': 'Videotoolbox with OpenGL',
+        'deps': [ 'gl-cocoa', 'videotoolbox-hwaccel' ],
+        'func': check_true
+    } , {
+        'name': 'videotoolbox-vda-gl',
+        'desc': 'Videotoolbox or VDA with OpenGL',
+        'deps_any': [ 'videotoolbox-gl', 'vda-gl' ],
+        'func': check_true
+    }, {
         'name': '--vdpau-hwaccel',
         'desc': 'libavcodec VDPAU hwaccel',
         'deps': [ 'vdpau' ],
         'func': check_statement('libavcodec/vdpau.h',
                                 'av_vdpau_bind_context(0,0,0,AV_HWACCEL_FLAG_ALLOW_HIGH_DEPTH)',
-                                use='libav'),
-    }, {
-        'name': '--vdpau-old-hwaccel',
-        'desc': 'libavcodec VDPAU hwaccel (old API)',
-        'deps': [ 'vdpau' ],
-        'deps_neg': [ 'vdpau-hwaccel' ],
-        'func': check_statement('libavcodec/vdpau.h',
-                                'av_vdpau_alloc_context()',
                                 use='libav'),
     }, {
         'name': '--dxva2-hwaccel',
@@ -771,6 +780,7 @@ radio_and_tv_features = [
     }, {
         'name': '--pvr',
         'desc': 'Video4Linux2 MPEG PVR interface',
+        'deps': [ 'tv' ],
         'func': check_cc(fragment=load_fragment('pvr.c')),
     }, {
         'name': '--audio-input',

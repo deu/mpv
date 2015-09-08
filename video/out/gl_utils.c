@@ -335,12 +335,12 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     int cw = w, ch = h;
 
-    if ((flags & FBOTEX_FUZZY_W) && cw < fbo->tex_w)
-        cw = fbo->tex_w;
-    if ((flags & FBOTEX_FUZZY_H) && ch < fbo->tex_h)
-        ch = fbo->tex_h;
+    if ((flags & FBOTEX_FUZZY_W) && cw < fbo->w)
+        cw = fbo->w;
+    if ((flags & FBOTEX_FUZZY_H) && ch < fbo->h)
+        ch = fbo->h;
 
-    if (fbo->tex_w == cw && fbo->tex_h == ch && fbo->iformat == iformat)
+    if (fbo->w == cw && fbo->h == ch && fbo->iformat == iformat)
         return true;
 
     if (flags & FBOTEX_FUZZY_W)
@@ -352,12 +352,12 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     *fbo = (struct fbotex) {
         .gl = gl,
-        .tex_w = w,
-        .tex_h = h,
+        .w = w,
+        .h = h,
         .iformat = iformat,
     };
 
-    mp_verbose(log, "Create FBO: %dx%d\n", fbo->tex_w, fbo->tex_h);
+    mp_verbose(log, "Create FBO: %dx%d\n", fbo->w, fbo->h);
 
     if (!(gl->mpgl_caps & MPGL_CAP_FB))
         return false;
@@ -365,7 +365,7 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
     gl->GenFramebuffers(1, &fbo->fbo);
     gl->GenTextures(1, &fbo->texture);
     gl->BindTexture(GL_TEXTURE_2D, fbo->texture);
-    gl->TexImage2D(GL_TEXTURE_2D, 0, iformat, fbo->tex_w, fbo->tex_h, 0,
+    gl->TexImage2D(GL_TEXTURE_2D, 0, iformat, fbo->w, fbo->h, 0,
                    GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -553,6 +553,8 @@ static void sc_flush_cache(struct gl_shader_cache *sc)
 
 void gl_sc_destroy(struct gl_shader_cache *sc)
 {
+    if (!sc)
+        return;
     gl_sc_reset(sc);
     sc_flush_cache(sc);
     talloc_free(sc);
@@ -875,8 +877,8 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
         if (strcmp(e->name, "position") == 0) {
             // setting raster pos. requires setting gl_Position magic variable
             assert(e->num_elems == 2 && e->type == GL_FLOAT);
-            ADD(vert_head, "%s vec2 position;\n", vert_in);
-            ADD(vert_body, "gl_Position = vec4(position, 1.0, 1.0);\n");
+            ADD(vert_head, "%s vec2 vertex_position;\n", vert_in);
+            ADD(vert_body, "gl_Position = vec4(vertex_position, 1.0, 1.0);\n");
         } else {
             ADD(vert_head, "%s %s vertex_%s;\n", vert_in, glsl_type, e->name);
             ADD(vert_head, "%s %s %s;\n", vert_out, glsl_type, e->name);

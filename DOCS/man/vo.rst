@@ -290,6 +290,26 @@ Available video output drivers are:
     color space conversion and chroma upsampling is generally in the hand of
     the hardware decoder APIs.
 
+    ``opengl`` makes use of FBOs by default. Sometimes you can achieve better
+    quality or performance by changing the ``fbo-format`` suboption to
+    ``rgb16f``, ``rgb32f`` or ``rgb``. Known problems include Mesa/Intel not
+    accepting ``rgb16``, Mesa sometimes not being compiled with float texture
+    support, and some OS X setups being very slow with ``rgb16`` but fast
+    with ``rgb32f``. If you have problems, you can also try passing the
+    ``dumb-mode=yes`` sub-option.
+
+    ``dumb-mode=<yes|no>``
+        This mode is extremely restricted, and will disable most extended
+        OpenGL features. This includes high quality scalers and custom
+        shaders!
+
+        It is intended for hardware that does not support FBOs (including GLES,
+        which supports it insufficiently), or to get some more performance out
+        of bad or old hardware.
+
+        This mode is forced automatically if needed, and this option is mostly
+        useful for debugging.
+
     ``scale=<filter>``
 
         ``bilinear``
@@ -455,6 +475,11 @@ Available video output drivers are:
         Unfortunately, this can lead to flicker on LCD displays, since these
         have a high reaction time.
 
+    ``temporal-dither-period=<1-128>``
+        Determines how often the dithering pattern is updated when
+        ``temporal-dither`` is in use. 1 (the default) will update on every
+        video frame, 2 on every other frame, etc.
+
     ``debug``
         Check for OpenGL errors, i.e. call ``glGetError()``. Also request a
         debug OpenGL context (which does nothing with current graphics drivers
@@ -500,6 +525,12 @@ Available video output drivers are:
         Note that the maximum supported filter radius is currently 3, due to
         limitations in the number of video textures that can be loaded
         simultaneously.
+
+    ``tscale-clamp``
+        Clamp the ``tscale`` filter kernel's value range to [0-1]. This reduces
+        excessive ringing artifacts in the temporal domain (which typically
+        manifest themselves as short flashes or fringes of black, mostly
+        around moving edges) in exchange for potentially adding more blur.
 
     ``dscale-radius``, ``cscale-radius``, ``tscale-radius``, etc.
         Set filter parameters for ``dscale``, ``cscale`` and ``tscale``,
@@ -646,8 +677,7 @@ Available video output drivers are:
 
     ``fbo-format=<fmt>``
         Selects the internal format of textures used for FBOs. The format can
-        influence performance and quality of the video output. (FBOs are not
-        always used, and typically only when using extended scalers.)
+        influence performance and quality of the video output.
         ``fmt`` can be one of: rgb, rgba, rgb8, rgb10, rgb10_a2, rgb16, rgb16f,
         rgb32f, rgba12, rgba16, rgba16f, rgba32f.
         Default: rgba16.
@@ -810,17 +840,10 @@ Available video output drivers are:
 
     This is equivalent to::
 
-        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:fancy-downscaling:sigmoid-upscaling
+        --vo=opengl:scale=spline36:cscale=spline36:dscale=mitchell:dither-depth=auto:fancy-downscaling:sigmoid-upscaling:pbo
 
     Note that some cheaper LCDs do dithering that gravely interferes with
     ``opengl``'s dithering. Disabling dithering with ``dither-depth=no`` helps.
-
-    Unlike ``opengl``, ``opengl-hq`` makes use of FBOs by default. Sometimes you
-    can achieve better quality or performance by changing the ``fbo-format``
-    suboption to ``rgb16f``, ``rgb32f`` or ``rgb``. Known problems include
-    Mesa/Intel not accepting ``rgb16``, Mesa sometimes not being compiled with
-    float texture support, and some OS X setups being very slow with ``rgb16``
-    but fast with ``rgb32f``.
 
 ``sdl``
     SDL 2.0+ Render video output driver, depending on system with or without
@@ -994,6 +1017,11 @@ Available video output drivers are:
         (default: -10). Note that mpv will also use the 2 layers above the
         selected layer, to handle the window background and OSD. Actual video
         rendering will happen on the layer above the selected layer.
+
+    ``background=<yes|no>``
+        Whether to render a black background behind the video (default: no).
+        Normally it's better to kill the console framebuffer instead, which
+        gives better performance.
 
 ``drm`` (Direct Rendering Manager)
     Video output driver using Kernel Mode Setting / Direct Rendering Manager.

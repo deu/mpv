@@ -79,6 +79,8 @@ local state = {
     cache_idle = false,
     idle = false,
     enabled = true,
+    input_enabled = true,
+    showhide_enabled = false,
 }
 
 
@@ -245,8 +247,8 @@ function get_tracklist(type)
             local lang, title, channels, selected = "unknown", "", "", "○"
             if not(track.lang == nil) then lang = track.lang end
             if not(track.title == nil) then title = track.title end
-            if not(track.channels == nil) then
-                channels = "-"..track.channels.."ch"
+            if not(track.audio-channels == nil) then
+                channels = "-"..track.audio-channels.."ch"
             end
             if (track.id == tonumber(mp.get_property(type))) then
                 selected = "●"
@@ -1775,9 +1777,14 @@ function render()
     for _,cords in ipairs(osc_param.areas["input"]) do
         if state.osc_visible then -- activate only when OSC is actually visible
             mp.set_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "input")
-            mp.enable_key_bindings("input")
-        else
-            mp.disable_key_bindings("input")
+        end
+        if state.osc_visible ~= state.input_enabled then
+            if state.osc_visible then
+                mp.enable_key_bindings("input")
+            else
+                mp.disable_key_bindings("input")
+            end
+            state.input_enabled = state.osc_visible
         end
 
         if (mouse_hit_coords(cords.x1, cords.y1, cords.x2, cords.y2)) then
@@ -1892,6 +1899,8 @@ end
 
 -- called by mpv on every frame
 function tick()
+    if (not state.enabled) then return end
+
     if (state.idle) then
 
         -- render idle message
@@ -1923,7 +1932,10 @@ function tick()
         ass:append("Drop files to play here.")
         mp.set_osd_ass(640, 360, ass.text)
 
-        mp.disable_key_bindings("showhide")
+        if state.showhide_enabled then
+            mp.disable_key_bindings("showhide")
+            state.showhide_enabled = false
+        end
 
 
     elseif (state.fullscreen and user_opts.showfullscreen)
@@ -1939,7 +1951,10 @@ end
 
 function do_enable_keybindings()
     if state.enabled then
-        mp.enable_key_bindings("showhide", "allow-vo-dragging|allow-hide-cursor")
+        if not state.showhide_enabled then
+            mp.enable_key_bindings("showhide", "allow-vo-dragging+allow-hide-cursor")
+        end
+        state.showhide_enabled = true
     end
 end
 
@@ -1950,15 +1965,18 @@ function enable_osc(enable)
         show_osc()
     else
         hide_osc()
-        mp.disable_key_bindings("showhide")
+        if state.showhide_enabled then
+            mp.disable_key_bindings("showhide")
+        end
+        state.showhide_enabled = false
     end
 end
 
 validate_user_opts()
 
-mp.register_event("tick", tick)
 mp.register_event("start-file", request_init)
 mp.register_event("tracks-changed", request_init)
+mp.observe_property("playlist", nil, request_init)
 
 mp.register_script_message("enable-osc", function() enable_osc(true) end)
 mp.register_script_message("disable-osc", function() enable_osc(false) end)
@@ -1978,13 +1996,11 @@ mp.observe_property("idle", "bool",
 )
 mp.observe_property("pause", "bool", pause_state)
 mp.observe_property("cache-idle", "bool", cache_state)
-
-mp.observe_property("disc-menu-active", "bool", function(name, val)
-    if val == true then
-        hide_osc()
-        mp.disable_key_bindings("showhide")
+mp.observe_property("vo-configured", "bool", function(name, val)
+    if val then
+        mp.register_event("tick", tick)
     else
-        do_enable_keybindings()
+        mp.unregister_event(tick)
     end
 end)
 
