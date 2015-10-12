@@ -24,9 +24,9 @@
 #include "common/global.h"
 #include "player/client.h"
 
-#include "gl_common.h"
-#include "gl_video.h"
-#include "gl_hwdec.h"
+#include "opengl/common.h"
+#include "opengl/video.h"
+#include "opengl/hwdec.h"
 
 #include "libmpv/opengl_cb.h"
 
@@ -452,7 +452,7 @@ static int query_format(struct vo *vo, int format)
     return ok;
 }
 
-static int reconfig(struct vo *vo, struct mp_image_params *params, int flags)
+static int reconfig(struct vo *vo, struct mp_image_params *params)
 {
     struct vo_priv *p = vo->priv;
 

@@ -11,6 +11,10 @@ syntax is:
 
     To get a full list of available audio filters, see ``--af=help``.
 
+    Also, keep in mind that most actual filters are available via the ``lavfi``
+    wrapper, which gives you access to most of libavfilter's filters. This
+    includes all filters that have been ported from MPlayer to libavfilter.
+
 You can also set defaults for each filter. The defaults are applied before the
 normal filter parameters.
 
@@ -59,6 +63,13 @@ Available filters are:
         (If you just want to set defaults for this filter that will be used
         even by automatically inserted lavrresample instances, you should
         prefer setting them with ``--af-defaults=lavrresample:...``.)
+    ``normalize=<yes|no>``
+        Whether to normalize when remixing channel layouts (default: yes). This
+        is e.g. applied when downmixing surround audio to stereo. The advantage
+        is that this guarantees that no clipping can happen. Unfortunately,
+        this can also lead to too low volume levels. Whether you enable or
+        disable this is essentially a matter of taste, but the default uses
+        the safer choice.
     ``o=<string>``
         Set AVOptions on the SwrContext or AVAudioResampleContext. These should
         be documented by FFmpeg or Libav.
@@ -153,7 +164,7 @@ Available filters are:
 
     .. admonition:: Examples
 
-        ``mpv --af=channels=4:[0-1,1-0,0-2,1-3] media.avi``
+        ``mpv --af=channels=4:[0-1,1-0,2-2,3-3] media.avi``
             Would change the number of channels to 4 and set up 4 routes that
             swap channel 0 and channel 1 and leave channel 2 and 3 intact.
             Observe that if media containing two channels were played back,

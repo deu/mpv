@@ -1091,6 +1091,9 @@ Property list
     An example of these kind of metadata are the cropping parameters
     added by ``--vf=lavfi=cropdetect``.
 
+``af-metadata/<filter-label>``
+    Equivalent to ``vf-metadata/<filter-label>``, but for audio filters.
+
 ``pause`` (RW)
     Pause status. This is usually ``yes`` or ``no``. See ``--pause``.
 
@@ -1111,10 +1114,12 @@ Property list
     Network cache fill state (0-100.0).
 
 ``cache-size`` (RW)
-    Total network cache size in KB. This is similar to ``--cache``. This allows
+    Network cache size in KB. This is similar to ``--cache``. This allows
     to set the cache size at runtime. Currently, it's not possible to enable
     or disable the cache at runtime using this property, just to resize an
     existing cache.
+
+    This does not include the backbuffer size (changed after mpv 0.10.0).
 
     Note that this tries to keep the cache contents as far as possible. To make
     this easier, the cache resizing code will allocate the new cache while the
@@ -1165,9 +1170,6 @@ Property list
     to restart playback. (It's possible that it returns ``yes`` while a file
     is loaded, or when switching ordered chapter segments. This is because
     the same underlying code is used for seeking and resyncing.)
-
-``pts-association-mode`` (RW)
-    See ``--pts-association-mode``.
 
 ``hr-seek`` (RW)
     See ``--hr-seek``.
@@ -1255,8 +1257,8 @@ Property list
 ``colormatrix-input-range`` (R)
     See ``colormatrix``.
 
-``colormatrix-output-range`` (R)
-    See ``colormatrix``.
+``video-output-levels`` (RW)
+    See ``--video-output-levels``,
 
 ``colormatrix-primaries`` (R)
     See ``colormatrix``.

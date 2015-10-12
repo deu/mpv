@@ -302,6 +302,9 @@ typedef struct MPContext {
     double last_vo_pts;
     // Video PTS, or audio PTS if video has ended.
     double playback_pts;
+    // audio stats only
+    int64_t audio_stat_start;
+    double written_audio;
 
     int last_chapter;
 
@@ -488,7 +491,7 @@ void execute_queued_seek(struct MPContext *mpctx);
 void run_playloop(struct MPContext *mpctx);
 void mp_idle(struct MPContext *mpctx);
 void idle_loop(struct MPContext *mpctx);
-void handle_force_window(struct MPContext *mpctx, bool reconfig);
+int handle_force_window(struct MPContext *mpctx, bool force);
 void add_frame_pts(struct MPContext *mpctx, double pts);
 int get_past_frame_durations(struct MPContext *mpctx, double *fd, int num);
 void seek_to_last_frame(struct MPContext *mpctx);

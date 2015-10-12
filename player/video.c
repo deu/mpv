@@ -220,10 +220,11 @@ void reset_video_state(struct MPContext *mpctx)
 void uninit_video_out(struct MPContext *mpctx)
 {
     uninit_video_chain(mpctx);
-    if (mpctx->video_out)
+    if (mpctx->video_out) {
         vo_destroy(mpctx->video_out);
+        mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
+    }
     mpctx->video_out = NULL;
-    mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
 }
 
 void uninit_video_chain(struct MPContext *mpctx)
@@ -236,8 +237,8 @@ void uninit_video_chain(struct MPContext *mpctx)
         mpctx->sync_audio_to_video = false;
         reselect_demux_streams(mpctx);
         remove_deint_filter(mpctx);
+        mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
     }
-    mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
 }
 
 int reinit_video_chain(struct MPContext *mpctx)
@@ -786,6 +787,7 @@ static void init_vo(struct MPContext *mpctx)
         video_set_colors(d_video, "saturation", opts->gamma_saturation);
     if (opts->gamma_hue != 1000)
         video_set_colors(d_video, "hue", opts->gamma_hue);
+    video_set_colors(d_video, "output-levels", opts->video_output_levels);
 
     mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
 }
@@ -1099,11 +1101,14 @@ void write_video(struct MPContext *mpctx, double endpts)
         return;
 
     if (r == VD_EOF) {
+        int prev_state = mpctx->video_status;
         mpctx->video_status =
             vo_still_displaying(vo) ? STATUS_DRAINING : STATUS_EOF;
         mpctx->delay = 0;
         mpctx->last_av_difference = 0;
         MP_DBG(mpctx, "video EOF (status=%d)\n", mpctx->video_status);
+        if (prev_state != mpctx->video_status)
+            mpctx->sleeptime = 0;
         return;
     }
 
@@ -1130,7 +1135,7 @@ void write_video(struct MPContext *mpctx, double endpts)
                 info->name, p.w, p.h, extra, vo_format_name(p.imgfmt));
         MP_VERBOSE(mpctx, "VO: Description: %s\n", info->description);
 
-        int vo_r = vo_reconfig(vo, &p, 0);
+        int vo_r = vo_reconfig(vo, &p);
         if (vo_r < 0) {
             mpctx->error_playing = MPV_ERROR_VO_INIT_FAILED;
             goto error;

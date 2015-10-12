@@ -50,7 +50,7 @@
 #include "demux/demux.h"
 #include "stream/stream.h"
 #include "sub/dec_sub.h"
-#include "sub/find_subfiles.h"
+#include "external_files.h"
 #include "video/decode/dec_video.h"
 #include "video/out/vo.h"
 
@@ -198,10 +198,12 @@ void update_demuxer_properties(struct MPContext *mpctx)
                         continue;
                 }
             }
+            struct mp_log *log = mp_log_new(NULL, mpctx->log, "!display-tags");
             if (!had_output)
-                MP_INFO(mpctx, "File tags:\n");
-            MP_INFO(mpctx, " %s: %s\n", info->keys[n], info->values[n]);
+                mp_info(log, "File tags:\n");
+            mp_info(log, " %s: %s\n", info->keys[n], info->values[n]);
             had_output = true;
+            talloc_free(log);
         }
         talloc_free(mpctx->filtered_tags);
         mpctx->filtered_tags = info;
@@ -1095,6 +1097,8 @@ static void play_current_file(struct MPContext *mpctx)
 
     mpctx->max_frames = opts->play_frames;
 
+    handle_force_window(mpctx, false);
+
     MP_INFO(mpctx, "Playing: %s\n", mpctx->filename);
 
 reopen_file:
@@ -1116,7 +1120,7 @@ reopen_file:
     }
 
     open_demux_reentrant(mpctx);
-    if (!mpctx->master_demuxer)
+    if (!mpctx->master_demuxer || mpctx->stop_play)
         goto terminate_playback;
     mpctx->demuxer = mpctx->master_demuxer;
 

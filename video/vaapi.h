@@ -22,7 +22,6 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <va/va.h>
-#include <va/va_x11.h>
 
 #ifndef VA_FOURCC_I420
 #define VA_FOURCC_I420 VA_FOURCC('I', '4', '2', '0')
@@ -48,6 +47,7 @@ struct mp_vaapi_ctx {
     struct mp_log *log;
     VADisplay display;
     struct va_image_formats *image_formats;
+    bool gpu_memcpy_message;
     pthread_mutex_t lock;
 };
 
@@ -68,6 +68,8 @@ uint32_t                 va_fourcc_from_imgfmt(int imgfmt);
 VAImageFormat *          va_image_format_from_imgfmt(struct mp_vaapi_ctx *ctx, int imgfmt);
 bool                     va_image_map(struct mp_vaapi_ctx *ctx, VAImage *image, struct mp_image *mpi);
 bool                     va_image_unmap(struct mp_vaapi_ctx *ctx, VAImage *image);
+
+void va_surface_get_uncropped_size(struct mp_image *mpi, int *out_w, int *out_h);
 
 void va_pool_set_allocator(struct mp_image_pool *pool, struct mp_vaapi_ctx *ctx,
                            int rt_format);

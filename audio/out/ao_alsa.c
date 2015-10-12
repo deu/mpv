@@ -50,6 +50,7 @@
 
 struct priv {
     snd_pcm_t *alsa;
+    bool device_lost;
     snd_pcm_format_t alsa_fmt;
     int can_pause;
     snd_pcm_sframes_t prepause_frames;
@@ -82,6 +83,21 @@ struct priv {
         if (err < 0) \
             MP_WARN(ao, "%s: %s\n", (message), snd_strerror(err)); \
     } while (0)
+
+// Common code for handling ENODEV, which happens if a device gets "lost", and
+// can't be used anymore. Returns true if alsa_err is not ENODEV.
+static bool check_device_present(struct ao *ao, int alsa_err)
+{
+    struct priv *p = ao->priv;
+    if (alsa_err != -ENODEV)
+        return true;
+    if (!p->device_lost) {
+        MP_WARN(ao, "Device lost, trying to recover...\n");
+        ao_request_reload(ao);
+        p->device_lost = true;
+    }
+    return false;
+}
 
 static int control(struct ao *ao, enum aocontrol cmd, void *arg)
 {
@@ -210,11 +226,20 @@ static const int mp_to_alsa_format[][2] = {
     {AF_FORMAT_S24,
             MP_SELECT_LE_BE(SND_PCM_FORMAT_S24_3LE, SND_PCM_FORMAT_S24_3BE)},
     {AF_FORMAT_FLOAT,       SND_PCM_FORMAT_FLOAT},
+    {AF_FORMAT_DOUBLE,      SND_PCM_FORMAT_FLOAT64},
     {AF_FORMAT_UNKNOWN,     SND_PCM_FORMAT_UNKNOWN},
 };
 
 static int find_alsa_format(int af_format)
 {
+    if (af_fmt_is_spdif(af_format)) {
+        if (af_format == AF_FORMAT_S_MP3) {
+            return SND_PCM_FORMAT_MPEG;
+        } else {
+            return SND_PCM_FORMAT_S16;
+        }
+    }
+
     af_format = af_fmt_from_planar(af_format);
     for (int n = 0; mp_to_alsa_format[n][0] != AF_FORMAT_UNKNOWN; n++) {
         if (mp_to_alsa_format[n][0] == af_format)
@@ -453,28 +478,23 @@ static int init_device(struct ao *ao, bool second_try)
     err = snd_pcm_hw_params_any(p->alsa, alsa_hwparams);
     CHECK_ALSA_ERROR("Unable to get initial parameters");
 
-    if (af_fmt_is_spdif(ao->format)) {
-        if (ao->format == AF_FORMAT_S_MP3) {
-            p->alsa_fmt = SND_PCM_FORMAT_MPEG;
-        } else {
-            p->alsa_fmt = SND_PCM_FORMAT_S16;
+    bool found_format = false;
+    int try_formats[AF_FORMAT_COUNT];
+    af_get_best_sample_formats(ao->format, try_formats);
+    for (int n = 0; try_formats[n]; n++) {
+        p->alsa_fmt = find_alsa_format(try_formats[n]);
+        MP_DBG(ao, "Trying format %s\n", af_fmt_to_str(try_formats[n]));
+        if (snd_pcm_hw_params_test_format(p->alsa, alsa_hwparams, p->alsa_fmt) >= 0) {
+            ao->format = try_formats[n];
+            found_format = true;
+            MP_DBG(ao, "Selectedformat %s\n", af_fmt_to_str(ao->format));
+            break;
         }
-    } else {
-        p->alsa_fmt = find_alsa_format(ao->format);
-    }
-    if (p->alsa_fmt == SND_PCM_FORMAT_UNKNOWN) {
-        p->alsa_fmt = SND_PCM_FORMAT_S16;
-        ao->format = AF_FORMAT_S16;
     }
 
-    err = snd_pcm_hw_params_test_format(p->alsa, alsa_hwparams, p->alsa_fmt);
-    if (err < 0) {
-        if (af_fmt_is_spdif(ao->format))
-            CHECK_ALSA_ERROR("Unable to set IEC61937 format");
-        MP_INFO(ao, "Format %s is not supported by hardware, trying default.\n",
-                af_fmt_to_str(ao->format));
-        p->alsa_fmt = SND_PCM_FORMAT_S16;
-        ao->format = AF_FORMAT_S16;
+    if (!found_format) {
+        MP_ERR(ao, "Can't find appropriate sample format.\n");
+        goto alsa_error;
     }
 
     err = snd_pcm_hw_params_set_format(p->alsa, alsa_hwparams, p->alsa_fmt);
@@ -731,6 +751,8 @@ static int get_space(struct ao *ao)
     snd_pcm_status_alloca(&status);
 
     err = snd_pcm_status(p->alsa, status);
+    if (!check_device_present(ao, err))
+        goto alsa_error;
     CHECK_ALSA_ERROR("cannot get pcm status");
 
     unsigned space = snd_pcm_status_get_avail(status);
@@ -857,9 +879,8 @@ static int play(struct ao *ao, void **data, int samples, int flags)
 
         if (res == -EINTR || res == -EAGAIN) { /* retry */
             res = 0;
-        } else if (res == -ENODEV) {
-            MP_WARN(ao, "Device lost, trying to recover...\n");
-            ao_request_reload(ao);
+        } else if (!check_device_present(ao, res)) {
+            goto alsa_error;
         } else if (res < 0) {
             if (res == -ESTRPIPE) {  /* suspend */
                 resume_device(ao);

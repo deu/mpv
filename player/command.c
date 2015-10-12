@@ -1187,21 +1187,31 @@ static int mp_property_chapter_metadata(void *ctx, struct m_property *prop,
     return tag_property(action, arg, mpctx->chapters[chapter].metadata);
 }
 
-static int mp_property_vf_metadata(void *ctx, struct m_property *prop,
-                                   int action, void *arg)
+static int mp_property_filter_metadata(void *ctx, struct m_property *prop,
+                                       int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    if (!(mpctx->d_video && mpctx->d_video->vfilter))
-        return M_PROPERTY_UNAVAILABLE;
-    struct vf_chain *vf = mpctx->d_video->vfilter;
+    const char *type = prop->priv;
 
     if (action == M_PROPERTY_KEY_ACTION) {
         struct m_property_action_arg *ka = arg;
         bstr key;
         char *rem;
         m_property_split_path(ka->key, &key, &rem);
-        struct mp_tags vf_metadata = {0};
-        switch (vf_control_by_label(vf, VFCTRL_GET_METADATA, &vf_metadata, key)) {
+        struct mp_tags metadata = {0};
+        int res = CONTROL_UNKNOWN;
+        if (strcmp(type, "vf") == 0) {
+            if (!(mpctx->d_video && mpctx->d_video->vfilter))
+                return M_PROPERTY_UNAVAILABLE;
+            struct vf_chain *vf = mpctx->d_video->vfilter;
+            res = vf_control_by_label(vf, VFCTRL_GET_METADATA, &metadata, key);
+        } else if (strcmp(type, "af") == 0) {
+            if (!(mpctx->d_audio && mpctx->d_audio->afilter))
+                return M_PROPERTY_UNAVAILABLE;
+            struct af_stream *af = mpctx->d_audio->afilter;
+            res = af_control_by_label(af, AF_CONTROL_GET_METADATA, &metadata, key);
+        }
+        switch (res) {
         case CONTROL_UNKNOWN:
             return M_PROPERTY_UNKNOWN;
         case CONTROL_NA: // empty
@@ -1209,9 +1219,9 @@ static int mp_property_vf_metadata(void *ctx, struct m_property *prop,
             if (strlen(rem)) {
                 struct m_property_action_arg next_ka = *ka;
                 next_ka.key = rem;
-                return tag_property(M_PROPERTY_KEY_ACTION, &next_ka, &vf_metadata);
+                return tag_property(M_PROPERTY_KEY_ACTION, &next_ka, &metadata);
             } else {
-                return tag_property(ka->action, ka->arg, &vf_metadata);
+                return tag_property(ka->action, ka->arg, &metadata);
             }
             return M_PROPERTY_OK;
         default:
@@ -2360,18 +2370,19 @@ static int mp_property_framedrop(void *ctx, struct m_property *prop,
 static int mp_property_video_color(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
+    const char *name = prop->priv ? prop->priv : prop->name;
     MPContext *mpctx = ctx;
     if (!mpctx->d_video)
         return M_PROPERTY_UNAVAILABLE;
 
     switch (action) {
     case M_PROPERTY_SET: {
-        if (video_set_colors(mpctx->d_video, prop->name, *(int *) arg) <= 0)
+        if (video_set_colors(mpctx->d_video, name, *(int *) arg) <= 0)
             return M_PROPERTY_UNAVAILABLE;
         break;
     }
     case M_PROPERTY_GET:
-        if (video_get_colors(mpctx->d_video, prop->name, (int *)arg) <= 0)
+        if (video_get_colors(mpctx->d_video, name, (int *)arg) <= 0)
             return M_PROPERTY_UNAVAILABLE;
         // Write new value to option variable
         mp_property_generic_option(mpctx, prop, M_PROPERTY_SET, arg);
@@ -2430,8 +2441,6 @@ static int property_imgparams(struct mp_image_params p, int action, void *arg)
             SUB_PROP_STR(m_opt_choice_str(mp_csp_names, p.colorspace))},
         {"colorlevels",
             SUB_PROP_STR(m_opt_choice_str(mp_csp_levels_names, p.colorlevels))},
-        {"outputlevels",
-            SUB_PROP_STR(m_opt_choice_str(mp_csp_levels_names, p.outputlevels))},
         {"primaries",
             SUB_PROP_STR(m_opt_choice_str(mp_csp_prim_names, p.primaries))},
         {"gamma",
@@ -3379,7 +3388,8 @@ static const struct m_property mp_properties[] = {
     {"metadata", mp_property_metadata},
     {"filtered-metadata", mp_property_filtered_metadata},
     {"chapter-metadata", mp_property_chapter_metadata},
-    {"vf-metadata", mp_property_vf_metadata},
+    {"vf-metadata", mp_property_filter_metadata, .priv = "vf"},
+    {"af-metadata", mp_property_filter_metadata, .priv = "af"},
     {"pause", mp_property_pause},
     {"core-idle", mp_property_core_idle},
     {"eof-reached", mp_property_eof_reached},
@@ -3395,7 +3405,6 @@ static const struct m_property mp_properties[] = {
     {"demuxer-cache-idle", mp_property_demuxer_cache_idle},
     {"cache-buffering-state", mp_property_cache_buffering},
     {"paused-for-cache", mp_property_paused_for_cache},
-    {"pts-association-mode", mp_property_generic_option},
     {"hr-seek", mp_property_generic_option},
     {"clock", mp_property_clock},
     {"seekable", mp_property_seekable},
@@ -3442,6 +3451,8 @@ static const struct m_property mp_properties[] = {
     {"contrast", mp_property_video_color},
     {"saturation", mp_property_video_color},
     {"hue", mp_property_video_color},
+    {"video-output-levels", mp_property_video_color,
+     .priv = (void *)"output-levels"},
     {"panscan", panscan_property_helper},
     {"video-zoom", panscan_property_helper},
     {"video-align-x", panscan_property_helper},
@@ -3552,7 +3563,6 @@ static const struct m_property mp_properties[] = {
     M_PROPERTY_ALIAS("sub", "sid"),
     M_PROPERTY_ALIAS("colormatrix", "video-params/colormatrix"),
     M_PROPERTY_ALIAS("colormatrix-input-range", "video-params/colorlevels"),
-    M_PROPERTY_ALIAS("colormatrix-output-range", "video-params/outputlevels"),
     M_PROPERTY_ALIAS("colormatrix-primaries", "video-params/primaries"),
     M_PROPERTY_ALIAS("colormatrix-gamma", "video-params/gamma"),
 
@@ -3723,7 +3733,6 @@ static const struct property_osd_display {
     { "chapter", .seek_msg = OSD_SEEK_INFO_CHAPTER_TEXT,
                  .seek_bar = OSD_SEEK_INFO_BAR },
     { "edition", .seek_msg = OSD_SEEK_INFO_EDITION },
-    { "pts-association-mode", "PTS association mode" },
     { "hr-seek", "hr-seek" },
     { "speed", "Speed" },
     { "clock", "Clock" },
@@ -4286,13 +4295,11 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
     case MP_CMD_ADD:
     case MP_CMD_CYCLE:
     {
+        char *property = cmd->args[0].v.s;
         struct m_property_switch_arg s = {
-            .inc = 1,
+            .inc = cmd->args[1].v.d * cmd->scale,
             .wrap = cmd->id == MP_CMD_CYCLE,
         };
-        if (cmd->args[1].v.d)
-            s.inc = cmd->args[1].v.d * cmd->scale;
-        char *property = cmd->args[0].v.s;
         if (cmd->repeated && !check_property_autorepeat(property, mpctx)) {
             MP_VERBOSE(mpctx, "Dropping command '%.*s' from auto-repeated key.\n",
                        BSTR_P(cmd->original));
@@ -4581,7 +4588,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
 
     case MP_CMD_STOP:
         playlist_clear(mpctx->playlist);
-        if (!mpctx->stop_play)
+        if (mpctx->stop_play != PT_QUIT)
             mpctx->stop_play = PT_STOP;
         break;
 
