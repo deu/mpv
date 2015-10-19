@@ -484,6 +484,9 @@ static int mp_property_stream_end(void *ctx, struct m_property *prop,
 // Assumes prop is the type of the actual property.
 static int property_time(int action, void *arg, double time)
 {
+    if (time == MP_NOPTS_VALUE)
+        return M_PROPERTY_UNAVAILABLE;
+
     const struct m_option time_type = {.type = CONF_TYPE_TIME};
     switch (action) {
     case M_PROPERTY_GET:
@@ -651,6 +654,9 @@ static bool time_remaining(MPContext *mpctx, double *remaining)
 {
     double len = get_time_length(mpctx);
     double playback = get_playback_time(mpctx);
+
+    if (playback == MP_NOPTS_VALUE)
+        return false;
 
     *remaining = len - playback;
 
@@ -1611,7 +1617,7 @@ static int mp_property_audio_device(void *ctx, struct m_property *prop,
         struct ao_device_list *list = ao_hotplug_get_device_list(cmd->hotplug);
         for (int n = 0; n < list->num_devices; n++) {
             struct ao_device_desc *dev = &list->devices[n];
-            if (dev->name && strcmp(dev->name, mpctx->opts->audio_device)) {
+            if (dev->name && strcmp(dev->name, mpctx->opts->audio_device) == 0) {
                 *(char **)arg = talloc_strdup(NULL, dev->desc ? dev->desc : "?");
                 return M_PROPERTY_OK;
             }
