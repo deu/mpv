@@ -435,6 +435,18 @@ void gl_transform_ortho(struct gl_transform *t, float x0, float x1,
     t->t[1] = -(y1 + y0) / (y1 - y0);
 }
 
+// Apply the effects of one transformation to another, transforming it in the
+// process. In other words: post-composes t onto x
+void gl_transform_trans(struct gl_transform t, struct gl_transform *x)
+{
+    float x00 = x->m[0][0], x01 = x->m[0][1], x10 = x->m[1][0], x11 = x->m[1][1];
+    x->m[0][0] = t.m[0][0] * x00 + t.m[0][1] * x10;
+    x->m[1][0] = t.m[0][0] * x01 + t.m[0][1] * x11;
+    x->m[0][1] = t.m[1][0] * x00 + t.m[1][1] * x10;
+    x->m[1][1] = t.m[1][0] * x01 + t.m[1][1] * x11;
+    gl_transform_vec(t, &x->t[0], &x->t[1]);
+}
+
 static void GLAPIENTRY gl_debug_cb(GLenum source, GLenum type, GLuint id,
                                    GLenum severity, GLsizei length,
                                    const GLchar *message, const void *userParam)
@@ -462,7 +474,7 @@ void gl_set_debug_logger(GL *gl, struct mp_log *log)
     }
 }
 
-#define SC_ENTRIES 16
+#define SC_ENTRIES 32
 #define SC_UNIFORM_ENTRIES 20
 
 enum uniform_type {
@@ -470,6 +482,7 @@ enum uniform_type {
     UT_i,
     UT_f,
     UT_m,
+    UT_buffer,
 };
 
 struct sc_uniform {
@@ -481,6 +494,10 @@ struct sc_uniform {
     union {
         GLfloat f[9];
         GLint i[4];
+        struct {
+            char* text;
+            GLint binding;
+        } buffer;
     } v;
 };
 
@@ -523,8 +540,11 @@ void gl_sc_reset(struct gl_shader_cache *sc)
 {
     sc->text[0] = '\0';
     sc->header_text[0] = '\0';
-    for (int n = 0; n < sc->num_uniforms; n++)
+    for (int n = 0; n < sc->num_uniforms; n++) {
         talloc_free(sc->uniforms[n].name);
+        if (sc->uniforms[n].type == UT_buffer)
+            talloc_free(sc->uniforms[n].v.buffer.text);
+    }
     sc->num_uniforms = 0;
 }
 
@@ -685,6 +705,15 @@ void gl_sc_uniform_mat3(struct gl_shader_cache *sc, char *name,
         transpose3x3(&u->v.f[0]);
 }
 
+void gl_sc_uniform_buffer(struct gl_shader_cache *sc, char *name,
+                          const char *text, int binding)
+{
+    struct sc_uniform *u = find_uniform(sc, name);
+    u->type = UT_buffer;
+    u->v.buffer.text = talloc_strdup(sc, text);
+    u->v.buffer.binding = binding;
+}
+
 // This will call glBindAttribLocation() on the shader before it's linked
 // (OpenGL requires this to happen before linking). Basically, it associates
 // the input variable names with the fields in the vao.
@@ -711,6 +740,11 @@ static const char *vao_glsl_type(const struct gl_vao_entry *e)
 // Assumes program is current (gl->UseProgram(program)).
 static void update_uniform(GL *gl, GLuint program, struct sc_uniform *u)
 {
+    if (u->type == UT_buffer) {
+        GLuint idx = gl->GetUniformBlockIndex(program, u->name);
+        gl->UniformBlockBinding(program, idx, u->v.buffer.binding);
+        return;
+    }
     GLint loc = gl->GetUniformLocation(program, u->name);
     if (loc < 0)
         return;
@@ -873,7 +907,10 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
     ADD(frag, "%s", frag_vaos);
     for (int n = 0; n < sc->num_uniforms; n++) {
         struct sc_uniform *u = &sc->uniforms[n];
-        ADD(frag, "uniform %s %s;\n", u->glsl_type, u->name);
+        if (u->type == UT_buffer)
+            ADD(frag, "uniform %s { %s };\n", u->name, u->v.buffer.text);
+        else
+            ADD(frag, "uniform %s %s;\n", u->glsl_type, u->name);
     }
     // custom shader header
     if (sc->header_text[0]) {

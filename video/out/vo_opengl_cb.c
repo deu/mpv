@@ -81,7 +81,6 @@ struct mpv_opengl_cb_context {
     bool eq_changed;
     struct mp_csp_equalizer eq;
     int64_t recent_flip;
-    int64_t approx_vsync;
     bool frozen; // libmpv user is not redrawing frames
     struct vo *active;
     int hwdec_api;
@@ -241,7 +240,10 @@ int mpv_opengl_cb_init_gl(struct mpv_opengl_cb_context *ctx, const char *exts,
         ctx->hwdec_info.hwctx = ctx->hwdec->hwctx;
 
     pthread_mutex_lock(&ctx->lock);
-    ctx->eq = *gl_video_eq_ptr(ctx->renderer);
+    // We don't know the exact caps yet - use a known superset
+    ctx->eq.capabilities = MP_CSP_EQ_CAPS_GAMMA | MP_CSP_EQ_CAPS_BRIGHTNESS |
+                           MP_CSP_EQ_CAPS_COLORMATRIX;
+    ctx->eq_changed = true;
     for (int n = IMGFMT_START; n < IMGFMT_END; n++) {
         ctx->imgfmt_supported[n - IMGFMT_START] =
             gl_video_check_format(ctx->renderer, n);
@@ -281,16 +283,6 @@ int mpv_opengl_cb_uninit_gl(struct mpv_opengl_cb_context *ctx)
     return 0;
 }
 
-// needs lock
-static int64_t prev_sync(mpv_opengl_cb_context *ctx, int64_t ts)
-{
-    int64_t diff = (int64_t)(ts - ctx->recent_flip);
-    int64_t offset = diff % ctx->approx_vsync;
-    if (offset < 0)
-        offset += ctx->approx_vsync;
-    return ts - offset;
-}
-
 int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
 {
     assert(ctx->renderer);
@@ -324,6 +316,7 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
     if (ctx->reconfigured) {
         gl_video_set_osd_source(ctx->renderer, vo ? vo->osd : NULL);
         gl_video_config(ctx->renderer, &ctx->img_params);
+        ctx->eq_changed = true;
     }
     if (ctx->update_new_opts) {
         struct vo_priv *p = vo ? vo->priv : NULL;
@@ -352,7 +345,6 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
         gl_video_eq_update(ctx->renderer);
     }
     ctx->eq_changed = false;
-    ctx->eq = *eq;
 
     struct vo_frame *frame = frame_queue_pop(ctx);
     if (frame) {
@@ -362,18 +354,15 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
         frame = vo_frame_ref(ctx->cur_frame);
         if (frame)
             frame->redraw = true;
+        MP_STATS(ctx, "glcb-noframe");
     }
     struct vo_frame dummy = {0};
     if (!frame)
         frame = &dummy;
 
-    if (ctx->approx_vsync > 0) {
-        frame->prev_vsync = prev_sync(ctx, mp_time_us());
-        frame->next_vsync = frame->prev_vsync + ctx->approx_vsync;
-    }
-
     pthread_mutex_unlock(&ctx->lock);
 
+    MP_STATS(ctx, "glcb-render");
     gl_video_render_frame(ctx->renderer, frame, fbo);
 
     gl_video_unset_gl_state(ctx->renderer);
@@ -392,11 +381,10 @@ int mpv_opengl_cb_draw(mpv_opengl_cb_context *ctx, int fbo, int vp_w, int vp_h)
 
 int mpv_opengl_cb_report_flip(mpv_opengl_cb_context *ctx, int64_t time)
 {
+    MP_STATS(ctx, "glcb-reportflip");
+
     pthread_mutex_lock(&ctx->lock);
-    int64_t next = time > 0 ? time : mp_time_us();
-    if (ctx->recent_flip)
-        ctx->approx_vsync = next - ctx->recent_flip;
-    ctx->recent_flip = next;
+    ctx->recent_flip = time > 0 ? time : mp_time_us();
     pthread_mutex_unlock(&ctx->lock);
 
     return 0;
@@ -613,6 +601,8 @@ static int preinit(struct vo *vo)
     p->ctx->reconfigured = true;
     p->ctx->update_new_opts = true;
     copy_vo_opts(vo);
+    memset(p->ctx->eq.values, 0, sizeof(p->ctx->eq.values));
+    p->ctx->eq_changed = true;
     pthread_mutex_unlock(&p->ctx->lock);
 
     return 0;

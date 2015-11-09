@@ -816,9 +816,9 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default this is set to ``h264,vc1,wmv3,hevc``. Note that the hardware
-    acceleration special codecs like ``h264_vdpau`` are not relevant anymore,
-    and in fact have been removed from Libav in this form.
+    By default this is set to ``h264,vc1,wmv3,hevc,mpeg2video``. Note that the
+    hardware acceleration special codecs like ``h264_vdpau`` are not relevant
+    anymore, and in fact have been removed from Libav in this form.
 
     This is usually only needed with broken GPUs, where a codec is reported
     as supported, but decoding causes more problems than it solves.
@@ -834,6 +834,11 @@ Video
     decoding is forced even if the profile of the video is higher than that.
     The result is most likely broken decoding, but may also help if the
     detected or reported profiles are somehow incorrect.
+
+``--vd-lavc-software-fallback=<yes|no|N>``
+    Fallback to software decoding if the hardware-accelerated decoder fails
+    (default: 3). If this is a number, then fallback will be triggered if
+    N frames fail to decode in a row. 1 is equivalent to ``yes``.
 
 ``--vd-lavc-bitexact``
     Only use bit-exact algorithms in all decoding steps (for codec testing).
@@ -2252,18 +2257,6 @@ Demuxer
     file and can make a reliable estimate even without an index present (such
     as partial files).
 
-``--demuxer-mkv-fix-timestamps=<yes|no>``
-    Fix rounded Matroska timestamps (disabled by default). Matroska usually
-    stores timestamps rounded to milliseconds. This means timestamps jitter
-    by some amount around the intended timestamp. mpv can correct the timestamps
-    based on the framerate value stored in the file: the timestamp is rounded
-    to the next frame (according to the framerate), unless the new timestamp
-    would deviate more than 1ms from the old one. This should undo the rounding
-    done by the muxer.
-
-    (The allowed deviation can be less than 1ms if the file uses a non-standard
-    timecode scale.)
-
 ``--demuxer-rawaudio-channels=<value>``
     Number of channels (or channel layout) if ``--demuxer=rawaudio`` is used
     (default: stereo).
@@ -2680,17 +2673,6 @@ OSD
     values are allowed.
 
     Default: 0.
-
-``--use-text-osd=<yes|no>``
-    Disable text OSD rendering completely. (This includes the complete OSC as
-    well.) This is mostly useful for avoiding loading fontconfig in situations
-    where fontconfig does not behave well, and OSD is unused - this could for
-    example allow GUI programs using libmpv to workaround fontconfig issues.
-
-    Note that selecting subtitles of any kind still initializes fontconfig.
-
-    Default: ``no``.
-
 
 Screenshot
 ----------
@@ -3290,6 +3272,13 @@ Network
     Verify peer certificates when using TLS (e.g. with ``https://...``).
     (Silently fails with older FFmpeg or Libav versions.)
 
+``--tls-cert-file``
+    A file containing a certificate to use in the handshake with the
+    peer.
+
+``--tls-key-file``
+    A file containing the private key for the certificate.
+
 ``--referrer=<string>``
     Specify a referrer path or URL for HTTP requests.
 
@@ -3475,6 +3464,11 @@ Miscellaneous
     :display-vdrop:     Drop or repeat video frames to compensate desyncing
                         video. (Although it should have the same effects as
                         ``audio``, the implementation is very different.)
+    :display-adrop:     Drop or repeat audio data to compensate desyncing
+                        video. See ``--video-sync-adrop-size``. This mode will
+                        cause severe audio artifacts if the real monitor
+                        refresh rate is too different from the reported or
+                        forced rate.
     :display-desync:    Sync video to display, and let audio play on its own.
     :desync:            Sync video according to system clock, and let audio play
                         on its own.
@@ -3505,6 +3499,13 @@ Miscellaneous
     the A/V desync cannot be compensated, too high values could lead to chaotic
     frame dropping due to the audio "overshooting" and skipping multiple video
     frames before the sync logic can react.
+
+``--video-sync-adrop-size=<value``
+    For the ``--video-sync=display-adrop`` mode. This mode duplicates/drops
+    audio data to keep audio in sync with video. To avoid audio artifacts on
+    jitter (which would add/remove samples all the time), this is done in
+    relatively large, fixed units, controlled by this option. The unit is
+    seconds.
 
 ``--mf-fps=<value>``
     Framerate used when decoding from multiple PNG or JPEG files with ``mf://``

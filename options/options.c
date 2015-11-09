@@ -113,14 +113,14 @@ const m_option_t mp_opts[] = {
 // ------------------------- common options --------------------
     OPT_FLAG("quiet", quiet, CONF_GLOBAL),
     OPT_FLAG_STORE("really-quiet", verbose, CONF_GLOBAL | CONF_PRE_PARSE, -10),
-    OPT_FLAG("terminal", use_terminal, CONF_GLOBAL | CONF_PRE_PARSE),
-    OPT_GENERAL(char**, "msg-level", msg_levels, CONF_GLOBAL|CONF_PRE_PARSE,
-                .type = &m_option_type_msglevels),
+    OPT_FLAG("terminal", use_terminal, CONF_GLOBAL | CONF_PRE_PARSE | M_OPT_TERM),
+    OPT_GENERAL(char**, "msg-level", msg_levels, CONF_GLOBAL|CONF_PRE_PARSE |
+                M_OPT_TERM, .type = &m_option_type_msglevels),
     OPT_STRING("dump-stats", dump_stats, CONF_GLOBAL | CONF_PRE_PARSE),
-    OPT_FLAG("msg-color", msg_color, CONF_GLOBAL | CONF_PRE_PARSE),
+    OPT_FLAG("msg-color", msg_color, CONF_GLOBAL | CONF_PRE_PARSE | M_OPT_TERM),
     OPT_STRING("log-file", log_file, CONF_GLOBAL | CONF_PRE_PARSE | M_OPT_FILE),
-    OPT_FLAG("msg-module", msg_module, CONF_GLOBAL),
-    OPT_FLAG("msg-time", msg_time, CONF_GLOBAL),
+    OPT_FLAG("msg-module", msg_module, CONF_GLOBAL | M_OPT_TERM),
+    OPT_FLAG("msg-time", msg_time, CONF_GLOBAL | M_OPT_TERM),
 #ifdef _WIN32
     OPT_CHOICE("priority", w32_priority, 0,
                ({"no",          0},
@@ -185,6 +185,8 @@ const m_option_t mp_opts[] = {
                 {"http", 3})),
     OPT_FLAG("tls-verify", network_tls_verify, 0),
     OPT_STRING("tls-ca-file", network_tls_ca_file, M_OPT_FILE),
+    OPT_STRING("tls-cert-file", network_tls_cert_file, M_OPT_FILE),
+    OPT_STRING("tls-key-file", network_tls_key_file, M_OPT_FILE),
     OPT_DOUBLE("network-timeout", network_timeout, M_OPT_MIN, .min = 0),
 
 // ------------------------- demuxer options --------------------
@@ -373,7 +375,6 @@ const m_option_t mp_opts[] = {
     OPT_FLOATRANGE("osd-bar-w", osd_bar_w, 0, 1, 100),
     OPT_FLOATRANGE("osd-bar-h", osd_bar_h, 0, 0.1, 50),
     OPT_SUBSTRUCT("osd", osd_style, osd_style_conf, 0),
-    OPT_FLAG("use-text-osd", use_text_osd, CONF_GLOBAL),
     OPT_SUBSTRUCT("sub-text", sub_text_style, sub_style_conf, 0),
     OPT_FLAG("sub-clear-on-seek", sub_clear_on_seek, 0),
 
@@ -528,12 +529,15 @@ const m_option_t mp_opts[] = {
                 {"display-resample", VS_DISP_RESAMPLE},
                 {"display-resample-vdrop", VS_DISP_RESAMPLE_VDROP},
                 {"display-resample-desync", VS_DISP_RESAMPLE_NONE},
+                {"display-adrop", VS_DISP_ADROP},
                 {"display-vdrop", VS_DISP_VDROP},
                 {"display-desync", VS_DISP_NONE},
                 {"desync", VS_NONE})),
     OPT_DOUBLE("video-sync-max-video-change", sync_max_video_change,
                M_OPT_MIN, .min = 0),
     OPT_DOUBLE("video-sync-max-audio-change", sync_max_audio_change,
+               M_OPT_MIN | M_OPT_MAX, .min = 0, .max = 1),
+    OPT_DOUBLE("video-sync-adrop-size", sync_audio_drop_size,
                M_OPT_MIN | M_OPT_MAX, .min = 0, .max = 1),
     OPT_CHOICE("hr-seek", hr_seek, 0,
                ({"no", -1}, {"absolute", 0}, {"yes", 1}, {"always", 1})),
@@ -714,7 +718,6 @@ const struct MPOpts mp_default_opts = {
     .sub_use_margins = 1,
     .ass_scale_with_window = 0,
     .sub_scale_with_window = 1,
-    .use_text_osd = 1,
 #if HAVE_LUA
     .lua_load_osc = 1,
     .lua_load_ytdl = 1,
@@ -729,6 +732,7 @@ const struct MPOpts mp_default_opts = {
     .hr_seek_framedrop = 1,
     .sync_max_video_change = 1,
     .sync_max_audio_change = 0.125,
+    .sync_audio_drop_size = 0.020,
     .load_config = 1,
     .position_resume = 1,
     .stream_cache = {
@@ -797,7 +801,7 @@ const struct MPOpts mp_default_opts = {
     .sub_cp = "auto",
     .screenshot_template = "mpv-shot%n",
 
-    .hwdec_codecs = "h264,vc1,wmv3,hevc",
+    .hwdec_codecs = "h264,vc1,wmv3,hevc,mpeg2video",
 
     .index_mode = 1,
 

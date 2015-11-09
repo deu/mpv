@@ -34,6 +34,7 @@ typedef struct lavc_ctx {
     int hwdec_profile;
 
     bool hwdec_request_reinit;
+    int hwdec_fail_count;
 } vd_ffmpeg_ctx;
 
 struct vd_lavc_hwdec {
@@ -55,7 +56,7 @@ struct vd_lavc_hwdec {
     void (*lock)(struct lavc_ctx *ctx);
     void (*unlock)(struct lavc_ctx *ctx);
     // Optional; if a special hardware decoder is needed (instead of "hwaccel").
-    const char *(*get_codec)(struct lavc_ctx *ctx);
+    const char *(*get_codec)(struct lavc_ctx *ctx, const char *codec);
 };
 
 enum {

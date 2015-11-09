@@ -553,8 +553,6 @@ static int mp_property_total_avsync_change(void *ctx, struct m_property *prop,
     return m_property_double_ro(action, arg, mpctx->total_avsync_change);
 }
 
-
-/// Late frames
 static int mp_property_drop_frame_cnt(void *ctx, struct m_property *prop,
                                       int action, void *arg)
 {
@@ -563,6 +561,16 @@ static int mp_property_drop_frame_cnt(void *ctx, struct m_property *prop,
         return M_PROPERTY_UNAVAILABLE;
 
     return m_property_int_ro(action, arg, mpctx->dropped_frames_total);
+}
+
+static int mp_property_mistimed_frame_count(void *ctx, struct m_property *prop,
+                                            int action, void *arg)
+{
+    MPContext *mpctx = ctx;
+     if (!mpctx->d_video || !mpctx->display_sync_active)
+        return M_PROPERTY_UNAVAILABLE;
+
+    return m_property_int_ro(action, arg, mpctx->mistimed_frames_total);
 }
 
 static int mp_property_vo_drop_frame_count(void *ctx, struct m_property *prop,
@@ -2566,14 +2574,16 @@ static int mp_property_display_fps(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
     MPContext *mpctx = ctx;
+    double fps = mpctx->opts->frame_drop_fps;
     struct vo *vo = mpctx->video_out;
-    if (!vo)
-        return M_PROPERTY_UNAVAILABLE;
-
-    double fps = vo_get_display_fps(vo);
-    if (fps < 1)
-        return M_PROPERTY_UNAVAILABLE;
-
+    if (vo)
+        fps = vo_get_display_fps(vo);
+    if (action == M_PROPERTY_SET) {
+        int ret = mp_property_generic_option(mpctx, prop, action, arg);
+        if (vo)
+            vo_event(vo, VO_EVENT_WIN_STATE);
+        return ret;
+    }
     return m_property_double_ro(action, arg, fps);
 }
 
@@ -3087,11 +3097,18 @@ static int mp_property_packet_bitrate(void *ctx, struct m_property *prop,
     int type = (uintptr_t)prop->priv & ~0x100;
     bool old = (uintptr_t)prop->priv & 0x100;
 
-    if (!mpctx->demuxer)
+    struct demuxer *demuxer = NULL;
+    if (mpctx->current_track[0][type])
+        demuxer = mpctx->current_track[0][type]->demuxer;
+    if (!demuxer)
+        demuxer = mpctx->demuxer;
+    if (!demuxer)
         return M_PROPERTY_UNAVAILABLE;
 
     double r[STREAM_TYPE_COUNT];
-    if (demux_control(mpctx->demuxer, DEMUXER_CTRL_GET_BITRATE_STATS, &r) < 1)
+    if (demux_control(demuxer, DEMUXER_CTRL_GET_BITRATE_STATS, &r) < 1)
+        return M_PROPERTY_UNAVAILABLE;
+    if (r[type] < 0)
         return M_PROPERTY_UNAVAILABLE;
 
     // r[type] is in bytes/second -> bits
@@ -3376,6 +3393,7 @@ static const struct m_property mp_properties[] = {
     {"avsync", mp_property_avsync},
     {"total-avsync-change", mp_property_total_avsync_change},
     {"drop-frame-count", mp_property_drop_frame_cnt},
+    {"mistimed-frame-count", mp_property_mistimed_frame_count},
     {"vo-drop-frame-count", mp_property_vo_drop_frame_count},
     {"vo-missed-frame-count", mp_property_vo_missed_frame_count},
     {"percent-pos", mp_property_percent_pos},
@@ -3594,7 +3612,7 @@ static const char *const *const mp_event_property_change[] = {
       "percent-pos", "time-remaining", "playtime-remaining", "playback-time",
       "estimated-vf-fps", "drop-frame-count", "vo-drop-frame-count",
       "total-avsync-change", "audio-speed-correction", "video-speed-correction",
-      "vo-missed-frame-count"),
+      "vo-missed-frame-count", "mistimed-frame-count"),
     E(MPV_EVENT_VIDEO_RECONFIG, "video-out-params", "video-params",
       "video-format", "video-codec", "video-bitrate", "dwidth", "dheight",
       "width", "height", "fps", "aspect", "vo-configured", "current-vo",

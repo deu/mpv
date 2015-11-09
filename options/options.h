@@ -148,6 +148,7 @@ typedef struct MPOpts {
     int video_sync;
     double sync_max_video_change;
     double sync_max_audio_change;
+    double sync_audio_drop_size;
     int hr_seek;
     float hr_seek_demuxer_offset;
     int hr_seek_framedrop;
@@ -235,7 +236,6 @@ typedef struct MPOpts {
     char **sub_paths;
     int sub_auto;
     int audiofile_auto;
-    int use_text_osd;
     int osd_bar_visible;
     float osd_bar_align_x;
     float osd_bar_align_y;
@@ -278,6 +278,8 @@ typedef struct MPOpts {
     char **network_http_header_fields;
     int network_tls_verify;
     char *network_tls_ca_file;
+    char *network_tls_cert_file;
+    char *network_tls_key_file;
     double network_timeout;
 
     struct tv_params *tv_params;
