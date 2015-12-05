@@ -198,6 +198,8 @@ const m_option_t mp_opts[] = {
     OPT_REL_TIME("end", play_end, 0),
     OPT_REL_TIME("length", play_length, 0),
 
+    OPT_FLAG("rebase-start-time", rebase_start_time, 0),
+
     OPT_TIME("ab-loop-a", ab_loop[0], 0, .min = MP_NOPTS_VALUE),
     OPT_TIME("ab-loop-b", ab_loop[1], 0, .min = MP_NOPTS_VALUE),
 
@@ -307,6 +309,9 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE_C("hwdec", hwdec_api, 0, mp_hwdec_names),
     OPT_CHOICE_C("hwdec-preload", vo.hwdec_preload_api, 0, mp_hwdec_names),
     OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
+#if HAVE_VIDEOTOOLBOX_HWACCEL
+    OPT_IMAGEFORMAT("videotoolbox-format", videotoolbox_format, 0),
+#endif
 
     OPT_SUBSTRUCT("sws", vo.sws_opts, sws_conf, 0),
 
@@ -450,6 +455,7 @@ const m_option_t mp_opts[] = {
 #if HAVE_X11
     OPT_CHOICE("x11-netwm", vo.x11_netwm, 0,
                ({"auto", 0}, {"no", -1}, {"yes", 1})),
+    OPT_FLAG("x11-bypass-compositor", vo.x11_bypass_compositor, 0),
 #endif
     OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0),
     OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
@@ -695,6 +701,7 @@ const struct MPOpts mp_default_opts = {
         .border = 1,
         .WinID = -1,
         .window_scale = 1.0,
+        .x11_bypass_compositor = 1,
     },
     .allow_win_drag = 1,
     .wintitle = "${?media-title:${media-title}}${!media-title:No file} - mpv",
@@ -764,6 +771,7 @@ const struct MPOpts mp_default_opts = {
     .consolecontrols = 1,
     .playlist_pos = -1,
     .play_frames = -1,
+    .rebase_start_time = 1,
     .keep_open = 0,
     .stream_id = { { [STREAM_AUDIO] = -1,
                      [STREAM_VIDEO] = -1,
@@ -802,6 +810,7 @@ const struct MPOpts mp_default_opts = {
     .screenshot_template = "mpv-shot%n",
 
     .hwdec_codecs = "h264,vc1,wmv3,hevc,mpeg2video",
+    .videotoolbox_format = IMGFMT_NV12,
 
     .index_mode = 1,
 

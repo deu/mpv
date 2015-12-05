@@ -77,7 +77,7 @@ const struct m_sub_options superxbr_conf = {
 */
 
 void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
-                   int step, const struct superxbr_opts *conf,
+                   int step, float tex_mul, const struct superxbr_opts *conf,
                    struct gl_transform *transform)
 {
     assert(0 <= step && step < 2);
@@ -99,7 +99,7 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
         GLSLHF("#define weight1 (%f*1.29633/10.0)\n", conf->sharpness);
         GLSLHF("#define weight2 (%f*1.75068/10.0/2.0)\n", conf->sharpness);
 
-        GLSLH(#define Get(x, y) (texture(tex, pos + (vec2(x, y) - vec2(0.25, 0.25)) / tex_size)[plane]))
+        GLSLH(#define Get(x, y) (texture(tex, pos + (vec2(x, y) - vec2(0.25, 0.25)) / tex_size)[plane] * tex_mul))
     } else {
         *transform = (struct gl_transform){{{1.0,0.0}, {0.0,1.0}}, {0.0,0.0}};
 
@@ -113,7 +113,7 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
         GLSLHF("#define weight1 (%f*1.75068/10.0)\n", conf->sharpness);
         GLSLHF("#define weight2 (%f*1.29633/10.0/2.0)\n", conf->sharpness);
 
-        GLSLH(#define Get(x, y) (texture(tex, pos + (vec2((x) + (y) - 1, (y) - (x))) / tex_size)[plane]))
+        GLSLH(#define Get(x, y) (texture(tex, pos + (vec2((x) + (y) - 1, (y) - (x))) / tex_size)[plane] * tex_mul))
     }
     GLSLH(float df(float A, float B)
           {
@@ -140,7 +140,7 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
                       wp3*(df(i1,e2)+df(i3,e4)+df(e1,i2)+df(e3,i4)));
           })
 
-    GLSLHF("float superxbr(sampler2D tex, vec2 pos, vec2 tex_size, int plane) {\n");
+    GLSLHF("float superxbr(sampler2D tex, vec2 pos, vec2 tex_size, int plane, float tex_mul) {\n");
 
     if (step == 0) {
         GLSLH(vec2 dir = fract(pos * tex_size) - 0.5;)
@@ -148,15 +148,15 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
         // Optimization: Discard (skip drawing) unused pixels, except those
         // at the edge.
         GLSLH(vec2 dist = tex_size * min(pos, vec2(1.0) - pos);)
-        GLSLH(if (dir.x * dir.y < 0 && dist.x > 1 && dist.y > 1)
+        GLSLH(if (dir.x * dir.y < 0.0 && dist.x > 1.0 && dist.y > 1.0)
                   return 0.0;)
 
-        GLSLH(if (dir.x < 0 || dir.y < 0 || dist.x < 1 || dist.y < 1)
-                  return texture(tex, pos - dir / tex_size)[plane];)
+        GLSLH(if (dir.x < 0.0 || dir.y < 0.0 || dist.x < 1.0 || dist.y < 1.0)
+                  return texture(tex, pos - dir / tex_size)[plane] * tex_mul;)
     } else {
-        GLSLH(vec2 dir = fract(pos * tex_size / 2) - 0.5;)
-        GLSLH(if (dir.x * dir.y > 0)
-                  return texture(tex, pos)[plane];)
+        GLSLH(vec2 dir = fract(pos * tex_size / 2.0) - 0.5;)
+        GLSLH(if (dir.x * dir.y > 0.0)
+                  return texture(tex, pos)[plane] * tex_mul;)
     }
 
     GLSLH(float P0 = Get(-1,-1);
@@ -212,14 +212,14 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
     /* Smoothly blends the two strongest directions(one in diagonal and the
      * other in vert/horiz direction). */
     GLSLHF("float color =  mix(mix(c1, c2, step(0.0, d_edge)),"
-                              "mix(c3, c4, step(0.0, hv_edge)), 1 - %f);\n",
+                              "mix(c3, c4, step(0.0, hv_edge)), 1.0 - %f);\n",
            conf->edge_strength);
     /* Anti-ringing code. */
     GLSLH(float min_sample = min(min(E, F), min(H, I));
           float max_sample = max(max(E, F), max(H, I));
           float aux = color;
           color = clamp(color, min_sample, max_sample);)
-    GLSLHF("color = mix(aux, color, 1-2.0*abs(%f-0.5));\n", conf->edge_strength);
+    GLSLHF("color = mix(aux, color, 1.0-2.0*abs(%f-0.5));\n", conf->edge_strength);
 
     GLSLH(return color;)
 
@@ -228,7 +228,7 @@ void pass_superxbr(struct gl_shader_cache *sc, int planes, int tex_num,
     GLSL(vec4 color = vec4(1.0);)
 
     for (int i = 0; i < planes; i++) {
-        GLSLF("color[%d] = superxbr(texture%d, texcoord%d, texture_size%d, %d);\n",
-              i, tex_num, tex_num, tex_num, i);
+        GLSLF("color[%d] = superxbr(texture%d, texcoord%d, texture_size%d, %d, %f);\n",
+              i, tex_num, tex_num, tex_num, i, tex_mul);
     }
 }

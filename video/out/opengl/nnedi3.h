@@ -23,8 +23,11 @@
 #ifndef MP_GL_NNEDI3_H
 #define MP_GL_NNEDI3_H
 
+#include "config.h"
 #include "common.h"
 #include "utils.h"
+
+#define HAVE_NNEDI HAVE_GPL3
 
 #define NNEDI3_UPLOAD_UBO 0
 #define NNEDI3_UPLOAD_SHADER 1
@@ -40,8 +43,8 @@ extern const struct m_sub_options nnedi3_conf;
 
 const float* get_nnedi3_weights(const struct nnedi3_opts *conf, int *size);
 
-void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
-                 int step, const struct nnedi3_opts *conf,
+void pass_nnedi3(GL *gl, struct gl_shader_cache *sc, int planes, int tex_num,
+                 int step, float tex_mul, const struct nnedi3_opts *conf,
                  struct gl_transform *transform);
 
 #endif

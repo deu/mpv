@@ -312,6 +312,32 @@ void gl_vao_draw_data(struct gl_vao *vao, GLenum prim, void *ptr, size_t num)
     gl_vao_unbind(vao);
 }
 
+struct gl_format {
+    GLenum format;
+    GLenum type;
+    GLint internal_format;
+};
+
+static const struct gl_format gl_formats[] = {
+    // GLES 3.0
+    {GL_RGB,    GL_UNSIGNED_BYTE,               GL_RGB},
+    {GL_RGBA,   GL_UNSIGNED_BYTE,               GL_RGBA},
+    {GL_RGB,    GL_UNSIGNED_BYTE,               GL_RGB8},
+    {GL_RGBA,   GL_UNSIGNED_BYTE,               GL_RGBA8},
+    {GL_RGB,    GL_UNSIGNED_SHORT,              GL_RGB16},
+    {GL_RGBA,   GL_UNSIGNED_INT_2_10_10_10_REV, GL_RGB10_A2},
+    // not texture filterable in GLES 3.0
+    {GL_RGB,    GL_FLOAT,                       GL_RGB16F},
+    {GL_RGBA,   GL_FLOAT,                       GL_RGBA16F},
+    {GL_RGB,    GL_FLOAT,                       GL_RGB32F},
+    {GL_RGBA,   GL_FLOAT,                       GL_RGBA32F},
+    // Desktop GL
+    {GL_RGB,    GL_UNSIGNED_SHORT,              GL_RGB10},
+    {GL_RGBA,   GL_UNSIGNED_SHORT,              GL_RGBA12},
+    {GL_RGBA,   GL_UNSIGNED_SHORT,              GL_RGBA16},
+    {0}
+};
+
 // Create a texture and a FBO using the texture as color attachments.
 //  iformat: texture internal format
 // Returns success.
@@ -349,6 +375,18 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     GLenum filter = fbo->tex_filter;
 
+    struct gl_format format = {
+        .format = GL_RGBA,
+        .type = GL_UNSIGNED_BYTE,
+        .internal_format = iformat,
+    };
+    for (int n = 0; gl_formats[n].format; n++) {
+        if (gl_formats[n].internal_format == format.internal_format) {
+            format = gl_formats[n];
+            break;
+        }
+    }
+
     *fbo = (struct fbotex) {
         .gl = gl,
         .w = w,
@@ -364,8 +402,8 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
     gl->GenFramebuffers(1, &fbo->fbo);
     gl->GenTextures(1, &fbo->texture);
     gl->BindTexture(GL_TEXTURE_2D, fbo->texture);
-    gl->TexImage2D(GL_TEXTURE_2D, 0, iformat, fbo->w, fbo->h, 0,
-                   GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    gl->TexImage2D(GL_TEXTURE_2D, 0, format.internal_format, fbo->w, fbo->h, 0,
+                   format.format, format.type, NULL);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     gl->BindTexture(GL_TEXTURE_2D, 0);
@@ -513,8 +551,9 @@ struct gl_shader_cache {
     struct mp_log *log;
 
     // this is modified during use (gl_sc_add() etc.)
-    char *text;
+    char *prelude_text;
     char *header_text;
+    char *text;
     struct gl_vao *vao;
 
     struct sc_entry entries[SC_ENTRIES];
@@ -530,16 +569,18 @@ struct gl_shader_cache *gl_sc_create(GL *gl, struct mp_log *log)
     *sc = (struct gl_shader_cache){
         .gl = gl,
         .log = log,
-        .text = talloc_strdup(sc, ""),
+        .prelude_text = talloc_strdup(sc, ""),
         .header_text = talloc_strdup(sc, ""),
+        .text = talloc_strdup(sc, ""),
     };
     return sc;
 }
 
 void gl_sc_reset(struct gl_shader_cache *sc)
 {
-    sc->text[0] = '\0';
+    sc->prelude_text[0] = '\0';
     sc->header_text[0] = '\0';
+    sc->text[0] = '\0';
     for (int n = 0; n < sc->num_uniforms; n++) {
         talloc_free(sc->uniforms[n].name);
         if (sc->uniforms[n].type == UT_buffer)
@@ -565,6 +606,12 @@ void gl_sc_destroy(struct gl_shader_cache *sc)
     gl_sc_reset(sc);
     sc_flush_cache(sc);
     talloc_free(sc);
+}
+
+void gl_sc_enable_extension(struct gl_shader_cache *sc, char *name)
+{
+    sc->prelude_text = talloc_asprintf_append(sc->prelude_text,
+                                              "#extension %s : enable\n", name);
 }
 
 void gl_sc_add(struct gl_shader_cache *sc, const char *text)
@@ -867,6 +914,7 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
                                    gl->es >= 300 ? " es" : "");
     if (gl->es)
         ADD(header, "precision mediump float;\n");
+    ADD(header, "%s", sc->prelude_text);
     char *vert_in = gl->glsl_version >= 130 ? "in" : "attribute";
     char *vert_out = gl->glsl_version >= 130 ? "out" : "varying";
     char *frag_in = gl->glsl_version >= 130 ? "in" : "varying";

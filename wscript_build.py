@@ -162,7 +162,6 @@ def build(ctx):
         ( "demux/demux_edl.c" ),
         ( "demux/demux_lavf.c" ),
         ( "demux/demux_libarchive.c",            "libarchive" ),
-        ( "demux/demux_libass.c",                "libass"),
         ( "demux/demux_mf.c" ),
         ( "demux/demux_mkv.c" ),
         ( "demux/demux_mkv_timeline.c" ),
@@ -335,6 +334,7 @@ def build(ctx):
         ( "video/out/opengl/video.c",            "gl" ),
         ( "video/out/opengl/video_shaders.c",    "gl" ),
         ( "video/out/opengl/w32.c",              "gl-win32" ),
+        ( "video/out/opengl/angle.c",            "egl-angle" ),
         ( "video/out/opengl/wayland.c",          "gl-wayland" ),
         ( "video/out/opengl/x11.c",              "gl-x11" ),
         ( "video/out/opengl/x11egl.c",           "egl-x11" ),
@@ -357,6 +357,7 @@ def build(ctx):
         ( "video/out/vo_xv.c",                   "xv" ),
         ( "video/out/w32_common.c",              "win32" ),
         ( "video/out/win32/displayconfig.c",     "win32" ),
+        ( "video/out/win32/exclusive_hack.c",    "gl-win32" ),
         ( "video/out/wayland_common.c",          "wayland" ),
         ( "video/out/wayland/buffer.c",          "wayland" ),
         ( "video/out/wayland/memfile.c",         "wayland" ),
@@ -556,3 +557,7 @@ def build(ctx):
             ctx.install_as(
                 ctx.env.DATADIR + '/icons/hicolor/' + size + '/apps/mpv.png',
                 'etc/mpv-icon-8bit-' + size + '.png')
+
+        ctx.install_as(
+                ctx.env.DATADIR + '/icons/hicolor/scalable/apps/mpv.svg',
+                'etc/mpv-gradient.svg')

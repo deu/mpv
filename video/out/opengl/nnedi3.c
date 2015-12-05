@@ -18,9 +18,14 @@
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
+ *
+ * The shader portions may have been derived from existing LGPLv3 shaders
+ * (see below), possibly making this file effectively LGPLv3.
  */
 
 #include "nnedi3.h"
+
+#if HAVE_NNEDI
 
 #include <assert.h>
 #include <stdint.h>
@@ -29,6 +34,22 @@
 #include <libavutil/bswap.h>
 
 #include "video.h"
+
+/*
+ * NNEDI3, an intra-field deinterlacer
+ *
+ * The original filter was authored by Kevin Stone (aka. tritical) and is
+ * licensed under GPL2 terms:
+ *     http://bengal.missouri.edu/~kes25c/
+ *
+ * A LGPLv3 licensed OpenCL kernel was created by SEt:
+ *     http://forum.doom9.org/showthread.php?t=169766
+ *
+ * A HLSL port further modified by madshi, Shiandow and Zach Saw could be
+ * found at (also LGPLv3 licensed):
+ *     https://github.com/zachsaw/MPDN_Extensions
+ *
+ */
 
 #define GLSL(x) gl_sc_add(sc, #x "\n");
 #define GLSLF(...) gl_sc_addf(sc, __VA_ARGS__)
@@ -80,8 +101,8 @@ const float* get_nnedi3_weights(const struct nnedi3_opts *conf, int *size)
     return (const float*)(nnedi3_weights + offset * 4);
 }
 
-void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
-                 int step, const struct nnedi3_opts *conf,
+void pass_nnedi3(GL *gl, struct gl_shader_cache *sc, int planes, int tex_num,
+                 int step, float tex_mul, const struct nnedi3_opts *conf,
                  struct gl_transform *transform)
 {
     assert(0 <= step && step < 2);
@@ -108,28 +129,30 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
         snprintf(buf, sizeof(buf), "vec4 weights[%d];",
                  neurons * (sample_count * 2 + 1));
         gl_sc_uniform_buffer(sc, "NNEDI3_WEIGHTS", buf, 0);
+        if (!gl->es && gl->glsl_version < 140)
+            gl_sc_enable_extension(sc, "GL_ARB_uniform_buffer_object");
     } else if (conf->upload == NNEDI3_UPLOAD_SHADER) {
         // Somehow necessary for hard coding approach.
         GLSLH(#pragma optionNV(fastprecision on))
     }
 
-    GLSLHF("float nnedi3(sampler2D tex, vec2 pos, vec2 tex_size, int plane) {\n");
+    GLSLHF("float nnedi3(sampler2D tex, vec2 pos, vec2 tex_size, int plane, float tex_mul) {\n");
 
     if (step == 0) {
         *transform = (struct gl_transform){{{1.0,0.0}, {0.0,2.0}}, {0.0,-0.5}};
 
         GLSLH(if (fract(pos.y * tex_size.y) < 0.5)
-                  return texture(tex, pos + vec2(0, 0.25) / tex_size)[plane];)
+                  return texture(tex, pos + vec2(0, 0.25) / tex_size)[plane] * tex_mul;)
         GLSLHF("#define GET(i, j) "
-               "(texture(tex, pos+vec2((i)-(%f),(j)-(%f)+0.25)/tex_size)[plane])\n",
+               "(texture(tex, pos+vec2((i)-(%f),(j)-(%f)+0.25)/tex_size)[plane]*tex_mul)\n",
                width / 2.0 - 1, (height - 1) / 2.0);
     } else {
         *transform = (struct gl_transform){{{2.0,0.0}, {0.0,1.0}}, {-0.5,0.0}};
 
         GLSLH(if (fract(pos.x * tex_size.x) < 0.5)
-                  return texture(tex, pos + vec2(0.25, 0) / tex_size)[plane];)
+                  return texture(tex, pos + vec2(0.25, 0) / tex_size)[plane] * tex_mul;)
         GLSLHF("#define GET(i, j) "
-               "(texture(tex, pos+vec2((j)-(%f)+0.25,(i)-(%f))/tex_size)[plane])\n",
+               "(texture(tex, pos+vec2((j)-(%f)+0.25,(i)-(%f))/tex_size)[plane]*tex_mul)\n",
                (height - 1) / 2.0, width / 2.0 - 1);
     }
 
@@ -137,12 +160,12 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
 
     for (int y = 0; y < height; y++)
         for (int x = 0; x < width; x += 4) {
-            GLSLHF("samples[%d] = vec4(GET(%d, %d), GET(%d, %d),"
-                                      "GET(%d, %d), GET(%d, %d));\n",
+            GLSLHF("samples[%d] = vec4(GET(%d.0, %d.0), GET(%d.0, %d.0),"
+                                      "GET(%d.0, %d.0), GET(%d.0, %d.0));\n",
                    (y * width + x) / 4, x, y, x+1, y, x+2, y, x+3, y);
         }
 
-    GLSLHF("float sum = 0, sumsq = 0;"
+    GLSLHF("float sum = 0.0, sumsq = 0.0;"
            "for (int i = 0; i < %d; i++) {"
                "sum += dot(samples[i], vec4(1.0));"
                "sumsq += dot(samples[i], samples[i]);"
@@ -150,11 +173,11 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
 
     GLSLHF("float mstd0 = sum / %d.0;\n"
            "float mstd1 = sumsq / %d.0 - mstd0 * mstd0;\n"
-           "float mstd2 = mix(0, inversesqrt(mstd1), mstd1 >= %.12e);\n"
+           "float mstd2 = mix(0.0, inversesqrt(mstd1), mstd1 >= %.12e);\n"
            "mstd1 *= mstd2;\n",
            width * height, width * height, FLT_EPSILON);
 
-    GLSLHF("float vsum = 0, wsum = 0, sum1, sum2;\n");
+    GLSLHF("float vsum = 0.0, wsum = 0.0, sum1, sum2;\n");
 
     if (conf->upload == NNEDI3_UPLOAD_SHADER) {
         GLSLH(#define T(x) intBitsToFloat(x))
@@ -164,7 +187,7 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
                "sum1 = exp(sum1 * mstd2 + T(w0));"
                "sum2 = sum2 * mstd2 + T(w1);"
                "wsum += sum1;"
-               "vsum += sum1*(sum2/(1+abs(sum2)));\n");
+               "vsum += sum1*(sum2/(1.0+abs(sum2)));\n");
 
         for (int n = 0; n < neurons; n++) {
             const uint32_t *weights_ptr = weights + (sample_count * 2 + 1) * 4 * n;
@@ -189,7 +212,7 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
         GLSLHF("for (int n = 0; n < %d; n++) {\n", neurons);
 
         for (int s = 0; s < 2; s++) {
-            GLSLHF("sum%d = 0;\n"
+            GLSLHF("sum%d = 0.0;\n"
                    "for (int i = 0; i < %d; i++) {"
                        "sum%d += dot(samples[i], weights[idx++]);"
                    "}\n",
@@ -199,19 +222,37 @@ void pass_nnedi3(struct gl_shader_cache *sc, int planes, int tex_num,
         GLSLH(sum1 = exp(sum1 * mstd2 + weights[idx][0]);
               sum2 = sum2 * mstd2 + weights[idx++][1];
               wsum += sum1;
-              vsum += sum1*(sum2/(1+abs(sum2)));)
+              vsum += sum1*(sum2/(1.0+abs(sum2)));)
 
         GLSLHF("}\n");
     }
 
-    GLSLH(return clamp(mstd0 + 5.0 * vsum / wsum * mstd1, 0, 1);)
+    GLSLH(return clamp(mstd0 + 5.0 * vsum / wsum * mstd1, 0.0, 1.0);)
 
     GLSLHF("}\n"); // nnedi3
 
     GLSL(vec4 color = vec4(1.0);)
 
     for (int i = 0; i < planes; i++) {
-        GLSLF("color[%d] = nnedi3(texture%d, texcoord%d, texture_size%d, %d);\n",
-              i, tex_num, tex_num, tex_num, i);
+        GLSLF("color[%d] = nnedi3(texture%d, texcoord%d, texture_size%d, %d, %f);\n",
+              i, tex_num, tex_num, tex_num, i, tex_mul);
     }
 }
+
+#else
+
+const struct m_sub_options nnedi3_conf = {0};
+
+
+const float* get_nnedi3_weights(const struct nnedi3_opts *conf, int *size)
+{
+    return NULL;
+}
+
+void pass_nnedi3(GL *gl, struct gl_shader_cache *sc, int planes, int tex_num,
+                 int step, float tex_mul, const struct nnedi3_opts *conf,
+                 struct gl_transform *transform)
+{
+}
+
+#endif

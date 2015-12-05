@@ -148,7 +148,7 @@ void update_playback_speed(struct MPContext *mpctx)
     mpctx->audio_speed = mpctx->opts->playback_speed * mpctx->speed_factor_a;
     mpctx->video_speed = mpctx->opts->playback_speed * mpctx->speed_factor_v;
 
-    if (!mpctx->d_audio)
+    if (!mpctx->d_audio || mpctx->d_audio->afilter->initialized < 1)
         return;
 
     if (!update_speed_filters(mpctx))
@@ -384,8 +384,7 @@ double written_audio_pts(struct MPContext *mpctx)
     // to get the length in original units without speedup or slowdown
     a_pts -= buffered_output * mpctx->audio_speed;
 
-    return a_pts +
-        get_track_video_offset(mpctx, mpctx->current_track[0][STREAM_AUDIO]);
+    return a_pts;
 }
 
 // Return pts value corresponding to currently playing audio.

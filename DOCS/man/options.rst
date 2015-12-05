@@ -81,7 +81,8 @@ Playback Control
 
     The general format for absolute times is ``[[hh:]mm:]ss[.ms]``. If the time
     is given with a prefix of ``+`` or ``-``, the seek is relative from the start
-    or end of the file.
+    or end of the file. (Since mpv 0.14, the start of the file is always
+    considered 0.)
 
     ``pp%`` seeks to percent position pp (0-100).
 
@@ -112,6 +113,14 @@ Playback Control
 ``--length=<relative time>``
     Stop after a given time relative to the start time.
     See ``--start`` for valid option values and examples.
+
+``--rebase-start-time=<yes|no>``
+    Whether to move the file start time to ``00:00:00`` (default: yes). This
+    is less awkward for files which start at a random timestamp, such as
+    transport streams. On the other hand, if there are timestamp resets, the
+    resulting behavior can be rather weird. For this reason, and in case you
+    are actually interested in the real timestamps, this behavior can be
+    disabled with ``no``.
 
 ``--speed=<0.01-100>``
     Slow down or speed up playback by the factor given as parameter.
@@ -560,11 +569,10 @@ Video
         differences to other VOs are possible.
 
 ``--display-fps=<fps>``
-    Set the maximum assumed display FPS used with ``--framedrop``. By default
-    a detected value is used (X11 only, not correct on multi-monitor systems),
-    or infinite display FPS if that fails. Infinite FPS means only frames too
-    late are dropped. If a correct FPS is provided, frames that are predicted
-    to be too late are dropped too.
+    Set the display FPS used with the ``--video-sync=display-*`` modes. By
+    default a detected value is used (X11 only, not correct on multi-monitor
+    systems). Keep in mind that setting an incorrect value (even if slightly
+    incorrect) can ruin video playback.
 
 ``--hwdec=<api>``
     Specify the hardware video decoding API that should be used if possible.
@@ -620,6 +628,14 @@ Video
     allows enabling hardware decoding at runtime at all, without having to
     to temporarily set the ``hwdec`` option just during OpenGL context
     initialization with ``mpv_opengl_cb_init_gl()``.
+
+``--videotoolbox-format=<name>``
+    Set the internal pixel format used by ``--hwdec=videotoolbox`` on OSX. The
+    choice of the format can influence performance considerably. On the other
+    hand, there doesn't appear to be a good way to detect the best format for
+    the given hardware. ``nv12``, the default, works better on modern hardware,
+    while ``uyvy422`` appears to be better for old hardware. ``rgb0`` also
+    works.
 
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
@@ -759,7 +775,7 @@ Video
     if supported.
 
     This behaves exactly like the ``deinterlace`` input property (usually
-    mapped to ``Shift+D``).
+    mapped to ``d``).
 
     ``auto`` is a technicality. Strictly speaking, the default for this option
     is deinterlacing disabled, but the ``auto`` case is needed if ``yadif`` was
@@ -860,7 +876,7 @@ Video
 
     .. admonition:: Example
 
-        ``--vd--lavc-o=debug=pict``
+        ``--vd-lavc-o=debug=pict``
 
 ``--vd-lavc-show-all=<yes|no>``
     Show even broken/corrupt frames (default: no). If this option is set to
@@ -1749,6 +1765,10 @@ Window
 ``--ontop``
     Makes the player window stay on top of other windows.
 
+    On Windows, if combined with fullscreen mode, this causes mpv to be
+    treated as exclusive fullscreen window that bypasses the Desktop Window
+    Manager.
+
 ``--border``, ``--no-border``
     Play video with window border and decorations. Since this is on by
     default, use ``--no-border`` to disable the standard window decorations.
@@ -2026,6 +2046,10 @@ Window
     By default, NetWM support is autodetected (``auto``).
 
     This option might be removed in the future.
+
+``--x11-bypass-compositor=<yes|no>``
+    If set to ``yes`` (default), then ask the compositor to unredirect the
+    mpv window. This uses the ``_NET_WM_BYPASS_COMPOSITOR`` hint.
 
 
 Disc Devices
