@@ -60,7 +60,6 @@ static void print_help(struct mp_log *log)
 }
 
 extern const struct m_sub_options tv_params_conf;
-extern const struct m_sub_options stream_pvr_conf;
 extern const struct m_sub_options stream_cdda_conf;
 extern const struct m_sub_options stream_dvb_conf;
 extern const struct m_sub_options stream_lavf_conf;
@@ -261,9 +260,6 @@ const m_option_t mp_opts[] = {
 #if HAVE_TV
     OPT_SUBSTRUCT("tv", tv_params, tv_params_conf, 0),
 #endif /* HAVE_TV */
-#if HAVE_PVR
-    OPT_SUBSTRUCT("pvr", stream_pvr_opts, stream_pvr_conf, 0),
-#endif /* HAVE_PVR */
 #if HAVE_DVBIN
     OPT_SUBSTRUCT("dvbin", stream_dvb_opts, stream_dvb_conf, 0),
 #endif
@@ -337,6 +333,7 @@ const m_option_t mp_opts[] = {
 
     OPT_STRING_APPEND_LIST("sub-file", sub_name, M_OPT_FILE),
     OPT_PATHLIST("sub-paths", sub_paths, 0),
+    OPT_PATHLIST("audio-file-paths", audiofile_paths, 0),
     OPT_STRING("sub-codepage", sub_cp, 0),
     OPT_FLOAT("sub-delay", sub_delay, 0),
     OPT_FLOAT("sub-fps", sub_fps, 0),
@@ -457,6 +454,10 @@ const m_option_t mp_opts[] = {
                ({"auto", 0}, {"no", -1}, {"yes", 1})),
     OPT_FLAG("x11-bypass-compositor", vo.x11_bypass_compositor, 0),
 #endif
+#if HAVE_WIN32
+    OPT_STRING("vo-mmcss-profile", vo.mmcss_profile, M_OPT_FIXED),
+#endif
+
     OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0),
     OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
 
@@ -702,6 +703,7 @@ const struct MPOpts mp_default_opts = {
         .WinID = -1,
         .window_scale = 1.0,
         .x11_bypass_compositor = 1,
+        .mmcss_profile = "Playback",
     },
     .allow_win_drag = 1,
     .wintitle = "${?media-title:${media-title}}${!media-title:No file} - mpv",

@@ -48,6 +48,7 @@
 #include "misc/bstr.h"
 #include "stream/stream.h"
 #include "video/csputils.h"
+#include "video/mp_image.h"
 #include "demux.h"
 #include "stheader.h"
 #include "ebml.h"
@@ -1192,9 +1193,7 @@ static void add_coverart(struct demuxer *demuxer)
         const char *codec = mp_map_mimetype_to_video_codec(att->type);
         if (!codec)
             continue;
-        struct sh_stream *sh = new_sh_stream(demuxer, STREAM_VIDEO);
-        if (!sh)
-            break;
+        struct sh_stream *sh = demux_alloc_sh_stream(STREAM_VIDEO);
         sh->demuxer_id = -1 - sh->index; // don't clash with mkv IDs
         sh->codec = codec;
         sh->attached_picture = new_demux_packet_from(att->data, att->data_size);
@@ -1204,6 +1203,7 @@ static void add_coverart(struct demuxer *demuxer)
             sh->attached_picture->keyframe = true;
         }
         sh->title = att->name;
+        demux_add_sh_stream(demuxer, sh);
     }
 }
 
@@ -1265,9 +1265,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
 {
     unsigned char *extradata = NULL;
     unsigned int extradata_size = 0;
-    struct sh_stream *sh = new_sh_stream(demuxer, STREAM_VIDEO);
-    if (!sh)
-        return 1;
+    struct sh_stream *sh = demux_alloc_sh_stream(STREAM_VIDEO);
     init_track(demuxer, track, sh);
     sh_video_t *sh_v = sh->video;
 
@@ -1276,7 +1274,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     if (!strcmp(track->codec_id, "V_MS/VFW/FOURCC")) { /* AVI compatibility mode */
         // The private_data contains a BITMAPINFOHEADER struct
         if (track->private_data == NULL || track->private_size < 40)
-            return 1;
+            goto done;
 
         unsigned char *h = track->private_data;
         if (track->v_width == 0)
@@ -1354,7 +1352,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
 
     if (extradata_size > 0x1000000) {
         MP_WARN(demuxer, "Invalid CodecPrivate\n");
-        return 1;
+        goto done;
     }
 
     sh->extradata = talloc_memdup(sh_v, extradata, extradata_size);
@@ -1367,11 +1365,18 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
     sh_v->fps = track->v_frate;
     sh_v->disp_w = track->v_width;
     sh_v->disp_h = track->v_height;
-    uint32_t dw = track->v_dwidth_set ? track->v_dwidth : track->v_width;
-    uint32_t dh = track->v_dheight_set ? track->v_dheight : track->v_height;
-    sh_v->aspect = (dw && dh) ? (double) dw / dh : 0;
-    MP_VERBOSE(demuxer, "Aspect: %f\n", sh_v->aspect);
+
+    int dw = track->v_dwidth_set ? track->v_dwidth : track->v_width;
+    int dh = track->v_dheight_set ? track->v_dheight : track->v_height;
+    struct mp_image_params p = {.w = track->v_width, .h = track->v_height};
+    mp_image_params_set_dsize(&p, dw, dh);
+    sh_v->par_w = p.p_w;
+    sh_v->par_h = p.p_h;
+
     sh_v->stereo_mode = track->stereo_mode;
+
+done:
+    demux_add_sh_stream(demuxer, sh);
 
     return 0;
 }
@@ -1464,9 +1469,7 @@ static const char *const mkv_audio_tags[][2] = {
 
 static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
 {
-    struct sh_stream *sh = new_sh_stream(demuxer, STREAM_AUDIO);
-    if (!sh)
-        return 1;
+    struct sh_stream *sh = demux_alloc_sh_stream(STREAM_AUDIO);
     init_track(demuxer, track, sh);
     sh_audio_t *sh_a = sh->audio;
 
@@ -1675,12 +1678,15 @@ static int demux_mkv_open_audio(demuxer_t *demuxer, mkv_track_t *track)
     sh->extradata = extradata;
     sh->extradata_size = extradata_len;
 
+    demux_add_sh_stream(demuxer, sh);
+
     return 0;
 
  error:
     MP_WARN(demuxer, "Unknown/unsupported audio "
             "codec ID '%s' for track %u or missing/faulty\n"
             "private codec data.\n", track->codec_id, track->tnum);
+    demux_add_sh_stream(demuxer, sh); // add it anyway
     return 1;
 }
 
@@ -1712,9 +1718,7 @@ static int demux_mkv_open_sub(demuxer_t *demuxer, mkv_track_t *track)
     if (track->private_size > 0x10000000)
         return 1;
 
-    struct sh_stream *sh = new_sh_stream(demuxer, STREAM_SUB);
-    if (!sh)
-        return 1;
+    struct sh_stream *sh = demux_alloc_sh_stream(STREAM_SUB);
     init_track(demuxer, track, sh);
 
     sh->codec = subtitle_type;
@@ -1728,6 +1732,8 @@ static int demux_mkv_open_sub(demuxer_t *demuxer, mkv_track_t *track)
     }
     sh->extradata = track->private_data;
     sh->extradata_size = track->private_size;
+
+    demux_add_sh_stream(demuxer, sh);
 
     if (!subtitle_type)
         MP_ERR(demuxer, "Subtitle type '%s' is not supported.\n", track->codec_id);

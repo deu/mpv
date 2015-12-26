@@ -146,8 +146,8 @@ void reset_subtitle_state(struct MPContext *mpctx)
 
 void uninit_stream_sub_decoders(struct demuxer *demuxer)
 {
-    for (int i = 0; i < demuxer->num_streams; i++) {
-        struct sh_stream *sh = demuxer->streams[i];
+    for (int i = 0; i < demux_get_num_stream(demuxer); i++) {
+        struct sh_stream *sh = demux_get_stream(demuxer, i);
         if (sh->sub) {
             sub_destroy(sh->sub->dec_sub);
             sh->sub->dec_sub = NULL;
@@ -222,8 +222,8 @@ static void update_subtitle(struct MPContext *mpctx, int order)
             if (subpts_s > curpts_s) {
                 MP_DBG(mpctx, "Sub early: c_pts=%5.3f s_pts=%5.3f\n",
                        curpts_s, subpts_s);
-                // Libass handled subs can be fed to it in advance
-                if (!sub_accept_packets_in_advance(dec_sub))
+                // Often subs can be handled in advance
+                if (!sub_accepts_packet_in_advance(dec_sub))
                     break;
                 // Try to avoid demuxing whole file at once
                 if (subpts_s > curpts_s + 1 && !interleaved)
@@ -258,13 +258,10 @@ static void reinit_subdec(struct MPContext *mpctx, struct track *track,
 
     struct sh_video *sh_video =
         mpctx->d_video ? mpctx->d_video->header->video : NULL;
-    int w = sh_video ? sh_video->disp_w : 0;
-    int h = sh_video ? sh_video->disp_h : 0;
     float fps = sh_video ? sh_video->fps : 25;
 
     init_sub_renderer(mpctx);
 
-    sub_set_video_res(dec_sub, w, h);
     sub_set_video_fps(dec_sub, fps);
     sub_set_ass_renderer(dec_sub, mpctx->ass_library, mpctx->ass_renderer,
                          &mpctx->ass_lock);

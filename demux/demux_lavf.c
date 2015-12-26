@@ -40,6 +40,7 @@
 #include "common/tags.h"
 #include "common/av_common.h"
 #include "misc/bstr.h"
+#include "misc/charset_conv.h"
 
 #include "stream/stream.h"
 #include "demux.h"
@@ -108,6 +109,7 @@ struct format_hack {
     bool no_stream : 1;         // do not wrap struct stream as AVIOContext
     bool use_stream_ids : 1;    // export the native stream IDs
     bool fully_read : 1;        // set demuxer.fully_read flag
+    bool detect_charset : 1;    // format is a small text file, possibly not UTF8
     bool image_format : 1;      // expected to contain exactly 1 frame
     // Do not confuse player's position estimation (position is into external
     // segment, with e.g. HLS, player knows about the playlist main file only).
@@ -115,8 +117,8 @@ struct format_hack {
 };
 
 #define BLACKLIST(fmt) {fmt, .ignore = true}
-#define TEXTSUB(fmt) {fmt, .fully_read = true}
-#define IMAGEFMT(fmt) {fmt, .image_format = true}
+#define TEXTSUB(fmt) {fmt, .fully_read = true, .detect_charset = true}
+#define TEXTSUB_UTF8(fmt) {fmt, .fully_read = true}
 
 static const struct format_hack format_hacks[] = {
     // for webradios
@@ -135,10 +137,13 @@ static const struct format_hack format_hacks[] = {
     {"h264", .if_flags = AVFMT_NOTIMESTAMPS },
     {"hevc", .if_flags = AVFMT_NOTIMESTAMPS },
 
-    TEXTSUB("aqtitle"), TEXTSUB("ass"), TEXTSUB("jacosub"), TEXTSUB("microdvd"),
+    TEXTSUB("aqtitle"), TEXTSUB("jacosub"), TEXTSUB("microdvd"),
     TEXTSUB("mpl2"), TEXTSUB("mpsub"), TEXTSUB("pjs"), TEXTSUB("realtext"),
     TEXTSUB("sami"), TEXTSUB("srt"), TEXTSUB("stl"), TEXTSUB("subviewer"),
-    TEXTSUB("subviewer1"), TEXTSUB("vplayer"), TEXTSUB("webvtt"),
+    TEXTSUB("subviewer1"), TEXTSUB("vplayer"),
+
+    TEXTSUB_UTF8("webvtt"),
+    TEXTSUB_UTF8("ass"),
 
     // Useless non-sense, sometimes breaks MLP2 subreader.c fallback
     BLACKLIST("tty"),
@@ -148,7 +153,7 @@ static const struct format_hack format_hacks[] = {
     // Useless, does not work with custom streams.
     BLACKLIST("image2"),
     // Image demuxers ("<name>_pipe" is detected explicitly)
-    IMAGEFMT("image2pipe"),
+    {"image2pipe", .image_format = true},
     {0}
 };
 
@@ -165,6 +170,7 @@ typedef struct lavf_priv {
     int cur_program;
     char *mime_type;
     bool merge_track_metadata;
+    char *file_charset;
 } lavf_priv_t;
 
 // At least mp4 has name="mov,mp4,m4a,3gp,3g2,mj2", so we split the name
@@ -202,7 +208,10 @@ static int64_t mp_seek(void *opaque, int64_t pos, int whence)
     struct demuxer *demuxer = opaque;
     struct stream *stream = demuxer->stream;
     int64_t current_pos;
-    MP_TRACE(demuxer, "mp_seek(%p, %"PRId64", %d)\n", stream, pos, whence);
+    MP_TRACE(demuxer, "mp_seek(%p, %"PRId64", %s)\n", stream, pos,
+             whence == SEEK_END ? "end" :
+             whence == SEEK_CUR ? "cur" :
+             whence == SEEK_SET ? "set" : "size");
     if (whence == SEEK_END || whence == AVSEEK_SIZE) {
         int64_t end = stream_get_size(stream);
         if (end < 0)
@@ -253,6 +262,23 @@ static void list_formats(struct demuxer *demuxer)
         MP_INFO(demuxer, "%15s : %s\n", fmt->name, fmt->long_name);
 }
 
+static void detect_charset(struct demuxer *demuxer)
+{
+    lavf_priv_t *priv = demuxer->priv;
+    char *cp = demuxer->opts->sub_cp;
+    if (mp_charset_requires_guess(cp)) {
+        bstr data = stream_peek(demuxer->stream, STREAM_MAX_BUFFER_SIZE);
+        cp = (char *)mp_charset_guess(priv, demuxer->log, data, cp, 0);
+        MP_VERBOSE(demuxer, "Detected charset: %s\n", cp ? cp : "(unknown)");
+    }
+    if (cp && !mp_charset_is_utf8(cp))
+        MP_INFO(demuxer, "Using subtitle charset: %s\n", cp);
+    // libavformat transparently converts UTF-16 to UTF-8
+    if (mp_charset_is_utf16(priv->file_charset))
+        cp = NULL;
+    priv->file_charset = cp;
+}
+
 static char *remove_prefix(char *s, const char *const *prefixes)
 {
     for (int n = 0; prefixes[n]; n++) {
@@ -271,11 +297,7 @@ static int lavf_check_file(demuxer_t *demuxer, enum demux_check check)
     struct MPOpts *opts = demuxer->opts;
     struct demux_lavf_opts *lavfdopts = opts->demux_lavf;
     struct stream *s = demuxer->stream;
-    lavf_priv_t *priv;
-
-    assert(!demuxer->priv);
-    demuxer->priv = talloc_zero(NULL, lavf_priv_t);
-    priv = demuxer->priv;
+    lavf_priv_t *priv = demuxer->priv;
 
     priv->filename = remove_prefix(s->url, prefixes);
 
@@ -393,6 +415,9 @@ static int lavf_check_file(demuxer_t *demuxer, enum demux_check check)
 
     demuxer->filetype = priv->avif->name;
 
+    if (priv->format_hack.detect_charset)
+        detect_charset(demuxer);
+
     return 0;
 }
 
@@ -506,7 +531,7 @@ static int dict_get_decimal(AVDictionary *dict, const char *entry, int def)
     return def;
 }
 
-static void handle_stream(demuxer_t *demuxer, int i)
+static void handle_new_stream(demuxer_t *demuxer, int i)
 {
     lavf_priv_t *priv = demuxer->priv;
     AVFormatContext *avfc = priv->avfc;
@@ -516,9 +541,7 @@ static void handle_stream(demuxer_t *demuxer, int i)
 
     switch (codec->codec_type) {
     case AVMEDIA_TYPE_AUDIO: {
-        sh = new_sh_stream(demuxer, STREAM_AUDIO);
-        if (!sh)
-            break;
+        sh = demux_alloc_sh_stream(STREAM_AUDIO);
         sh_audio_t *sh_audio = sh->audio;
 
         // probably unneeded
@@ -533,9 +556,7 @@ static void handle_stream(demuxer_t *demuxer, int i)
         break;
     }
     case AVMEDIA_TYPE_VIDEO: {
-        sh = new_sh_stream(demuxer, STREAM_VIDEO);
-        if (!sh)
-            break;
+        sh = demux_alloc_sh_stream(STREAM_VIDEO);
         sh_video_t *sh_video = sh->video;
 
         if (st->disposition & AV_DISPOSITION_ATTACHED_PIC) {
@@ -567,12 +588,8 @@ static void handle_stream(demuxer_t *demuxer, int i)
         sh_video->fps = fps;
         if (priv->format_hack.image_format)
             sh_video->fps = demuxer->opts->mf_fps;
-        if (st->sample_aspect_ratio.num)
-            sh_video->aspect = codec->width  * st->sample_aspect_ratio.num
-                    / (float)(codec->height * st->sample_aspect_ratio.den);
-        else
-            sh_video->aspect = codec->width  * codec->sample_aspect_ratio.num
-                    / (float)(codec->height * codec->sample_aspect_ratio.den);
+        sh_video->par_w = st->sample_aspect_ratio.num;
+        sh_video->par_h = st->sample_aspect_ratio.den;
 
         uint8_t *sd = av_stream_get_side_data(st, AV_PKT_DATA_DISPLAYMATRIX, NULL);
         if (sd) {
@@ -588,9 +605,7 @@ static void handle_stream(demuxer_t *demuxer, int i)
     }
     case AVMEDIA_TYPE_SUBTITLE: {
         sh_sub_t *sh_sub;
-        sh = new_sh_stream(demuxer, STREAM_SUB);
-        if (!sh)
-            break;
+        sh = demux_alloc_sh_stream(STREAM_SUB);
         sh_sub = sh->sub;
 
         if (codec->extradata_size) {
@@ -613,8 +628,7 @@ static void handle_stream(demuxer_t *demuxer, int i)
             }
         }
 
-        if (matches_avinputformat_name(priv, "ass"))
-            sh_sub->is_utf8 = true;
+        sh_sub->charset = priv->file_charset;
 
         break;
     }
@@ -640,9 +654,8 @@ static void handle_stream(demuxer_t *demuxer, int i)
         sh->codec = mp_codec_from_av_codec_id(codec->codec_id);
         sh->codec_tag = codec->codec_tag;
         sh->lav_headers = avcodec_alloc_context3(NULL);
-        if (!sh->lav_headers)
-            return;
-        mp_copy_lav_codec_headers(sh->lav_headers, codec);
+        if (sh->lav_headers)
+            mp_copy_lav_codec_headers(sh->lav_headers, codec);
 
         if (st->disposition & AV_DISPOSITION_DEFAULT)
             sh->default_track = true;
@@ -660,10 +673,10 @@ static void handle_stream(demuxer_t *demuxer, int i)
         if (!sh->title && sh->hls_bitrate > 0)
             sh->title = talloc_asprintf(sh, "bitrate %d", sh->hls_bitrate);
         sh->missing_timestamps = !!(priv->avif_flags & AVFMT_NOTIMESTAMPS);
+        demux_add_sh_stream(demuxer, sh);
     }
 
     select_tracks(demuxer, i);
-    demux_changed(demuxer, DEMUX_EVENT_STREAMS);
 }
 
 // Add any new streams that might have been added
@@ -671,7 +684,7 @@ static void add_new_streams(demuxer_t *demuxer)
 {
     lavf_priv_t *priv = demuxer->priv;
     while (priv->num_streams < priv->avfc->nb_streams)
-        handle_stream(demuxer, priv->num_streams);
+        handle_new_stream(demuxer, priv->num_streams);
 }
 
 static void update_metadata(demuxer_t *demuxer, AVPacket *pkt)
@@ -707,13 +720,10 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     AVFormatContext *avfc;
     AVDictionaryEntry *t = NULL;
     float analyze_duration = 0;
-    int i;
+    lavf_priv_t *priv = talloc_zero(NULL, lavf_priv_t);
+    demuxer->priv = priv;
 
     if (lavf_check_file(demuxer, check) < 0)
-        return -1;
-
-    lavf_priv_t *priv = demuxer->priv;
-    if (!priv)
         return -1;
 
     avfc = avformat_alloc_context();
@@ -815,7 +825,7 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     MP_VERBOSE(demuxer, "avformat_find_stream_info() finished after %"PRId64
                " bytes.\n", stream_tell(demuxer->stream));
 
-    for (i = 0; i < avfc->nb_chapters; i++) {
+    for (int i = 0; i < avfc->nb_chapters; i++) {
         AVChapter *c = avfc->chapters[i];
         t = av_dict_get(c->metadata, "title", NULL, 0);
         int index = demuxer_add_chapter(demuxer, t ? t->value : "",
@@ -827,7 +837,7 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
 
     // Often useful with OGG audio-only files, which have metadata in the audio
     // track metadata instead of the main metadata.
-    if (demuxer->num_streams == 1) {
+    if (demux_get_num_stream(demuxer) == 1) {
         priv->merge_track_metadata = true;
         for (int n = 0; n < priv->num_streams; n++) {
             if (priv->streams[n])

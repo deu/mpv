@@ -199,12 +199,6 @@ iconv support use --disable-iconv.",
         'deps_any': [ 'os-win32', 'os-cygwin' ],
         'func': check_true
     }, {
-        'name': '--waio',
-        'desc': 'libwaio for win32',
-        'deps': [ 'os-win32', 'mingw' ],
-        'func': check_libs(['waio'],
-                    check_statement('waio/waio.h', 'waio_alloc(0, 0, 0, 0)')),
-    }, {
         'name': '--termios',
         'desc': 'termios',
         'func': check_headers('termios.h', 'sys/termios.h'),
@@ -663,6 +657,14 @@ video_output_features = [
         'func': check_statement('windows.h', 'wglCreateContext(0)',
                                 lib='opengl32')
     } , {
+        'name': '--gl-dxinterop',
+        'desc': 'OpenGL/DirectX Interop Backend',
+        'deps': [ 'gl-win32' ],
+        'groups': [ 'gl' ],
+        'func': compose_checks(
+            check_statement(['GL/gl.h', 'GL/wglext.h'], 'int i = WGL_ACCESS_WRITE_DISCARD_NV'),
+            check_statement('d3d9.h', 'IDirect3D9Ex *d'))
+    } , {
         'name': '--egl-angle',
         'desc': 'OpenGL Win32 ANGLE Backend',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
@@ -710,7 +712,6 @@ video_output_features = [
     }, {
         'name': 'vaapi-egl',
         'desc': 'VAAPI EGL',
-        'deps': [ 'c11-tls' ], # indirectly
         'deps_any': [ 'vaapi-x-egl', 'vaapi-wayland' ],
         'func': check_true,
     }, {
@@ -752,7 +753,12 @@ video_output_features = [
     } , {
         'name': '--gl',
         'desc': 'OpenGL video outputs',
-        'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-drm', 'gl-win32', 'gl-wayland', 'rpi' ],
+        'deps_any': [ 'gl-cocoa', 'gl-x11', 'egl-x11', 'egl-drm', 'gl-win32', 'gl-wayland', 'rpi' ],
+        'func': check_true
+    }, {
+        'name': 'egl-helpers',
+        'desc': 'EGL helper functions',
+        'deps_any': [ 'egl-x11' ],
         'func': check_true
     }
 ]
@@ -822,11 +828,6 @@ radio_and_tv_features = [
         'desc': 'libv4l2 support',
         'func': check_pkg_config('libv4l2'),
         'deps': [ 'tv-v4l2' ],
-    }, {
-        'name': '--pvr',
-        'desc': 'Video4Linux2 MPEG PVR interface',
-        'deps': [ 'tv' ],
-        'func': check_cc(fragment=load_fragment('pvr.c')),
     }, {
         'name': '--audio-input',
         'desc': 'audio input support',

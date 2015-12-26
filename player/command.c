@@ -792,8 +792,6 @@ static int mp_property_chapter(void *ctx, struct m_property *prop,
         if (action == M_PROPERTY_SWITCH) {
             struct m_property_switch_arg *sarg = arg;
             step_all = ROUND(sarg->inc);
-            if (num < 2) // semi-broken file; ignore for user convenience
-                return M_PROPERTY_UNAVAILABLE;
             // Check threshold for relative backward seeks
             if (mpctx->opts->chapter_seek_threshold >= 0 && step_all < 0) {
                 double current_chapter_start =
@@ -814,6 +812,9 @@ static int mp_property_chapter(void *ctx, struct m_property *prop,
             if (mpctx->opts->keep_open) {
                 seek_to_last_frame(mpctx);
             } else {
+                // semi-broken file; ignore for user convenience
+                if (action == M_PROPERTY_SWITCH && num < 2)
+                    return M_PROPERTY_UNAVAILABLE;
                 if (!mpctx->stop_play)
                     mpctx->stop_play = PT_NEXT_ENTRY;
             }
@@ -2207,7 +2208,7 @@ static int probe_deint_filters(struct MPContext *mpctx)
     if (check_output_format(mpctx, IMGFMT_VAAPI) &&
         probe_deint_filter(mpctx, "vavpp"))
         return 0;
-    if (probe_deint_filter(mpctx, "yadif:mode=field:interlaced-only=yes"))
+    if (probe_deint_filter(mpctx, "yadif"))
         return 0;
     return -1;
 }
@@ -2449,8 +2450,8 @@ static int property_imgparams(struct mp_image_params p, int action, void *arg)
     if (!p.imgfmt)
         return M_PROPERTY_UNAVAILABLE;
 
-    double dar = p.d_w / (double)p.d_h;
-    double sar = p.w / (double)p.h;
+    int d_w, d_h;
+    mp_image_params_get_dsize(&p, &d_w, &d_h);
 
     struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(p.imgfmt);
     int bpp = 0;
@@ -2465,10 +2466,10 @@ static int property_imgparams(struct mp_image_params p, int action, void *arg)
                             .unavailable = !(desc.flags & MP_IMGFLAG_PLANAR)},
         {"w",               SUB_PROP_INT(p.w)},
         {"h",               SUB_PROP_INT(p.h)},
-        {"dw",              SUB_PROP_INT(p.d_w)},
-        {"dh",              SUB_PROP_INT(p.d_h)},
-        {"aspect",          SUB_PROP_FLOAT(dar)},
-        {"par",             SUB_PROP_FLOAT(dar / sar)},
+        {"dw",              SUB_PROP_INT(d_w)},
+        {"dh",              SUB_PROP_INT(d_h)},
+        {"aspect",          SUB_PROP_FLOAT(d_w / (double)d_h)},
+        {"par",             SUB_PROP_FLOAT(p.p_w / (double)p.p_h)},
         {"colormatrix",
             SUB_PROP_STR(m_opt_choice_str(mp_csp_names, p.colorspace))},
         {"colorlevels",
@@ -2561,8 +2562,8 @@ static int mp_property_window_scale(void *ctx, struct m_property *prop,
         return M_PROPERTY_UNAVAILABLE;
 
     struct mp_image_params params = get_video_out_params(mpctx);
-    int vid_w = params.d_w;
-    int vid_h = params.d_h;
+    int vid_w, vid_h;
+    mp_image_params_get_dsize(&params, &vid_w, &vid_h);
     if (vid_w < 1 || vid_h < 1)
         return M_PROPERTY_UNAVAILABLE;
 
@@ -2781,8 +2782,10 @@ static int mp_property_aspect(void *ctx, struct m_property *prop,
             struct dec_video *d_video = mpctx->d_video;
             struct sh_video *sh_video = d_video->header->video;
             struct mp_image_params *params = &d_video->vfilter->override_params;
-            if (params && params->d_w && params->d_h) {
-                aspect = (float)params->d_w / params->d_h;
+            if (params && params->p_w > 0 && params->p_h > 0) {
+                int d_w, d_h;
+                mp_image_params_get_dsize(params, &d_w, &d_h);
+                aspect = (float)d_w / d_h;
             } else if (sh_video->disp_w && sh_video->disp_h) {
                 aspect = (float)sh_video->disp_w / sh_video->disp_h;
             }
@@ -3695,8 +3698,8 @@ static const char *const *const mp_event_property_change[] = {
       "samplerate", "channels", "audio", "volume", "mute", "balance",
       "volume-restore-data", "current-ao", "audio-codec-name", "audio-params",
       "audio-out-params"),
-    E(MPV_EVENT_SEEK, "seeking", "core-idle"),
-    E(MPV_EVENT_PLAYBACK_RESTART, "seeking", "core-idle"),
+    E(MPV_EVENT_SEEK, "seeking", "core-idle", "eof-reached"),
+    E(MPV_EVENT_PLAYBACK_RESTART, "seeking", "core-idle", "eof-reached"),
     E(MPV_EVENT_METADATA_UPDATE, "metadata", "filtered-metadata", "media-title"),
     E(MPV_EVENT_CHAPTER_CHANGE, "chapter", "chapter-metadata"),
     E(MP_EVENT_CACHE_UPDATE, "cache", "cache-free", "cache-used", "cache-idle",
@@ -4906,8 +4909,8 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         char state[3] = {'p', cmd->is_mouse_button ? 'm' : '-'};
         if (cmd->is_up_down)
             state[0] = cmd->repeated ? 'r' : (cmd->is_up ? 'u' : 'd');
-        event.num_args = 3;
-        event.args = (const char*[3]){"key-binding", name, state};
+        event.num_args = 4;
+        event.args = (const char*[4]){"key-binding", name, state, cmd->key_name};
         if (mp_client_send_event_dup(mpctx, target,
                                      MPV_EVENT_CLIENT_MESSAGE, &event) < 0)
         {

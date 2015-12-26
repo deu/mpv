@@ -23,6 +23,7 @@
 #include "common/msg.h"
 
 #include "stream/stream.h"
+#include "video/mp_image.h"
 #include "demux.h"
 #include "stheader.h"
 
@@ -53,9 +54,10 @@ struct priv {
 static void reselect_streams(demuxer_t *demuxer)
 {
     struct priv *p = demuxer->priv;
-    for (int n = 0; n < MPMIN(p->slave->num_streams, p->num_streams); n++) {
+    int num_slave = demux_get_num_stream(p->slave);
+    for (int n = 0; n < MPMIN(num_slave, p->num_streams); n++) {
         if (p->streams[n]) {
-            demuxer_select_track(p->slave, p->slave->streams[n],
+            demuxer_select_track(p->slave, demux_get_stream(p->slave, n),
                 demux_stream_is_selected(p->streams[n]));
         }
     }
@@ -80,9 +82,7 @@ static void add_dvd_streams(demuxer_t *demuxer)
     struct stream_dvd_info_req info;
     if (stream_control(stream, STREAM_CTRL_GET_DVD_INFO, &info) > 0) {
         for (int n = 0; n < MPMIN(32, info.num_subs); n++) {
-            struct sh_stream *sh = new_sh_stream(demuxer, STREAM_SUB);
-            if (!sh)
-                break;
+            struct sh_stream *sh = demux_alloc_sh_stream(STREAM_SUB);
             sh->demuxer_id = n + 0x20;
             sh->codec = "dvd_subtitle";
             get_disc_lang(stream, sh);
@@ -93,17 +93,16 @@ static void add_dvd_streams(demuxer_t *demuxer)
 
             // emulate the extradata
             struct mp_csp_params csp = MP_CSP_PARAMS_DEFAULTS;
-            csp.int_bits_in = 8;
-            csp.int_bits_out = 8;
             struct mp_cmat cmatrix;
-            mp_get_yuv2rgb_coeffs(&csp, &cmatrix);
+            mp_get_csp_matrix(&csp, &cmatrix);
 
             char *s = talloc_strdup(sh, "");
             s = talloc_asprintf_append(s, "palette: ");
             for (int i = 0; i < 16; i++) {
                 int color = info.palette[i];
-                int c[3] = {(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff};
-                mp_map_int_color(&cmatrix, 8, c);
+                int y[3] = {(color >> 16) & 0xff, (color >> 8) & 0xff, color & 0xff};
+                int c[3];
+                mp_map_fixp_color(&cmatrix, 8, y, 8, c);
                 color = (c[2] << 16) | (c[1] << 8) | c[0];
 
                 if (i != 0)
@@ -114,6 +113,8 @@ static void add_dvd_streams(demuxer_t *demuxer)
 
             sh->extradata = s;
             sh->extradata_size = strlen(s);
+
+            demux_add_sh_stream(demuxer, sh);
         }
     }
 }
@@ -122,8 +123,8 @@ static void add_streams(demuxer_t *demuxer)
 {
     struct priv *p = demuxer->priv;
 
-    for (int n = p->num_streams; n < p->slave->num_streams; n++) {
-        struct sh_stream *src = p->slave->streams[n];
+    for (int n = p->num_streams; n < demux_get_num_stream(p->slave); n++) {
+        struct sh_stream *src = demux_get_stream(p->slave, n);
         if (src->sub) {
             struct sh_stream *sub = NULL;
             if (src->demuxer_id >= 0x20 && src->demuxer_id <= 0x3F)
@@ -134,9 +135,7 @@ static void add_streams(demuxer_t *demuxer)
                 continue;
             }
         }
-        struct sh_stream *sh = new_sh_stream(demuxer, src->type);
-        if (!sh)
-            break;
+        struct sh_stream *sh = demux_alloc_sh_stream(src->type);
         assert(p->num_streams == n); // directly mapped
         MP_TARRAY_APPEND(p, p->streams, p->num_streams, sh);
         // Copy all stream fields that might be relevant
@@ -148,11 +147,18 @@ static void add_streams(demuxer_t *demuxer)
             double ar;
             if (stream_control(demuxer->stream, STREAM_CTRL_GET_ASPECT_RATIO, &ar)
                                 == STREAM_OK)
-                sh->video->aspect = ar;
+            {
+                struct mp_image_params f = {.w = src->video->disp_w,
+                                            .h = src->video->disp_h};
+                mp_image_params_set_dsize(&f, 1728 * ar, 1728);
+                sh->video->par_w = f.p_w;
+                sh->video->par_h = f.p_h;
+            }
         }
         if (src->audio)
             sh->audio = src->audio;
         get_disc_lang(demuxer->stream, sh);
+        demux_add_sh_stream(demuxer, sh);
     }
     reselect_streams(demuxer);
 }

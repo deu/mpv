@@ -174,6 +174,7 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
     }
 
     desc.plane_bits = planedepth[0];
+    desc.component_full_bits = desc.component_bits;
 
     // Check whether any components overlap other components (per plane).
     // We're cheating/simplifying here: we assume that this happens if a shift
@@ -241,6 +242,7 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
                           desc.bpp[p] == desc.bpp[0];
         }
         if (same_depth && pd->nb_components == desc.num_planes) {
+            desc.component_full_bits = (desc.component_bits + 7) / 8 * 8;
             if (desc.flags & MP_IMGFLAG_YUV) {
                 desc.flags |= MP_IMGFLAG_YUV_P;
             } else {
@@ -262,7 +264,9 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
 
     if (pd->flags & AV_PIX_FMT_FLAG_HWACCEL) {
         desc.flags |= MP_IMGFLAG_HWACCEL;
-        desc.plane_bits = 8; // usually restricted to 8 bit; may change
+        desc.component_bits = 8; // usually restricted to 8 bit; may change
+        desc.component_full_bits = desc.component_bits;
+        desc.plane_bits = desc.component_bits;
     }
 
     if (desc.chroma_xs || desc.chroma_ys)
@@ -271,12 +275,12 @@ struct mp_imgfmt_desc mp_imgfmt_get_desc(int mpfmt)
     return desc;
 }
 
-// Find a format that is MP_IMGFLAG_YUV_P with the following configuration.
-int mp_imgfmt_find_yuv_planar(int xs, int ys, int planes, int component_bits)
+// Find a format that has the given flags set with the following configuration.
+int mp_imgfmt_find(int xs, int ys, int planes, int component_bits, int flags)
 {
     for (int n = IMGFMT_START + 1; n < IMGFMT_END; n++) {
         struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(n);
-        if (desc.id && (desc.flags & MP_IMGFLAG_YUV_P)) {
+        if (desc.id && ((desc.flags & flags) == flags)) {
             if (desc.num_planes == planes && desc.chroma_xs == xs &&
                 desc.chroma_ys == ys && desc.plane_bits == component_bits &&
                 (desc.flags & MP_IMGFLAG_NE))

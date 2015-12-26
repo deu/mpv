@@ -83,7 +83,7 @@ typedef struct sh_audio {
 typedef struct sh_video {
     bool avi_dts;         // use DTS timing; first frame and DTS is 0
     float fps;            // frames per second (set only if constant fps)
-    float aspect;         // aspect ratio stored in the file (for prescaling)
+    int par_w, par_h;     // pixel aspect ratio (0 if unknown/square)
     int bits_per_coded_sample;
     int disp_w, disp_h;   // display size
     int rotate;           // intended display rotation, in degrees, [0, 359]
@@ -93,7 +93,7 @@ typedef struct sh_video {
 typedef struct sh_sub {
     double frame_based;         // timestamps are frame-based (and this is the
                                 // fallback framerate used for timestamps)
-    bool is_utf8;               // if false, subtitle packet charset is unknown
+    char *charset;              // assumed 8 bit subtitle charset (can be NULL)
     struct dec_sub *dec_sub;    // decoder context
 } sh_sub_t;
 

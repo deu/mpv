@@ -49,9 +49,6 @@
 #include "video/out/dither.h"
 #include "video/out/vo.h"
 
-// Pixel width of 1D lookup textures.
-#define LOOKUP_TEXTURE_SIZE 256
-
 // Maximal number of passes that prescaler can be applied.
 #define MAX_PRESCALE_PASSES 5
 
@@ -140,7 +137,6 @@ struct gl_video {
     struct gl_video_opts opts;
     bool gl_debug;
 
-    int depth_g;
     int texture_16bit_depth;    // actual bits available in 16 bit textures
 
     struct gl_shader_cache *sc;
@@ -166,7 +162,7 @@ struct gl_video {
     struct mp_imgfmt_desc image_desc;
     int plane_count;
 
-    bool is_yuv, is_rgb, is_packed_yuv;
+    bool is_yuv, is_packed_yuv;
     bool has_alpha;
     char color_swizzle[5];
 
@@ -348,7 +344,8 @@ const struct gl_video_opts gl_video_opts_def = {
         {{"mitchell",   .params={NAN, NAN}}, {.params = {NAN, NAN}},
          .clamp = 1, }, // tscale
     },
-    .alpha_mode = 2,
+    .scaler_lut_size = 6,
+    .alpha_mode = 3,
     .background = {0, 0, 0, 255},
     .gamma = 1.0f,
     .prescale_passes = 1,
@@ -371,11 +368,11 @@ const struct gl_video_opts gl_video_opts_hq_def = {
         {{"mitchell",   .params={NAN, NAN}}, {.params = {NAN, NAN}},
          .clamp = 1, }, // tscale
     },
-    .alpha_mode = 2,
+    .scaler_lut_size = 6,
+    .alpha_mode = 3,
     .background = {0, 0, 0, 255},
     .gamma = 1.0f,
     .blend_subs = 0,
-    .pbo = 1,
     .deband = 1,
     .prescale_passes = 1,
     .prescale_downscaling_threshold = 2.0f,
@@ -412,6 +409,7 @@ const struct m_sub_options gl_video_conf = {
         SCALER_OPTS("dscale", 1),
         SCALER_OPTS("cscale", 2),
         SCALER_OPTS("tscale", 3),
+        OPT_INTRANGE("scaler-lut-size", scaler_lut_size, 0, 4, 10),
         OPT_FLAG("scaler-resizes-only", scaler_resizes_only, 0),
         OPT_FLAG("linear-scaling", linear_scaling, 0),
         OPT_FLAG("correct-downscaling", correct_downscaling, 0),
@@ -443,7 +441,8 @@ const struct m_sub_options gl_video_conf = {
         OPT_CHOICE("alpha", alpha_mode, 0,
                    ({"no", 0},
                     {"yes", 1},
-                    {"blend", 2})),
+                    {"blend", 2},
+                    {"blend-tiles", 3})),
         OPT_FLAG("rectangle-textures", use_rectangle, 0),
         OPT_COLOR("background", background, 0),
         OPT_FLAG("interpolation", interpolation, 0),
@@ -753,7 +752,7 @@ static void init_video(struct gl_video *p)
     mp_image_params_guess_csp(&p->image_params);
 
     int eq_caps = MP_CSP_EQ_CAPS_GAMMA;
-    if (p->is_yuv && p->image_params.colorspace != MP_CSP_BT_2020_C)
+    if (p->image_params.colorspace != MP_CSP_BT_2020_C)
         eq_caps |= MP_CSP_EQ_CAPS_COLORMATRIX;
     if (p->image_desc.flags & MP_IMGFLAG_XYZ)
         eq_caps |= MP_CSP_EQ_CAPS_BRIGHTNESS;
@@ -1081,14 +1080,16 @@ static void reinit_scaler(struct gl_video *p, struct scaler *scaler,
 
     gl->BindTexture(target, scaler->gl_lut);
 
-    float *weights = talloc_array(NULL, float, LOOKUP_TEXTURE_SIZE * size);
-    mp_compute_lut(scaler->kernel, LOOKUP_TEXTURE_SIZE, weights);
+    scaler->lut_size = 1 << p->opts.scaler_lut_size;
+
+    float *weights = talloc_array(NULL, float, scaler->lut_size * size);
+    mp_compute_lut(scaler->kernel, scaler->lut_size, weights);
 
     if (target == GL_TEXTURE_1D) {
-        gl->TexImage1D(target, 0, fmt->internal_format, LOOKUP_TEXTURE_SIZE,
+        gl->TexImage1D(target, 0, fmt->internal_format, scaler->lut_size,
                        0, fmt->format, GL_FLOAT, weights);
     } else {
-        gl->TexImage2D(target, 0, fmt->internal_format, width, LOOKUP_TEXTURE_SIZE,
+        gl->TexImage2D(target, 0, fmt->internal_format, width, scaler->lut_size,
                        0, fmt->format, GL_FLOAT, weights);
     }
 
@@ -1325,9 +1326,9 @@ static void pass_read_video(struct gl_video *p)
     struct gl_transform chromafix;
     pass_set_image_textures(p, &p->image, &chromafix);
 
-    int in_bits = p->image_desc.component_bits,
-        tx_bits = (in_bits + 7) & ~7;
-    float tex_mul = ((1 << tx_bits) - 1.0) / ((1 << in_bits) - 1.0);
+    float tex_mul = 1 / mp_get_csp_mul(p->image_params.colorspace,
+                                       p->image_desc.component_bits,
+                                       p->image_desc.component_full_bits);
 
     struct src_tex prescaled_tex;
     struct gl_transform offset = {{{0}}};
@@ -1463,7 +1464,7 @@ static void pass_convert_yuv(struct gl_video *p)
     struct mp_csp_params cparams = MP_CSP_PARAMS_DEFAULTS;
     cparams.gray = p->is_yuv && !p->is_packed_yuv && p->plane_count == 1;
     cparams.input_bits = p->image_desc.component_bits;
-    cparams.texture_bits = (cparams.input_bits + 7) & ~7;
+    cparams.texture_bits = p->image_desc.component_full_bits;
     mp_csp_set_image_params(&cparams, &p->image_params);
     mp_csp_copy_equalizer_values(&cparams, &p->video_eq);
     p->user_gamma = 1.0 / (cparams.gamma * p->opts.gamma);
@@ -1474,31 +1475,28 @@ static void pass_convert_yuv(struct gl_video *p)
         GLSLF("color = color.%s;\n", p->color_swizzle);
 
     // Pre-colormatrix input gamma correction
-    if (p->image_desc.flags & MP_IMGFLAG_XYZ) {
-        cparams.colorspace = MP_CSP_XYZ;
+    if (cparams.colorspace == MP_CSP_XYZ)
+        GLSL(color.rgb = pow(color.rgb, vec3(2.6));) // linear light
 
-        // Pre-colormatrix input gamma correction. Note that this results in
-        // linear light
-        GLSL(color.rgb = pow(color.rgb, vec3(2.6));)
-    }
-
-    // Something already took care of expansion
+    // Something already took care of expansion - disable it.
     if (p->use_normalized_range)
-        cparams.input_bits = cparams.texture_bits;
+        cparams.input_bits = cparams.texture_bits = 0;
 
-    // Conversion from Y'CbCr or other linear spaces to RGB
-    if (!p->is_rgb) {
-        struct mp_cmat m = {{{0}}};
-        if (p->image_desc.flags & MP_IMGFLAG_XYZ) {
-            struct mp_csp_primaries csp = mp_get_csp_primaries(p->image_params.primaries);
-            mp_get_xyz2rgb_coeffs(&cparams, csp, MP_INTENT_RELATIVE_COLORIMETRIC, &m);
-        } else {
-            mp_get_yuv2rgb_coeffs(&cparams, &m);
-        }
-        gl_sc_uniform_mat3(sc, "colormatrix", true, &m.m[0][0]);
-        gl_sc_uniform_vec3(sc, "colormatrix_c", m.c);
+    // Conversion to RGB. For RGB itself, this still applies e.g. brightness
+    // and contrast controls, or expansion of e.g. LSB-packed 10 bit data.
+    struct mp_cmat m = {{{0}}};
+    mp_get_csp_matrix(&cparams, &m);
+    gl_sc_uniform_mat3(sc, "colormatrix", true, &m.m[0][0]);
+    gl_sc_uniform_vec3(sc, "colormatrix_c", m.c);
 
-        GLSL(color.rgb = mat3(colormatrix) * color.rgb + colormatrix_c;)
+    GLSL(color.rgb = mat3(colormatrix) * color.rgb + colormatrix_c;)
+
+    if (!p->use_normalized_range && p->has_alpha) {
+        float tex_mul = 1 / mp_get_csp_mul(p->image_params.colorspace,
+                                           p->image_desc.component_bits,
+                                           p->image_desc.component_full_bits);
+        gl_sc_uniform_f(p->sc, "tex_mul_alpha", tex_mul);
+        GLSL(color.a *= tex_mul_alpha;)
     }
 
     if (p->image_params.colorspace == MP_CSP_BT_2020_C) {
@@ -1535,8 +1533,14 @@ static void pass_convert_yuv(struct gl_video *p)
 
     if (!p->has_alpha || p->opts.alpha_mode == 0) { // none
         GLSL(color.a = 1.0;)
-    } else if (p->opts.alpha_mode == 2) { // blend
+    } else if (p->opts.alpha_mode == 2) { // blend against black
         GLSL(color = vec4(color.rgb * color.a, 1.0);)
+    } else if (p->opts.alpha_mode == 3) { // blend against tiles
+        GLSL(bvec2 tile = lessThan(fract(gl_FragCoord.xy / 32.0), vec2(0.5));)
+        GLSL(vec3 background = vec3(tile.x == tile.y ? 1.0 : 0.75);)
+        GLSL(color.rgb = color.rgb * color.a + background * (1.0 - color.a);)
+    } else if (p->gl->fb_premultiplied) {
+        GLSL(color = vec4(color.rgb * color.a, color.a);)
     }
 }
 
@@ -1712,7 +1716,7 @@ static void pass_dither(struct gl_video *p)
     GL *gl = p->gl;
 
     // Assume 8 bits per component if unknown.
-    int dst_depth = p->depth_g ? p->depth_g : 8;
+    int dst_depth = gl->fb_g ? gl->fb_g : 8;
     if (p->opts.dither_depth > 0)
         dst_depth = p->opts.dither_depth;
 
@@ -1740,9 +1744,16 @@ static void pass_dither(struct gl_video *p)
                 p->last_dither_matrix_size = size;
             }
 
+            const struct fmt_entry *fmt = find_tex_format(gl, 2, 1);
             tex_size = size;
-            tex_iformat = gl_float16_formats[0].internal_format;
-            tex_format = gl_float16_formats[0].format;
+            // Prefer R16 texture since they provide higher precision.
+            if (fmt->internal_format) {
+                tex_iformat = fmt->internal_format;
+                tex_format = fmt->format;
+            } else {
+                tex_iformat = gl_float16_formats[0].internal_format;
+                tex_format = gl_float16_formats[0].format;
+            }
             tex_type = GL_FLOAT;
             tex_data = p->last_dither_matrix;
         } else {
@@ -2510,6 +2521,9 @@ static void init_gl(struct gl_video *p)
 
     debug_check_gl(p, "before init_gl");
 
+    MP_VERBOSE(p, "Reported display depth: R=%d, G=%d, B=%d\n",
+               gl->fb_r, gl->fb_g, gl->fb_b);
+
     gl->Disable(GL_DITHER);
 
     gl_vao_init(&p->vao, gl, sizeof(struct vertex), vertex_vao);
@@ -2695,10 +2709,6 @@ static bool init_format(int fmt, struct gl_video *init)
 
 supported:
 
-    // Stuff like IMGFMT_420AP10. Untested, most likely insane.
-    if (desc.num_planes == 4 && (desc.component_bits % 8) != 0)
-        return false;
-
     if (desc.component_bits > 8 && desc.component_bits < 16) {
         if (init->texture_16bit_depth < 16)
             return false;
@@ -2719,7 +2729,6 @@ supported:
     }
 
     init->is_yuv = desc.flags & MP_IMGFLAG_YUV;
-    init->is_rgb = desc.flags & MP_IMGFLAG_RGB;
     init->plane_count = desc.num_planes;
     init->image_desc = desc;
 
@@ -2745,12 +2754,6 @@ void gl_video_config(struct gl_video *p, struct mp_image_params *params)
     }
 
     gl_video_reset_surfaces(p);
-}
-
-void gl_video_set_output_depth(struct gl_video *p, int r, int g, int b)
-{
-    MP_VERBOSE(p, "Display depth: R=%d, G=%d, B=%d\n", r, g, b);
-    p->depth_g = g;
 }
 
 void gl_video_set_osd_source(struct gl_video *p, struct osd_state *osd)
