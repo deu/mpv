@@ -709,7 +709,7 @@ Video
 
     This option is disabled if the ``--no-keepaspect`` option is used.
 
-``--video-rotate=<0-360|no>``
+``--video-rotate=<0-359|no>``
     Rotate the video clockwise, in degrees. Currently supports 90° steps only.
     If ``no`` is given, the video is never rotated, even if the file has
     rotation metadata. (The rotation value is added to the rotation metadata,
@@ -2233,7 +2233,7 @@ Demuxer
     Encryption key the demuxer should use. This is the raw binary data of
     the key converted to a hexadecimal string.
 
-``--demuxer-mkv-subtitle-preroll``, ``--mkv-subtitle-preroll``
+``--demuxer-mkv-subtitle-preroll=<yes|index|no>``, ``--mkv-subtitle-preroll``
     Try harder to show embedded soft subtitles when seeking somewhere. Normally,
     it can happen that the subtitle at the seek target is not shown due to how
     some container file formats are designed. The subtitles appear only if
@@ -2265,7 +2265,11 @@ Demuxer
     overlap with a seek target. In these cases, mpv will reduce the amount
     of data read to a minimum. (Although it will still read *all* data between
     the cluster that contains the first wanted subtitle packet, and the seek
-    target.)
+    target.) If the ``index`` choice (which is the default) is specified, then
+    prerolling will be done only if this information is actually available. If
+    this method is used, the maximum amount of data to skip can be additionally
+    controlled by ``--demuxer-mkv-subtitle-preroll-secs-index`` (it still uses
+    the value of the option without ``-index`` if that is higher).
 
     See also ``--hr-seek-demuxer-offset`` option. This option can achieve a
     similar effect, but only if hr-seek is active. It works with any demuxer,
@@ -2275,6 +2279,9 @@ Demuxer
     ``--mkv-subtitle-preroll`` is a deprecated alias.
 
 ``--demuxer-mkv-subtitle-preroll-secs=<value>``
+    See ``--demuxer-mkv-subtitle-preroll``.
+
+``--demuxer-mkv-subtitle-preroll-secs-index=<value>``
     See ``--demuxer-mkv-subtitle-preroll``.
 
 ``--demuxer-mkv-probe-video-duration=<yes|no|full>``
