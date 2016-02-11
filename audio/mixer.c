@@ -27,7 +27,7 @@
 #include "audio/filter/af.h"
 #include "common/global.h"
 #include "common/msg.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "mixer.h"
 
 struct mixer {
@@ -399,4 +399,5 @@ void mixer_uninit_audio(struct mixer *mixer)
     }
     mixer->ao = NULL;
     mixer->af = NULL;
+    mixer->softvol = false;
 }

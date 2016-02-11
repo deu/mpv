@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -81,7 +81,7 @@ void sub_destroy(struct dec_sub *sub)
 struct dec_sub *sub_create(struct mpv_global *global, struct demuxer *demuxer,
                            struct sh_stream *sh)
 {
-    assert(demuxer && sh && sh->sub);
+    assert(demuxer && sh && sh->type == STREAM_SUB);
 
     struct mp_log *log = mp_log_new(NULL, global->log, "sub");
 
@@ -101,7 +101,7 @@ struct dec_sub *sub_create(struct mpv_global *global, struct demuxer *demuxer,
             .opts = sub->opts,
             .driver = driver,
             .demuxer = demuxer,
-            .sh = sh,
+            .codec = sh->codec,
         };
 
         if (sh->codec && sub->sd->driver->init(sub->sd) >= 0)
@@ -113,7 +113,7 @@ struct dec_sub *sub_create(struct mpv_global *global, struct demuxer *demuxer,
     }
 
     mp_err(log, "Could not find subtitle decoder for format '%s'.\n",
-           sh->codec ? sh->codec : "<unknown>");
+           sh->codec->codec);
     talloc_free(log);
     return NULL;
 }
@@ -165,7 +165,7 @@ bool sub_read_packets(struct dec_sub *sub, double video_pts)
         // reading.
         if (st <= 0) {
             r = st < 0 || (sub->last_pkt_pts != MP_NOPTS_VALUE &&
-                           sub->last_pkt_pts >= video_pts);
+                           sub->last_pkt_pts > video_pts);
             break;
         }
 

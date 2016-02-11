@@ -120,7 +120,7 @@ def build(ctx):
         ( "audio/filter/af_equalizer.c" ),
         ( "audio/filter/af_format.c" ),
         ( "audio/filter/af_lavcac3enc.c" ),
-        ( "audio/filter/af_lavfi.c",             "libavfilter" ),
+        ( "audio/filter/af_lavfi.c" ),
         ( "audio/filter/af_lavrresample.c" ),
         ( "audio/filter/af_pan.c" ),
         ( "audio/filter/af_rubberband.c",        "rubberband" ),
@@ -134,7 +134,6 @@ def build(ctx):
         ( "audio/out/ao_coreaudio_exclusive.c",  "coreaudio" ),
         ( "audio/out/ao_coreaudio_properties.c", "coreaudio" ),
         ( "audio/out/ao_coreaudio_utils.c",      "coreaudio" ),
-        ( "audio/out/ao_dsound.c",               "dsound" ),
         ( "audio/out/ao_jack.c",                 "jack" ),
         ( "audio/out/ao_lavc.c",                 "encoding" ),
         ( "audio/out/ao_null.c" ),
@@ -218,6 +217,7 @@ def build(ctx):
         ( "player/loadfile.c" ),
         ( "player/main.c" ),
         ( "player/misc.c" ),
+        ( "player/lavfi.c" ),
         ( "player/lua.c",                        "lua" ),
         ( "player/osd.c" ),
         ( "player/playloop.c" ),
@@ -299,20 +299,20 @@ def build(ctx):
         ( "video/filter/vf_expand.c" ),
         ( "video/filter/vf_flip.c" ),
         ( "video/filter/vf_format.c" ),
-        ( "video/filter/vf_gradfun.c",           "libavfilter"),
-        ( "video/filter/vf_lavfi.c",             "libavfilter"),
-        ( "video/filter/vf_mirror.c",            "libavfilter"),
+        ( "video/filter/vf_gradfun.c" ),
+        ( "video/filter/vf_lavfi.c" ),
+        ( "video/filter/vf_mirror.c" ),
         ( "video/filter/vf_noformat.c" ),
-        ( "video/filter/vf_pullup.c",            "libavfilter"),
-        ( "video/filter/vf_rotate.c",            "libavfilter"),
+        ( "video/filter/vf_pullup.c" ),
+        ( "video/filter/vf_rotate.c" ),
         ( "video/filter/vf_scale.c" ),
-        ( "video/filter/vf_stereo3d.c",          "libavfilter"),
+        ( "video/filter/vf_stereo3d.c" ),
         ( "video/filter/vf_sub.c" ),
         ( "video/filter/vf_vapoursynth.c",       "vapoursynth-core" ),
         ( "video/filter/vf_vavpp.c",             "vaapi"),
         ( "video/filter/vf_vdpaupp.c",           "vdpau" ),
         ( "video/filter/vf_vdpaurb.c",           "vdpau" ),
-        ( "video/filter/vf_yadif.c",             "libavfilter"),
+        ( "video/filter/vf_yadif.c" ),
         ( "video/out/aspect.c" ),
         ( "video/out/bitmap_packer.c" ),
         ( "video/out/cocoa/video_view.m",        "cocoa" ),
@@ -393,8 +393,10 @@ def build(ctx):
         ( "osdep/glob-win.c",                    "glob-win32-replacement" ),
         ( "osdep/w32_keyboard.c",                "os-win32" ),
         ( "osdep/w32_keyboard.c",                "os-cygwin" ),
+        ( "osdep/windows_utils.c",               "win32" ),
         ( "osdep/mpv.rc",                        "win32-executable" ),
         ( "osdep/win32/pthread.c",               "win32-internal-pthreads"),
+        ( "osdep/android/strnlen.c",             "android"),
 
         ## tree_allocator
         "ta/ta.c", "ta/ta_talloc.c", "ta/ta_utils.c"
@@ -444,7 +446,7 @@ def build(ctx):
             features     = "c cprogram",
             install_path = ctx.env.BINDIR
         )
-        for f in ['example.conf', 'input.conf', 'mplayer-input.conf', \
+        for f in ['mpv.conf', 'input.conf', 'mplayer-input.conf', \
                   'restore-old-bindings.conf']:
             ctx.install_as(os.path.join(ctx.env.DOCDIR, f),
                            os.path.join('etc/', f))
@@ -489,17 +491,24 @@ def build(ctx):
                 features += "cshlib syms"
             else:
                 features += "cstlib"
-            ctx(
-                target       = "mpv",
-                source       = ctx.filtered_sources(sources),
-                use          = ctx.dependencies_use(),
-                includes     = [ctx.bldnode.abspath(), ctx.srcnode.abspath()] + \
-                                ctx.dependencies_includes(),
-                features     = features,
-                export_symbols_def = "libmpv/mpv.def",
-                install_path = ctx.env.LIBDIR,
-                vnum         = libversion,
-            )
+
+            libmpv_kwargs = {
+                "target": "mpv",
+                "source":   ctx.filtered_sources(sources),
+                "use":      ctx.dependencies_use(),
+                "includes": [ctx.bldnode.abspath(), ctx.srcnode.abspath()] + \
+                             ctx.dependencies_includes(),
+                "features": features,
+                "export_symbols_def": "libmpv/mpv.def",
+                "install_path": ctx.env.LIBDIR,
+            }
+
+            if not ctx.dependency_satisfied('android'):
+                # for all other configurations we want SONAME to be used
+                libmpv_kwargs["vnum"] = libversion
+
+            ctx(**libmpv_kwargs)
+
         if build_shared:
             _build_libmpv(True)
         if build_static:

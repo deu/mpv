@@ -29,7 +29,7 @@
 
 #include "config.h"
 #include "options/options.h"
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/msg.h"
 #include "common/global.h"
 #include "osdep/threads.h"
@@ -160,6 +160,10 @@ struct demux_stream {
     int64_t last_pos;
     struct demux_packet *head;
     struct demux_packet *tail;
+
+    // for closed captions (demuxer_feed_caption)
+    struct sh_stream *cc;
+
 };
 
 // Return "a", or if that is NOPTS, return "def".
@@ -214,13 +218,9 @@ struct sh_stream *demux_alloc_sh_stream(enum stream_type type)
         .index = -1,
         .ff_index = -1,     // may be overwritten by demuxer
         .demuxer_id = -1,   // ... same
+        .codec = talloc_zero(sh, struct mp_codec_params),
     };
-    switch (sh->type) {
-    case STREAM_VIDEO: sh->video = talloc_zero(sh, struct sh_video); break;
-    case STREAM_AUDIO: sh->audio = talloc_zero(sh, struct sh_audio); break;
-    case STREAM_SUB:   sh->sub = talloc_zero(sh, struct sh_sub); break;
-    }
-
+    sh->codec->type = type;
     return sh;
 }
 
@@ -240,6 +240,9 @@ void demux_add_sh_stream(struct demuxer *demuxer, struct sh_stream *sh)
         .type = sh->type,
         .selected = in->autoselect,
     };
+
+    if (!sh->codec->codec)
+        sh->codec->codec = "";
 
     sh->index = in->num_streams;
     if (sh->ff_index < 0)
@@ -360,6 +363,27 @@ const char *stream_type_name(enum stream_type type)
     case STREAM_SUB:    return "sub";
     default:            return "unknown";
     }
+}
+
+void demuxer_feed_caption(struct sh_stream *stream, demux_packet_t *dp)
+{
+    struct demuxer *demuxer = stream->ds->in->d_thread;
+    struct sh_stream *sh = stream->ds->cc;
+
+    if (!sh) {
+        sh = demux_alloc_sh_stream(STREAM_SUB);
+        if (!sh) {
+            talloc_free(dp);
+            return;
+        }
+        sh->codec->codec = "eia_608";
+        stream->ds->cc = sh;
+        demux_add_sh_stream(demuxer, sh);
+    }
+
+    dp->pts = MP_ADD_PTS(dp->pts, -stream->ds->in->ts_offset);
+    dp->dts = MP_ADD_PTS(dp->dts, -stream->ds->in->ts_offset);
+    demux_add_packet(sh, dp);
 }
 
 void demux_add_packet(struct sh_stream *stream, demux_packet_t *dp)
@@ -559,10 +583,17 @@ static void execute_trackswitch(struct demux_internal *in)
 {
     in->tracks_switched = false;
 
+    bool any_selected = false;
+    for (int n = 0; n < in->num_streams; n++)
+        any_selected |= in->streams[n]->ds->selected;
+
     pthread_mutex_unlock(&in->lock);
 
     if (in->d_thread->desc->control)
         in->d_thread->desc->control(in->d_thread, DEMUXER_CTRL_SWITCHED_TRACKS, 0);
+
+    stream_control(in->d_thread->stream, STREAM_CTRL_SET_READAHEAD,
+                   &(int){any_selected});
 
     pthread_mutex_lock(&in->lock);
 
@@ -668,23 +699,6 @@ static struct demux_packet *dequeue_packet(struct demux_stream *ds)
     return pkt;
 }
 
-// Read a packet from the given stream. The returned packet belongs to the
-// caller, who has to free it with talloc_free(). Might block. Returns NULL
-// on EOF.
-struct demux_packet *demux_read_packet(struct sh_stream *sh)
-{
-    struct demux_stream *ds = sh ? sh->ds : NULL;
-    struct demux_packet *pkt = NULL;
-    if (ds) {
-        pthread_mutex_lock(&ds->in->lock);
-        ds_get_packets(ds);
-        pkt = dequeue_packet(ds);
-        pthread_cond_signal(&ds->in->wakeup); // possibly read more
-        pthread_mutex_unlock(&ds->in->lock);
-    }
-    return pkt;
-}
-
 // Sparse packets (Subtitles) interleaved with other non-sparse packets (video,
 // audio) should never be read actively, meaning the demuxer thread does not
 // try to exceed default readahead in order to find a new packet.
@@ -698,6 +712,24 @@ static bool use_lazy_subtitle_reading(struct demux_stream *ds)
             return true;
     }
     return false;
+}
+
+// Read a packet from the given stream. The returned packet belongs to the
+// caller, who has to free it with talloc_free(). Might block. Returns NULL
+// on EOF.
+struct demux_packet *demux_read_packet(struct sh_stream *sh)
+{
+    struct demux_stream *ds = sh ? sh->ds : NULL;
+    struct demux_packet *pkt = NULL;
+    if (ds) {
+        pthread_mutex_lock(&ds->in->lock);
+        if (!use_lazy_subtitle_reading(ds))
+            ds_get_packets(ds);
+        pkt = dequeue_packet(ds);
+        pthread_cond_signal(&ds->in->wakeup); // possibly read more
+        pthread_mutex_unlock(&ds->in->lock);
+    }
+    return pkt;
 }
 
 // Poll the demuxer queue, and if there's a packet, return it. Otherwise, just
@@ -736,22 +768,6 @@ int demux_read_packet_async(struct sh_stream *sh, struct demux_packet **out_pkt)
         }
     }
     return r;
-}
-
-// Return the pts of the next packet that demux_read_packet() would return.
-// Might block. Sometimes used to force a packet read, without removing any
-// packets from the queue.
-double demux_get_next_pts(struct sh_stream *sh)
-{
-    double res = MP_NOPTS_VALUE;
-    if (sh) {
-        pthread_mutex_lock(&sh->ds->in->lock);
-        ds_get_packets(sh->ds);
-        if (sh->ds->head)
-            res = MP_ADD_PTS(sh->ds->head->pts, sh->ds->in->ts_offset);
-        pthread_mutex_unlock(&sh->ds->in->lock);
-    }
-    return res;
 }
 
 // Return whether a packet is queued. Never blocks, never forces any reads.
@@ -871,11 +887,11 @@ static void apply_replaygain(demuxer_t *demuxer, struct replaygain_data *rg)
     struct demux_internal *in = demuxer->in;
     for (int n = 0; n < in->num_streams; n++) {
         struct sh_stream *sh = in->streams[n];
-        if (sh->audio && !sh->audio->replaygain_data) {
+        if (sh->type == STREAM_AUDIO && !sh->codec->replaygain_data) {
             MP_VERBOSE(demuxer, "Replaygain: Track=%f/%f Album=%f/%f\n",
                        rg->track_gain, rg->track_peak,
                        rg->album_gain, rg->album_peak);
-            sh->audio->replaygain_data = talloc_memdup(in, rg, sizeof(*rg));
+            sh->codec->replaygain_data = talloc_memdup(in, rg, sizeof(*rg));
         }
     }
 }
@@ -1093,6 +1109,7 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         demux_init_cache(demuxer);
         demux_changed(in->d_thread, DEMUX_EVENT_ALL);
         demux_update(demuxer);
+        stream_control(demuxer->stream, STREAM_CTRL_SET_READAHEAD, &(int){false});
         return demuxer;
     }
 
@@ -1272,37 +1289,26 @@ struct sh_stream *demuxer_stream_by_demuxer_id(struct demuxer *d,
     return NULL;
 }
 
-void demuxer_switch_track(struct demuxer *demuxer, enum stream_type type,
-                          struct sh_stream *stream)
-{
-    assert(!stream || stream->type == type);
-
-    int num = demux_get_num_stream(demuxer);
-    for (int n = 0; n < num; n++) {
-        struct sh_stream *cur = demux_get_stream(demuxer, n);
-        if (cur->type == type)
-            demuxer_select_track(demuxer, cur, cur == stream);
-    }
-}
-
 void demuxer_select_track(struct demuxer *demuxer, struct sh_stream *stream,
                           bool selected)
 {
     struct demux_internal *in = demuxer->in;
     pthread_mutex_lock(&in->lock);
-    bool update = false;
     // don't flush buffers if stream is already selected / unselected
     if (stream->ds->selected != selected) {
         stream->ds->selected = selected;
         stream->ds->active = false;
         ds_flush(stream->ds);
-        if (selected && in->refresh_seeks_enabled && in->threading)
+        in->tracks_switched = true;
+        if (selected && in->refresh_seeks_enabled)
             in->start_refresh_seek = true;
-        update = true;
+        if (in->threading) {
+            pthread_cond_signal(&in->wakeup);
+        } else {
+            execute_trackswitch(in);
+        }
     }
     pthread_mutex_unlock(&in->lock);
-    if (update)
-        demux_control(demuxer, DEMUXER_CTRL_SWITCHED_TRACKS, NULL);
 }
 
 void demux_set_stream_autoselect(struct demuxer *demuxer, bool autoselect)
@@ -1473,10 +1479,6 @@ static int cached_demux_control(struct demux_internal *in, int cmd, void *arg)
         c->res = r;
         return DEMUXER_CTRL_OK;
     }
-    case DEMUXER_CTRL_SWITCHED_TRACKS:
-        in->tracks_switched = true;
-        pthread_cond_signal(&in->wakeup);
-        return DEMUXER_CTRL_OK;
     case DEMUXER_CTRL_GET_BITRATE_STATS: {
         double *rates = arg;
         for (int n = 0; n < STREAM_TYPE_COUNT; n++)

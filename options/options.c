@@ -227,6 +227,8 @@ const m_option_t mp_opts[] = {
     OPT_STRINGLIST("slang", stream_lang[STREAM_SUB], 0),
     OPT_STRINGLIST("achans", stream_achans, 0),
 
+    OPT_STRING("lavfi-complex", lavfi_complex, 0),
+
     OPT_CHOICE("audio-display", audio_display, 0,
                ({"no", 0}, {"attachment", 1})),
 
@@ -275,6 +277,7 @@ const m_option_t mp_opts[] = {
     OPT_INTRANGE("audio-samplerate", force_srate, 0, 1000, 16*48000),
     OPT_CHMAP("audio-channels", audio_output_channels, CONF_MIN, .min = 0),
     OPT_AUDIOFORMAT("audio-format", audio_output_format, 0),
+    OPT_FLAG("audio-normalize-downmix", audio_normalize, 0),
     OPT_DOUBLE("speed", playback_speed, M_OPT_RANGE | M_OPT_FIXED,
                .min = 0.01, .max = 100.0),
 
@@ -334,6 +337,7 @@ const m_option_t mp_opts[] = {
     OPT_STRING_APPEND_LIST("sub-file", sub_name, M_OPT_FILE),
     OPT_PATHLIST("sub-paths", sub_paths, 0),
     OPT_PATHLIST("audio-file-paths", audiofile_paths, 0),
+    OPT_STRING_APPEND_LIST("external-file", external_files, M_OPT_FILE),
     OPT_STRING("sub-codepage", sub_cp, 0),
     OPT_FLOAT("sub-delay", sub_delay, 0),
     OPT_FLOAT("sub-fps", sub_fps, 0),
@@ -680,7 +684,7 @@ const struct MPOpts mp_default_opts = {
     .use_terminal = 1,
     .msg_color = 1,
     .audio_driver_list = NULL,
-    .audio_decoders = "lavc:libdcadec,-spdif:*", // never select spdif by default
+    .audio_decoders = "-spdif:*", // never select spdif by default
     .video_decoders = NULL,
     .deinterlace = -1,
     .softvol = SOFTVOL_AUTO,
@@ -788,7 +792,7 @@ const struct MPOpts mp_default_opts = {
     .sub_visibility = 1,
     .sub_pos = 100,
     .sub_speed = 1.0,
-    .audio_output_channels = {0}, // auto
+    .audio_output_channels = MP_CHMAP_INIT_STEREO,
     .audio_output_format = 0,  // AF_FORMAT_UNKNOWN
     .playback_speed = 1.,
     .pitch_correction = 1,
@@ -820,13 +824,9 @@ const struct MPOpts mp_default_opts = {
 
     .mf_fps = 1.0,
 
-#if HAVE_RPI
-    .hwdec_api = -1,
-#endif
-
     .display_tags = (char **)(const char*[]){
         "Artist", "Album", "Album_Artist", "Comment", "Composer", "Genre",
-        "Performer", "Title", "Track", "icy-title",
+        "Performer", "Title", "Track", "icy-title", "service_name",
         NULL
     },
 };

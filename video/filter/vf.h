@@ -111,7 +111,6 @@ struct vf_chain {
     struct vf_instance *first, *last;
 
     struct mp_image_params input_params;
-    struct mp_image_params override_params; // input to first filter
     struct mp_image_params output_params;
     uint8_t allowed_output_formats[IMGFMT_END - IMGFMT_START];
 
@@ -145,12 +144,12 @@ enum vf_ctrl {
     /* Hack to make the OSD state object available to vf_sub which
      * access OSD/subtitle state outside of normal OSD draw time. */
     VFCTRL_INIT_OSD,
+    VFCTRL_COMMAND,
 };
 
 struct vf_chain *vf_new(struct mpv_global *global);
 void vf_destroy(struct vf_chain *c);
-int vf_reconfig(struct vf_chain *c, const struct mp_image_params *params,
-                const struct mp_image_params *override_params);
+int vf_reconfig(struct vf_chain *c, const struct mp_image_params *params);
 int vf_control_any(struct vf_chain *c, int cmd, void *arg);
 int vf_control_by_label(struct vf_chain *c, int cmd, void *arg, bstr label);
 int vf_filter_frame(struct vf_chain *c, struct mp_image *img);
@@ -165,6 +164,8 @@ int vf_append_filter_list(struct vf_chain *c, struct m_obj_settings *list);
 struct vf_instance *vf_find_by_label(struct vf_chain *c, const char *label);
 void vf_print_filter_chain(struct vf_chain *c, int msglevel,
                            struct vf_instance *vf);
+
+int vf_send_command(struct vf_chain *c, char *label, char *cmd, char *arg);
 
 // Filter internal API
 struct mp_image *vf_alloc_out_image(struct vf_instance *vf);

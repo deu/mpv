@@ -551,7 +551,7 @@ Video
         filters all frames, but doesn't render them on the VO. It tries to query
         the display FPS (X11 only, not correct on multi-monitor systems), or
         assumes infinite display FPS if that fails. Drops are indicated in
-        the terminal status line as ``D:`` field. If the decoder is too slow,
+        the terminal status line as ``Dropped:`` field. If the decoder is too slow,
         in theory all frames would have to be dropped (because all frames are
         too late) - to avoid this, frame dropping stops if the effective
         framerate is below 10 FPS.
@@ -572,9 +572,13 @@ Video
 
 ``--display-fps=<fps>``
     Set the display FPS used with the ``--video-sync=display-*`` modes. By
-    default, a detected value is used (X11 only, not correct on multi-monitor
-    systems). Keep in mind that setting an incorrect value (even if slightly
-    incorrect) can ruin video playback.
+    default, a detected value is used. Keep in mind that setting an incorrect
+    value (even if slightly incorrect) can ruin video playback. On multi-monitor
+    systems, there is a chance that the detected value is from the wrong
+    monitor.
+
+    Set this option only if you have reason to believe the automatically
+    determined value is wrong.
 
 ``--hwdec=<api>``
     Specify the hardware video decoding API that should be used if possible.
@@ -987,7 +991,7 @@ Audio
 
         There is not much reason to use this. HDMI supports uncompressed
         multichannel PCM, and mpv supports lossless DTS-HD decoding via
-        FFmpeg's libdcadec wrapper.
+        FFmpeg's new DCA decoder (based on libdcadec).
 
 ``--ad=<[+|-]family1:(*|decoder1),[+|-]family2:(*|decoder2),...[-]>``
     Specify a priority list of audio decoders to be used, according to their
@@ -1101,8 +1105,8 @@ Audio
         This and enabling passthrough via ``--ad`` are deprecated in favor of
         using ``--audio-spdif=dts-hd``.
 
-``--audio-channels=<number|layout>``
-    Request a channel layout for audio output (default: auto). This  will ask
+``--audio-channels=<auto|number|layout>``
+    Request a channel layout for audio output (default: stereo). This  will ask
     the AO to open a device with the given channel layout. It's up to the AO
     to accept this layout, or to pick a fallback or to error out if the
     requested layout is not supported.
@@ -1115,9 +1119,10 @@ Audio
     lists speaker names, which can be used to express arbitrary channel
     layouts (e.g. ``fl-fr-lfe`` is 2.1).
 
-    The default is ``--audio-channels=auto``, which tries to play audio using
-    the input file's channel layout. (Or more precisely, the output of the
-    audio filter chain.) (``empty`` is an accepted obsolete alias for ``auto``.)
+    ``--audio-channels=auto`` tries to play audio using the input file's
+    channel layout. There is no guarantee that the audio API handles this
+    correctly. See the HDMI warning below.
+    (``empty`` is an accepted obsolete alias for ``auto``.)
 
     This will also request the channel layout from the decoder. If the decoder
     does not support the layout, it will fall back to its native channel layout.
@@ -1135,6 +1140,16 @@ Audio
         the receiver does not support them. If a receiver gets an unsupported
         channel layout, random things can happen, such as dropping the
         additional channels, or adding noise.
+
+``--audio-normalize-downmix=<yes|no>``
+    Enable/disable normalization if surround audio is downmixed to stereo
+    (default: no). If this is disabled, downmix can cause clipping. If it's
+    enabled, the output might be too silent. It depends on the source audio.
+
+    Technically, this changes the ``normalize`` suboption of the
+    ``lavrresample`` audio filter, which performs the downmixing.
+
+    If downmix happens outside of mpv for some reason, this has no effect.
 
 ``--audio-display=<no|attachment>``
     Setting this option to ``attachment`` (default) will display image
@@ -1256,6 +1271,14 @@ Audio
 
 Subtitles
 ---------
+
+.. note::
+
+    Changing styling and position does not work with all subtitles. Image-based
+    subtitles (DVD, Bluray/PGS, DVB) can not changed for fundamental reasons.
+    Subtitles in ASS format are normally not changed intentionally, but
+    overriding them can be controlled with ``--ass-style-override``.
+
 
 ``--no-sub``
     Do not select any subtitle when the file is loaded.
@@ -1385,7 +1408,7 @@ Subtitles
     .. admonition:: Warning
 
         Enabling hinting can lead to mispositioned text (in situations it's
-        supposed to match up with video background), or reduce the smoothness
+        supposed to match up video background), or reduce the smoothness
         of animations with some badly authored ASS scripts. It is recommended
         to not use this option, unless really needed.
 
@@ -3374,8 +3397,13 @@ DVB
 
 ``--dvbin-full-transponder=<yes|no>``
     Apply no filters on program PIDs, only tune to frequency and pass full
-    transponder to demuxer. This is useful to record multiple programs
-    on a single transponder, or to work around issues in the ``channels.conf``.
+    transponder to demuxer.
+    The player frontend selects the streams from the full TS in this case,
+    so the program which is shown initially may not match the chosen channel.
+    Switching between the programs is possible by cycling the ``program``
+    property.
+    This is useful to record multiple programs on a single transponder,
+    or to work around issues in the ``channels.conf``.
     It is also recommended to use this for channels which switch PIDs
     on-the-fly, e.g. for regional news.
 
@@ -3537,3 +3565,52 @@ Miscellaneous
     Force the contents of the ``media-title`` property to this value. Useful
     for scripts which want to set a title, without overriding the user's
     setting in ``--title``.
+
+``--external-file=<filename>``
+    Add all tracks from the given file. Unlike ``--sub-file`` and
+    ``--audio-file``, this includes all tracks, and does not cause default
+    stream selection over the "proper" file.
+
+``--lavfi-complex=<string>``
+    Set a "complex" libavfilter filter, which means a single filter graph can
+    take input from multiple source audio and video tracks. The graph can result
+    in a single audio or video output (or both).
+
+    Currently, the filter graph labels are used to select the participating
+    input tracks and audio/video output. The following rules apply:
+
+    - A label of the form ``aidN`` selects audio track N as input (e.g.
+      ``aid1``).
+    - A label of the form ``vidN`` selects video track N as input.
+    - A label named ``ao`` will be connected to the audio input.
+    - A label named ``vo`` will be connected to the video output.
+
+    Each label can be used only once. If you want to use e.g. an audio stream
+    for multiple filters, you need to use the ``asplit`` filter. Multiple
+    video or audio outputs are not possible, but you can use filters to merge
+    them into one.
+
+    The complex filter can not be changed yet during playback. It's also not
+    possible to change the tracks connected to the filter at runtime. Other
+    tracks, as long as they're not connected to the filter, and the
+    corresponding output is not connected to the filter, can still be freely
+    changed.
+
+    .. admonition:: Examples
+
+        - ``--lavfi-complex='[aid1] asplit [ao] [t] ; [t] aphasemeter [vo]'``
+          Play audio track 1, and visualize it as video using the ``aphasemeter``
+          filter.
+        - ``--lavfi-complex='[aid1] [aid2] amix [ao]'``
+          Play audio track 1 and 2 at the same time.
+        - ``--lavfi-complex='[vid1] [vid2] vstack [vo]'``
+          Stack video track 1 and 2 and play them at the same time. Note that
+          both tracks need to have the same width, or filter initialization
+          will fail (you can add ``scale`` filters before the ``vstack`` filter
+          to fix the size).
+        - ``--lavfi-complex='[aid1] asplit [ao] [t] ; [t] aphasemeter [t2] ; [vid1] [t2] overlay [vo]'``
+          Play audio track 1, and overlay its visualization over video track 1.
+
+    See the Ffmpeg libavfilter documentation for details on the filter.
+
+

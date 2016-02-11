@@ -222,7 +222,10 @@ PREVIOUS and NEXT
 support.)
 
 h and k
-    Select previous/next channel.
+    Select previous/next tv-channel.
+
+H and K
+    Select previous/next dvb-channel.
 
 Mouse Control
 -------------
@@ -378,6 +381,45 @@ file stops playing. If option ``--c`` is changed during playback of
 ``file2.mkv``, it is reset when advancing to ``file3.mkv``. This only affects
 file-local options. The option ``--a`` is never reset here.
 
+
+Playing DVDs
+------------
+
+DVDs can be played with the ``dvd://[title]`` syntax. The optional
+title specifier is a number which selects between separate video
+streams on the DVD. If no title is given (``dvd://``) then the longest
+title is selected automatically by the library. This is usually what
+you want. mpv does not support DVD menus.
+
+DVDs which have been copied on to a hard drive or other mounted
+filesystem (by e.g. the ``dvdbackup`` tool) are accommodated by
+specifying the path to the local copy: ``--dvd-device=PATH``.
+Alternatively, running ``mpv PATH`` should auto-detect a DVD directory
+tree and play the longest title.
+
+.. note::
+
+    mpv uses a different default DVD library than MPlayer. MPlayer
+    uses libdvdread by default, and mpv uses libdvdnav by default.
+    Both libraries are developed in parallel, but libdvdnav is
+    intended to support more sophisticated DVD features such as menus
+    and multi-angle playback. mpv uses libdvdnav for files specified
+    as either ``dvd://...`` or ``dvdnav://...``. To use libdvdread,
+    which will produce behavior more like MPlayer, specify
+    ``dvdread://...`` instead. Some users have experienced problems
+    when using libdvdnav, in which playback gets stuck in a DVD menu
+    stream. These problems are reported to go away when auto-selecting
+    the title (``dvd://`` rather than ``dvd://1``) or when using
+    libdvdread (e.g. ``dvdread://0``).
+
+    DVDs use image-based subtitles. Image subtitles are implemented as
+    a bitmap video stream which can be superimposed over the main
+    movie. mpv's subtitle styling and positioning options and keyboard
+    shortcuts generally do not work with image-based subtitles.
+    Exceptions include options like ``--stretch-dvd-subs`` and 
+    ``--stretch-image-subs-to-screen``.
+
+
 CONFIGURATION FILES
 ===================
 
@@ -520,8 +562,9 @@ TAKING SCREENSHOTS
 
 Screenshots of the currently played file can be taken using the 'screenshot'
 input mode command, which is by default bound to the ``s`` key. Files named
-``shotNNNN.jpg`` will be saved in the working directory, using the first
-available number - no files will be overwritten.
+``mpv-shotNNNN.jpg`` will be saved in the working directory, using the first
+available number - no files will be overwritten. In pseudo-GUI mode, the
+screenshot will be saved somewhere else. See `PSEUDO GUI MODE`_.
 
 A screenshot will usually contain the unscaled video contents at the end of the
 video filter chain and subtitles. By default, ``S`` takes screenshots without
@@ -654,9 +697,8 @@ PROTOCOLS
     absolute path.
 
 ``fd://123``
-    Read data from the given UNIX FD (for example 123). This is similar to
-    piping data to stdin via ``-``, but can use an arbitrary file descriptor.
-    Will not work correctly on MS Windows.
+    Read data from the given file descriptor (for example 123). This is similar
+    to piping data to stdin via ``-``, but can use an arbitrary file descriptor.
 
 ``edl://[edl specification as in edl-mpv.rst]``
     Stitch together parts of multiple files and play them.
@@ -919,7 +961,7 @@ locations are different. They are generally located under ``%APPDATA%/mpv/``.
 For example, the path to mpv.conf is ``%APPDATA%/mpv/mpv.conf``, which maps to
 a system and user-specific path, for example
 
-    ``C:\users\USERNAME\Application Data\mpv\mpv.conf``
+    ``C:\users\USERNAME\AppData\Roaming\mpv\mpv.conf``
 
 You can find the exact path by running ``echo %APPDATA%\mpv\mpv.conf`` in cmd.exe.
 

@@ -9,7 +9,7 @@
 
 #include "config.h"
 
-#include "talloc.h"
+#include "mpv_talloc.h"
 #include "common/common.h"
 #include "misc/bstr.h"
 #include "common/msg.h"
@@ -355,7 +355,7 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     assert(!p->ctx->next_frame);
     p->ctx->next_frame = vo_frame_ref(frame);
     p->ctx->expected_flip_count = p->ctx->flip_count + 1;
-    p->ctx->redrawing = frame ? frame->redraw : false;
+    p->ctx->redrawing = frame->redraw || !frame->current;
     update(p);
     pthread_mutex_unlock(&p->ctx->lock);
 }

@@ -3,18 +3,18 @@
  *
  * Original author: Jonathan Yong <10walls@gmail.com>
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <math.h>
@@ -29,6 +29,7 @@
 #include "audio/format.h"
 #include "osdep/timer.h"
 #include "osdep/io.h"
+#include "osdep/strnlen.h"
 #include "ao_wasapi.h"
 
 #define MIXER_DEFAULT_LABEL L"mpv - video player"
@@ -104,18 +105,6 @@ static int special_subtype_to_format(const GUID *subtype) {
     return 0;
 }
 
-char *mp_GUID_to_str_buf(char *buf, size_t buf_size, const GUID *guid)
-{
-    snprintf(buf, buf_size,
-             "{%8.8x-%4.4x-%4.4x-%2.2x%2.2x-%2.2x%2.2x%2.2x%2.2x%2.2x%2.2x}",
-             (unsigned) guid->Data1, guid->Data2, guid->Data3,
-             guid->Data4[0], guid->Data4[1],
-             guid->Data4[2], guid->Data4[3],
-             guid->Data4[4], guid->Data4[5],
-             guid->Data4[6], guid->Data4[7]);
-    return buf;
-}
-
 char *mp_PKEY_to_str_buf(char *buf, size_t buf_size, const PROPERTYKEY *pkey)
 {
     buf = mp_GUID_to_str_buf(buf, buf_size, &pkey->fmtid);
@@ -125,65 +114,6 @@ char *mp_PKEY_to_str_buf(char *buf, size_t buf_size, const PROPERTYKEY *pkey)
     return buf;
 }
 
-static char *wasapi_explain_err(const HRESULT hr)
-{
-#define E(x) case x : return # x ;
-    switch (hr) {
-    E(S_OK)
-    E(S_FALSE)
-    E(E_FAIL)
-    E(E_OUTOFMEMORY)
-    E(E_POINTER)
-    E(E_HANDLE)
-    E(E_NOTIMPL)
-    E(E_INVALIDARG)
-    E(E_PROP_ID_UNSUPPORTED)
-    E(E_NOINTERFACE)
-    E(REGDB_E_IIDNOTREG)
-    E(CO_E_NOTINITIALIZED)
-    E(AUDCLNT_E_NOT_INITIALIZED)
-    E(AUDCLNT_E_ALREADY_INITIALIZED)
-    E(AUDCLNT_E_WRONG_ENDPOINT_TYPE)
-    E(AUDCLNT_E_DEVICE_INVALIDATED)
-    E(AUDCLNT_E_NOT_STOPPED)
-    E(AUDCLNT_E_BUFFER_TOO_LARGE)
-    E(AUDCLNT_E_OUT_OF_ORDER)
-    E(AUDCLNT_E_UNSUPPORTED_FORMAT)
-    E(AUDCLNT_E_INVALID_SIZE)
-    E(AUDCLNT_E_DEVICE_IN_USE)
-    E(AUDCLNT_E_BUFFER_OPERATION_PENDING)
-    E(AUDCLNT_E_THREAD_NOT_REGISTERED)
-    E(AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED)
-    E(AUDCLNT_E_ENDPOINT_CREATE_FAILED)
-    E(AUDCLNT_E_SERVICE_NOT_RUNNING)
-    E(AUDCLNT_E_EVENTHANDLE_NOT_EXPECTED)
-    E(AUDCLNT_E_EXCLUSIVE_MODE_ONLY)
-    E(AUDCLNT_E_BUFDURATION_PERIOD_NOT_EQUAL)
-    E(AUDCLNT_E_EVENTHANDLE_NOT_SET)
-    E(AUDCLNT_E_INCORRECT_BUFFER_SIZE)
-    E(AUDCLNT_E_BUFFER_SIZE_ERROR)
-    E(AUDCLNT_E_CPUUSAGE_EXCEEDED)
-    E(AUDCLNT_E_BUFFER_ERROR)
-    E(AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED)
-    E(AUDCLNT_E_INVALID_DEVICE_PERIOD)
-    E(AUDCLNT_E_INVALID_STREAM_FLAG)
-    E(AUDCLNT_E_ENDPOINT_OFFLOAD_NOT_CAPABLE)
-    E(AUDCLNT_E_RESOURCES_INVALIDATED)
-    E(AUDCLNT_S_BUFFER_EMPTY)
-    E(AUDCLNT_S_THREAD_ALREADY_REGISTERED)
-    E(AUDCLNT_S_POSITION_STALLED)
-    default:
-        return "<Unknown>";
-    }
-#undef E
-}
-
-char *mp_HRESULT_to_str_buf(char *buf, size_t buf_size, HRESULT hr)
-{
-    snprintf(buf, buf_size, "%s (0x%"PRIx32")",
-             wasapi_explain_err(hr), (uint32_t) hr);
-    return buf;
-}
 static void update_waveformat_datarate(WAVEFORMATEXTENSIBLE *wformat)
 {
     WAVEFORMATEX *wf = &wformat->Format;
@@ -820,7 +750,7 @@ struct enumerator {
     struct mp_log *log;
     IMMDeviceEnumerator *pEnumerator;
     IMMDeviceCollection *pDevices;
-    int count;
+    UINT count;
 };
 
 static void destroy_enumerator(struct enumerator *e)
@@ -855,7 +785,7 @@ exit_label:
     return NULL;
 }
 
-static struct device_desc *device_desc_for_num(struct enumerator *e, int i)
+static struct device_desc *device_desc_for_num(struct enumerator *e, UINT i)
 {
     IMMDevice *pDevice = NULL;
     HRESULT hr = IMMDeviceCollection_Item(e->pDevices, i, &pDevice);
@@ -889,7 +819,7 @@ void wasapi_list_devs(struct ao *ao, struct ao_device_list *list)
     if (!enumerator)
         return;
 
-    for (int i = 0; i < enumerator->count; i++) {
+    for (UINT i = 0; i < enumerator->count; i++) {
         struct device_desc *d = device_desc_for_num(enumerator, i);
         if (!d)
             goto exit_label;
@@ -929,20 +859,30 @@ static LPWSTR select_device(struct mp_log *l, struct device_desc *d)
                          (wcslen(d->deviceID) + 1) * sizeof(wchar_t));
 }
 
-LPWSTR find_deviceID(struct ao *ao)
+bstr wasapi_get_specified_device_string(struct ao *ao)
 {
-    LPWSTR deviceID = NULL;
     struct wasapi_state *state = ao->priv;
     bstr device = bstr_strip(bstr0(state->opt_device));
     if (!device.len)
         device = bstr_strip(bstr0(ao->device));
+    return device;
+}
 
+LPWSTR wasapi_find_deviceID(struct ao *ao)
+{
+    LPWSTR deviceID = NULL;
+    bstr device = wasapi_get_specified_device_string(ao);
     MP_DBG(ao, "Find device \'%.*s\'\n", BSTR_P(device));
 
     struct device_desc *d = NULL;
     struct enumerator *enumerator = create_enumerator(ao->log);
     if (!enumerator)
         goto exit_label;
+
+    if (!enumerator->count) {
+        MP_ERR(ao, "There are no playback devices available\n");
+        goto exit_label;
+    }
 
     if (!device.len) {
         MP_VERBOSE(ao, "No device specified. Selecting default.\n");
@@ -954,7 +894,7 @@ LPWSTR find_deviceID(struct ao *ao)
     // try selecting by number
     bstr rest;
     long long devno = bstrtoll(device, &rest, 10);
-    if (!rest.len && 0 <= devno && devno < enumerator->count) {
+    if (!rest.len && 0 <= devno && devno < (long long)enumerator->count) {
         MP_VERBOSE(ao, "Selecting device by number: #%lld\n", devno);
         d = device_desc_for_num(enumerator, devno);
         deviceID = select_device(ao->log, d);
@@ -963,7 +903,7 @@ LPWSTR find_deviceID(struct ao *ao)
 
     // select by id or name
     bstr_eatstart0(&device, "{0.0.0.00000000}.");
-    for (int i = 0; i < enumerator->count; i++) {
+    for (UINT i = 0; i < enumerator->count; i++) {
         d = device_desc_for_num(enumerator, i);
         if (!d)
             goto exit_label;
@@ -975,7 +915,7 @@ LPWSTR find_deviceID(struct ao *ao)
         }
 
         if (bstrcmp(device, bstr_strip(bstr0(d->name))) == 0) {
-            if (!state->deviceID) {
+            if (!deviceID) {
                 MP_VERBOSE(ao, "Selecting device by name: \'%.*s\'\n", BSTR_P(device));
                 deviceID = select_device(ao->log, d);
             } else {
