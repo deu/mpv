@@ -6,6 +6,7 @@ New branches:
 - `deu_achans` **[merged to master]**: -achans option ([commit](https://github.com/deuiore/mpv/commit/ac158b3ec8fc3fa88b2d5cde9775b4214903762e)); display number of audio channels in the OSD ([commit](https://github.com/deuiore/mpv/commit/9feb8758d0a9f3a839b97c6e698a35293cbd5563)).
 - `deu_orderedchapters` **[merged to master]**: Disable the recursive resolution of ordered chapters ([commit](https://github.com/deuiore/mpv/commit/17a7123b025632ccc436dae4448d618264330074)).
 
+Also disabled Travis CI.
 
 --------------
 
