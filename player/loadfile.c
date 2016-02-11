@@ -469,8 +469,8 @@ static bool compare_track(struct track *t1, struct track *t2,
     if (l1 != l2)
         return l1 > l2;
     if (t1->type == STREAM_AUDIO) {
-        int c1 = match_achans(achans, t1->stream->audio->channels.num);
-        int c2 = match_achans(achans, t2->stream->audio->channels.num);
+        int c1 = match_achans(achans, t1->stream->codec->channels.num);
+        int c2 = match_achans(achans, t2->stream->codec->channels.num);
         if (c1 != c2)
             return c1 > c2;
     }
