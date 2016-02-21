@@ -15,15 +15,18 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MP_WINDOWS_UTILS_H_
-#define MP_WINDOWS_UTILS_H_
+#ifndef MPV_DXVA2_H
+#define MPV_DXVA2_H
 
-#include <windows.h>
+#include <d3d9.h>
+#include <dxva2api.h>
 
-char *mp_GUID_to_str_buf(char *buf, size_t buf_size, const GUID *guid);
-#define mp_GUID_to_str(guid) mp_GUID_to_str_buf((char[40]){0}, 40, (guid))
-char *mp_HRESULT_to_str_buf(char *buf, size_t buf_size, HRESULT hr);
-#define mp_HRESULT_to_str(hr) mp_HRESULT_to_str_buf((char[256]){0}, 256, (hr))
-#define mp_LastError_to_str() mp_HRESULT_to_str(HRESULT_FROM_WIN32(GetLastError()))
+struct mp_image;
+struct mp_image_pool;
+
+LPDIRECT3DSURFACE9 d3d9_surface_in_mp_image(struct mp_image *mpi);
+
+struct mp_image *dxva2_new_ref(IDirectXVideoDecoder *decoder,
+                               LPDIRECT3DSURFACE9 d3d9_surface, int w, int h);
 
 #endif

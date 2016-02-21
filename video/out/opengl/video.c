@@ -1348,7 +1348,7 @@ static bool pass_prescale_luma(struct gl_video *p, float tex_mul,
 
     if (p->opts.deband) {
         // apply debanding before upscaling.
-        pass_sample_deband(p->sc, p->opts.deband_opts, 0, p->gl_target,
+        pass_sample_deband(p->sc, p->opts.deband_opts, 0, p->pass_tex[0].gl_target,
                            tex_mul, p->texture_w, p->texture_h, &p->lfg);
         finish_pass_fbo(p, &p->deband_fbo, p->texture_w,
                         p->texture_h, 0, 0);
@@ -1468,7 +1468,7 @@ static void pass_read_video(struct gl_video *p)
         }
 
         if (p->opts.deband) {
-            pass_sample_deband(p->sc, p->opts.deband_opts, 1, p->gl_target,
+            pass_sample_deband(p->sc, p->opts.deband_opts, 1, p->pass_tex[1].gl_target,
                                p->use_normalized_range ? 1.0 : tex_mul,
                                p->texture_w, p->texture_h, &p->lfg);
             GLSL(color.zw = vec2(0.0, 1.0);) // skip unused
@@ -1505,8 +1505,8 @@ static void pass_read_video(struct gl_video *p)
     GLSL(vec4 main;)
     GLSLF("{\n");
     if (!prescaled && p->opts.deband) {
-        pass_sample_deband(p->sc, p->opts.deband_opts, 0, p->gl_target, tex_mul,
-                           p->texture_w, p->texture_h, &p->lfg);
+        pass_sample_deband(p->sc, p->opts.deband_opts, 0, p->pass_tex[0].gl_target,
+                           tex_mul, p->texture_w, p->texture_h, &p->lfg);
         p->use_normalized_range = true;
     } else {
         if (!prescaled) {
@@ -2446,8 +2446,8 @@ static void gl_video_upload_image(struct gl_video *p, struct mp_image *mpi)
         if (pbo)
             gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, plane->gl_buffer);
         gl->ActiveTexture(GL_TEXTURE0 + n);
-        gl->BindTexture(p->gl_target, plane->gl_texture);
-        glUploadTex(gl, p->gl_target, plane->gl_format, plane->gl_type,
+        gl->BindTexture(plane->gl_target, plane->gl_texture);
+        glUploadTex(gl, plane->gl_target, plane->gl_format, plane->gl_type,
                     mpi->planes[n], mpi->stride[n], 0, 0, plane->w, plane->h, 0);
     }
     gl->ActiveTexture(GL_TEXTURE0);

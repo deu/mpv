@@ -124,6 +124,7 @@ extern const struct vd_lavc_hwdec mp_vd_lavc_vdpau;
 extern const struct vd_lavc_hwdec mp_vd_lavc_videotoolbox;
 extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi;
 extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy;
+extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_rpi;
 
@@ -142,6 +143,7 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
     &mp_vd_lavc_vaapi_copy,
 #endif
 #if HAVE_DXVA2_HWACCEL
+    &mp_vd_lavc_dxva2,
     &mp_vd_lavc_dxva2_copy,
 #endif
     NULL
@@ -359,8 +361,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     vd_ffmpeg_ctx *ctx = vd->priv;
     struct vd_lavc_params *lavc_param = vd->opts->vd_lavc_params;
     bool mp_rawvideo = false;
-    struct sh_stream *sh = vd->header;
-    struct mp_codec_params *c = sh->codec;
+    struct mp_codec_params *c = vd->codec;
 
     assert(!ctx->avctx);
 
@@ -522,8 +523,8 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
         .gamma = avcol_trc_to_mp_csp_trc(ctx->avctx->color_trc),
         .chroma_location =
             avchroma_location_to_mp(ctx->avctx->chroma_sample_location),
-        .rotate = vd->header->codec->rotate,
-        .stereo_in = vd->header->codec->stereo_mode,
+        .rotate = vd->codec->rotate,
+        .stereo_in = vd->codec->stereo_mode,
     };
 
     if (opts->video_rotate < 0) {
@@ -599,7 +600,7 @@ static int get_buffer2_hwdec(AVCodecContext *avctx, AVFrame *pic, int flags)
     vd_ffmpeg_ctx *ctx = vd->priv;
 
     int imgfmt = pixfmt2imgfmt(pic->format);
-    if (!IMGFMT_IS_HWACCEL(imgfmt) || !ctx->hwdec)
+    if (!ctx->hwdec || ctx->hwdec_fmt != imgfmt)
         ctx->hwdec_failed = true;
 
     /* Hardware decoding failed, and we will trigger a proper fallback later
@@ -699,6 +700,11 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
     if (ctx->hwdec && ctx->hwdec_failed) {
         av_frame_unref(ctx->pic);
         return;
+    }
+
+    if (packet) {
+        // always fully consumed
+        packet->len = 0;
     }
 
     // Skipped frame, or delayed output due to multithreaded decoding.

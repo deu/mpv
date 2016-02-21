@@ -325,6 +325,7 @@ int init_video_decoder(struct MPContext *mpctx, struct track *track)
     d_video->log = mp_log_new(d_video, mpctx->log, "!vd");
     d_video->opts = mpctx->opts;
     d_video->header = track->stream;
+    d_video->codec = track->stream->codec;
     d_video->fps = d_video->header->codec->fps;
     if (mpctx->vo_chain)
         d_video->hwdec_info = mpctx->vo_chain->hwdec_info;
@@ -337,7 +338,7 @@ int init_video_decoder(struct MPContext *mpctx, struct track *track)
         MP_INFO(mpctx, "Use --no-correct-pts to force FPS based timing.\n");
     }
 
-    if (!video_init_best_codec(d_video, d_video->opts->video_decoders))
+    if (!video_init_best_codec(d_video))
         goto err_out;
 
     return 1;
