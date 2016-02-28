@@ -32,7 +32,7 @@ void sampler_prelude(struct gl_shader_cache *sc, int tex_num)
     GLSLF("#define tex texture%d\n", tex_num);
     GLSLF("vec2 pos = texcoord%d;\n", tex_num);
     GLSLF("vec2 size = texture_size%d;\n", tex_num);
-    GLSLF("vec2 pt = vec2(1.0) / size;\n");
+    GLSLF("vec2 pt = pixel_size%d;\n", tex_num);
 }
 
 static void pass_sample_separated_get_weights(struct gl_shader_cache *sc,
@@ -73,7 +73,7 @@ void pass_sample_separated_gen(struct gl_shader_cache *sc, struct scaler *scaler
     int N = scaler->kernel->size;
     bool use_ar = scaler->conf.antiring > 0;
     bool planar = d_x == 0 && d_y == 0;
-    GLSL(vec4 color = vec4(0.0);)
+    GLSL(color = vec4(0.0);)
     GLSLF("{\n");
     if (!planar) {
         GLSLF("vec2 dir = vec2(%d.0, %d.0);\n", d_x, d_y);
@@ -111,7 +111,7 @@ void pass_sample_polar(struct gl_shader_cache *sc, struct scaler *scaler)
     double radius = scaler->kernel->f.radius;
     int bound = (int)ceil(radius);
     bool use_ar = scaler->conf.antiring > 0;
-    GLSL(vec4 color = vec4(0.0);)
+    GLSL(color = vec4(0.0);)
     GLSLF("{\n");
     GLSL(vec2 fcoord = fract(pos * size - vec2(0.5));)
     GLSL(vec2 base = pos - fcoord * pt;)
@@ -182,7 +182,6 @@ static void bicubic_calcweights(struct gl_shader_cache *sc, const char *t, const
 
 void pass_sample_bicubic_fast(struct gl_shader_cache *sc)
 {
-    GLSL(vec4 color;)
     GLSLF("{\n");
     GLSL(vec2 fcoord = fract(pos * size + vec2(0.5, 0.5));)
     bicubic_calcweights(sc, "parmx", "fcoord.x");
@@ -206,7 +205,6 @@ void pass_sample_bicubic_fast(struct gl_shader_cache *sc)
 void pass_sample_oversample(struct gl_shader_cache *sc, struct scaler *scaler,
                                    int w, int h)
 {
-    GLSL(vec4 color;)
     GLSLF("{\n");
     GLSL(vec2 pos = pos + vec2(0.5) * pt;) // round to nearest
     GLSL(vec2 fcoord = fract(pos * size - vec2(0.5));)
@@ -350,24 +348,23 @@ const struct m_sub_options deband_conf = {
 
 // Stochastically sample a debanded result from a given texture
 void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
-                        int tex_num, GLenum tex_target, float tex_mul,
-                        float img_w, float img_h, AVLFG *lfg)
+                        int tex_num, GLenum tex_target, float tex_mul, AVLFG *lfg)
 {
     // Set up common variables and initialize the PRNG
     GLSLF("// debanding (tex %d)\n", tex_num);
+    GLSLF("{\n");
     sampler_prelude(sc, tex_num);
     prng_init(sc, lfg);
 
     // Helper: Compute a stochastic approximation of the avg color around a
     // pixel
-    GLSLHF("vec4 average(%s tex, vec2 pos, float range, inout float h) {",
+    GLSLHF("vec4 average(%s tex, vec2 pos, vec2 pt, float range, inout float h) {",
            mp_sampler_type(tex_target));
         // Compute a random rangle and distance
         GLSLH(float dist = rand(h) * range;     h = permute(h);)
         GLSLH(float dir  = rand(h) * 6.2831853; h = permute(h);)
 
-        bool r = tex_target == GL_TEXTURE_RECTANGLE;
-        GLSLHF("vec2 pt = dist / vec2(%f, %f);\n", r ? 1 : img_w, r ? 1 : img_h);
+        GLSLHF("pt *= dist;\n");
         GLSLH(vec2 o = vec2(cos(dir), sin(dir));)
 
         // Sample at quarter-turn intervals around the source pixel
@@ -382,12 +379,12 @@ void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
     GLSLH(})
 
     // Sample the source pixel
-    GLSLF("vec4 color = %f * texture(tex, pos);\n", tex_mul);
+    GLSLF("color = %f * texture(tex, pos);\n", tex_mul);
     GLSLF("vec4 avg, diff;\n");
     for (int i = 1; i <= opts->iterations; i++) {
         // Sample the average pixel and use it instead of the original if
         // the difference is below the given threshold
-        GLSLF("avg = average(tex, pos, %f, h);\n", i * opts->range);
+        GLSLF("avg = average(tex, pos, pt, %f, h);\n", i * opts->range);
         GLSL(diff = abs(color - avg);)
         GLSLF("color = mix(avg, color, greaterThan(diff, vec4(%f)));\n",
               opts->threshold / (i * 16384.0));
@@ -399,6 +396,7 @@ void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
     GLSL(noise.y = rand(h); h = permute(h);)
     GLSL(noise.z = rand(h); h = permute(h);)
     GLSLF("color.xyz += %f * (noise - vec3(0.5));\n", opts->grain/8192.0);
+    GLSLF("}\n");
 }
 
 void pass_sample_unsharp(struct gl_shader_cache *sc, float param)
@@ -406,7 +404,6 @@ void pass_sample_unsharp(struct gl_shader_cache *sc, float param)
     GLSLF("// unsharp\n");
     sampler_prelude(sc, 0);
 
-    GLSL(vec4 color;)
     GLSLF("{\n");
     GLSL(vec2 st1 = pt * 1.2;)
     GLSL(vec4 p = texture(tex, pos);)

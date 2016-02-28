@@ -3612,7 +3612,10 @@ Miscellaneous
           to fix the size).
         - ``--lavfi-complex='[aid1] asplit [ao] [t] ; [t] aphasemeter [t2] ; [vid1] [t2] overlay [vo]'``
           Play audio track 1, and overlay its visualization over video track 1.
+        - ``--lavfi-complex='[aid1] asplit [t1] [ao] ; [t1] showvolume [t2] ; [vid1] [t2] overlay [vo]'``
+          Play audio track 1, and overlay the measured volume for each speaker
+          over video track 1.
 
-    See the Ffmpeg libavfilter documentation for details on the filter.
+    See the FFmpeg libavfilter documentation for details on the filter.
 
 
