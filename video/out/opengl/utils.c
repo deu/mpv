@@ -355,13 +355,18 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     int cw = w, ch = h;
 
-    if ((flags & FBOTEX_FUZZY_W) && cw < fbo->w)
-        cw = fbo->w;
-    if ((flags & FBOTEX_FUZZY_H) && ch < fbo->h)
-        ch = fbo->h;
+    if ((flags & FBOTEX_FUZZY_W) && cw < fbo->rw)
+        cw = fbo->rw;
+    if ((flags & FBOTEX_FUZZY_H) && ch < fbo->rh)
+        ch = fbo->rh;
 
-    if (fbo->w == cw && fbo->h == ch && fbo->iformat == iformat)
+    if (fbo->rw == cw && fbo->rh == ch && fbo->iformat == iformat) {
+        fbo->lw = w;
+        fbo->lh = h;
         return true;
+    }
+
+    int lw = w, lh = h;
 
     if (flags & FBOTEX_FUZZY_W)
         w = MP_ALIGN_UP(w, 256);
@@ -384,12 +389,15 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
 
     *fbo = (struct fbotex) {
         .gl = gl,
-        .w = w,
-        .h = h,
+        .rw = w,
+        .rh = h,
+        .lw = lw,
+        .lh = lh,
         .iformat = iformat,
     };
 
-    mp_verbose(log, "Create FBO: %dx%d\n", fbo->w, fbo->h);
+    mp_verbose(log, "Create FBO: %dx%d -> %dx%d\n", fbo->lw, fbo->lh,
+                                                    fbo->rw, fbo->rh);
 
     if (!(gl->mpgl_caps & MPGL_CAP_FB))
         return false;
@@ -397,7 +405,7 @@ bool fbotex_change(struct fbotex *fbo, GL *gl, struct mp_log *log, int w, int h,
     gl->GenFramebuffers(1, &fbo->fbo);
     gl->GenTextures(1, &fbo->texture);
     gl->BindTexture(GL_TEXTURE_2D, fbo->texture);
-    gl->TexImage2D(GL_TEXTURE_2D, 0, format.internal_format, fbo->w, fbo->h, 0,
+    gl->TexImage2D(GL_TEXTURE_2D, 0, format.internal_format, fbo->rw, fbo->rh, 0,
                    format.format, format.type, NULL);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -536,6 +544,7 @@ struct sc_uniform {
 
 struct sc_entry {
     GLuint gl_shader;
+    GLint uniform_locs[SC_UNIFORM_ENTRIES];
     // the following fields define the shader's contents
     char *key; // vertex+frag shader (mangled)
     struct gl_vao *vao;
@@ -789,14 +798,13 @@ static const char *vao_glsl_type(const struct gl_vao_entry *e)
 }
 
 // Assumes program is current (gl->UseProgram(program)).
-static void update_uniform(GL *gl, GLuint program, struct sc_uniform *u)
+static void update_uniform(GL *gl, GLuint program, struct sc_uniform *u, GLint loc)
 {
     if (u->type == UT_buffer) {
         GLuint idx = gl->GetUniformBlockIndex(program, u->name);
         gl->UniformBlockBinding(program, idx, u->v.buffer.binding);
         return;
     }
-    GLint loc = gl->GetUniformLocation(program, u->name);
     if (loc < 0)
         return;
     switch (u->type) {
@@ -977,7 +985,7 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
     }
     ADD(frag, "void main() {\n");
     // we require _all_ frag shaders to write to a "vec4 color"
-    ADD(frag, "vec4 color;\n");
+    ADD(frag, "vec4 color = vec4(0.0, 0.0, 0.0, 1.0);\n");
     ADD(frag, "%s", sc->text);
     if (gl->glsl_version >= 130) {
         ADD(frag, "out_color = color;\n");
@@ -1000,16 +1008,23 @@ void gl_sc_gen_shader_and_reset(struct gl_shader_cache *sc)
         entry = &sc->entries[sc->num_entries++];
         *entry = (struct sc_entry){.key = talloc_strdup(NULL, key)};
     }
-    // build vertex shader from vao
-    if (!entry->gl_shader)
+    // build vertex shader from vao and cache the locations of the uniform variables
+    if (!entry->gl_shader) {
         entry->gl_shader = create_program(sc, vert, frag);
+        for (int n = 0; n < sc->num_uniforms; n++) {
+            entry->uniform_locs[n] = gl->GetUniformLocation(entry->gl_shader,
+                                                         sc->uniforms[n].name);
+        }
+    }
 
     gl->UseProgram(entry->gl_shader);
 
     // For now we set the uniforms every time. This is probably bad, and we
     // should switch to caching them.
-    for (int n = 0; n < sc->num_uniforms; n++)
-        update_uniform(gl, entry->gl_shader, &sc->uniforms[n]);
+    for (int n = 0; n < sc->num_uniforms; n++) {
+        update_uniform(gl, entry->gl_shader, &sc->uniforms[n],
+                       entry->uniform_locs[n]);
+    }
 
     talloc_free(tmp);
 

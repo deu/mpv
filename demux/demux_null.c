@@ -15,17 +15,20 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MP_GL_SUPERXBR_H
-#define MP_GL_SUPERXBR_H
+#include "misc/bstr.h"
+#include "stream/stream.h"
+#include "demux.h"
 
-#include "common.h"
-#include "utils.h"
+static int try_open_file(struct demuxer *demux, enum demux_check check)
+{
+    if (!bstr_startswith0(bstr0(demux->filename), "null://") &&
+        check != DEMUX_CHECK_REQUEST)
+        return -1;
+    return 0;
+}
 
-extern const struct superxbr_opts superxbr_opts_def;
-extern const struct m_sub_options superxbr_conf;
-
-void pass_superxbr(struct gl_shader_cache *sc, int id, int step, float tex_mul,
-                   const struct superxbr_opts *conf,
-                   struct gl_transform *transform);
-
-#endif
+const struct demuxer_desc demuxer_desc_null = {
+    .name = "null",
+    .desc = "null demuxer",
+    .open = try_open_file,
+};
