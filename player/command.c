@@ -1430,6 +1430,26 @@ static int mp_property_cache_free(void *ctx, struct m_property *prop,
     return property_int_kb_size((size - size_used) / 1024, action, arg);
 }
 
+static int mp_property_cache_speed(void *ctx, struct m_property *prop,
+                                   int action, void *arg)
+{
+    MPContext *mpctx = ctx;
+    if (!mpctx->demuxer)
+        return M_PROPERTY_UNAVAILABLE;
+
+    double f_speed = -1;
+    demux_stream_control(mpctx->demuxer, STREAM_CTRL_GET_CACHE_SPEED, &f_speed);
+    if (f_speed < 0)
+        return M_PROPERTY_UNAVAILABLE;
+    int64_t speed = llrint(f_speed);
+
+    if (action == M_PROPERTY_PRINT) {
+        *(char **)arg = talloc_strdup_append(format_file_size(speed), "/s");
+        return M_PROPERTY_OK;
+    }
+    return m_property_int64_ro(action, arg, speed);
+}
+
 static int mp_property_cache_idle(void *ctx, struct m_property *prop,
                                   int action, void *arg)
 {
@@ -3606,6 +3626,7 @@ static const struct m_property mp_properties[] = {
     {"cache-used", mp_property_cache_used},
     {"cache-size", mp_property_cache_size},
     {"cache-idle", mp_property_cache_idle},
+    {"cache-speed", mp_property_cache_speed},
     {"demuxer-cache-duration", mp_property_demuxer_cache_duration},
     {"demuxer-cache-time", mp_property_demuxer_cache_time},
     {"demuxer-cache-idle", mp_property_demuxer_cache_idle},
@@ -3820,7 +3841,7 @@ static const char *const *const mp_event_property_change[] = {
     E(MPV_EVENT_CHAPTER_CHANGE, "chapter", "chapter-metadata"),
     E(MP_EVENT_CACHE_UPDATE, "cache", "cache-free", "cache-used", "cache-idle",
       "demuxer-cache-duration", "demuxer-cache-idle", "paused-for-cache",
-      "demuxer-cache-time", "cache-buffering-state"),
+      "demuxer-cache-time", "cache-buffering-state", "cache-speed"),
     E(MP_EVENT_WIN_RESIZE, "window-scale", "osd-width", "osd-height", "osd-par"),
     E(MP_EVENT_WIN_STATE, "window-minimized", "display-names", "display-fps", "fullscreen"),
 };
