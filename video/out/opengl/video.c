@@ -148,6 +148,7 @@ struct gl_video {
     struct mpv_global *global;
     struct mp_log *log;
     struct gl_video_opts opts;
+    struct gl_lcms *cms;
     bool gl_debug;
 
     int texture_16bit_depth;    // actual bits available in 16 bit textures
@@ -693,21 +694,31 @@ static void uninit_rendering(struct gl_video *p)
     gl_video_reset_surfaces(p);
 }
 
-void gl_video_set_lut3d(struct gl_video *p, struct lut3d *lut3d)
+void gl_video_update_profile(struct gl_video *p)
+{
+    if (p->use_lut_3d)
+        return;
+
+    p->use_lut_3d = true;
+    check_gl_features(p);
+
+    reinit_rendering(p);
+}
+
+static bool gl_video_get_lut3d(struct gl_video *p, enum mp_csp_prim prim,
+                               enum mp_csp_trc trc)
 {
     GL *gl = p->gl;
 
-    if (!lut3d) {
-        if (p->use_lut_3d) {
-            p->use_lut_3d = false;
-            reinit_rendering(p);
-        }
-        return;
-    }
+    if (!p->cms || !p->use_lut_3d)
+        return false;
 
-    if (!(gl->mpgl_caps & MPGL_CAP_3D_TEX) || gl->es) {
-        MP_ERR(p, "16 bit fixed point 3D textures not available.\n");
-        return;
+    if (!gl_lcms_has_changed(p->cms, prim, trc))
+        return true;
+
+    struct lut3d *lut3d = NULL;
+    if (!gl_lcms_get_lut3d(p->cms, &lut3d, prim, trc) || !lut3d) {
+        return false;
     }
 
     if (!p->lut_3d_texture)
@@ -724,12 +735,9 @@ void gl_video_set_lut3d(struct gl_video *p, struct lut3d *lut3d)
     gl->TexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
     gl->ActiveTexture(GL_TEXTURE0);
 
-    p->use_lut_3d = true;
-    check_gl_features(p);
-
     debug_check_gl(p, "after 3d lut creation");
 
-    reinit_rendering(p);
+    return true;
 }
 
 // Fill an img_tex struct from an FBO + some metadata
@@ -962,11 +970,10 @@ static void pass_prepare_src_tex(struct gl_video *p)
     gl->ActiveTexture(GL_TEXTURE0);
 }
 
-// flags = bits 0-1: rotate, bit 2: flip vertically
 static void render_pass_quad(struct gl_video *p, int vp_w, int vp_h,
-                             const struct mp_rect *dst, int flags)
+                             const struct mp_rect *dst)
 {
-    struct vertex va[4];
+    struct vertex va[4] = {0};
 
     struct gl_transform t;
     gl_transform_ortho(&t, 0, vp_w, 0, vp_h);
@@ -984,26 +991,13 @@ static void render_pass_quad(struct gl_video *p, int vp_w, int vp_h,
             struct img_tex *s = &p->pass_tex[i];
             if (!s->gl_tex)
                 continue;
-            struct mp_rect_f src_rect = {0, 0, s->w, s->h};
-            gl_transform_rect(s->transform, &src_rect);
-            float tx[2] = {src_rect.x0, src_rect.x1};
-            float ty[2] = {src_rect.y0, src_rect.y1};
-            if (flags & 4)
-                MPSWAP(float, ty[0], ty[1]);
+            float tx = (n / 2) * s->w;
+            float ty = (n % 2) * s->h;
+            gl_transform_vec(s->transform, &tx, &ty);
             bool rect = s->gl_target == GL_TEXTURE_RECTANGLE;
-            v->texcoord[i].x = tx[n / 2] / (rect ? 1 : s->tex_w);
-            v->texcoord[i].y = ty[n % 2] / (rect ? 1 : s->tex_h);
+            v->texcoord[i].x = tx / (rect ? 1 : s->tex_w);
+            v->texcoord[i].y = ty / (rect ? 1 : s->tex_h);
         }
-    }
-
-    int rot = flags & 3;
-    while (rot--) {
-        static const int perm[4] = {1, 3, 0, 2};
-        struct vertex vb[4];
-        memcpy(vb, va, sizeof(vb));
-        for (int n = 0; n < 4; n++)
-            memcpy(va[n].texcoord, vb[perm[n]].texcoord,
-                   sizeof(struct vertex_pt[TEXUNIT_VIDEO_NUM]));
     }
 
     p->gl->Viewport(0, 0, vp_w, abs(vp_h));
@@ -1014,13 +1008,13 @@ static void render_pass_quad(struct gl_video *p, int vp_w, int vp_h,
 
 // flags: see render_pass_quad
 static void finish_pass_direct(struct gl_video *p, GLint fbo, int vp_w, int vp_h,
-                               const struct mp_rect *dst, int flags)
+                               const struct mp_rect *dst)
 {
     GL *gl = p->gl;
     pass_prepare_src_tex(p);
     gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
     gl_sc_gen_shader_and_reset(p->sc);
-    render_pass_quad(p, vp_w, vp_h, dst, flags);
+    render_pass_quad(p, vp_w, vp_h, dst);
     gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
     memset(&p->pass_tex, 0, sizeof(p->pass_tex));
     p->pass_tex_num = 0;
@@ -1038,7 +1032,7 @@ static void finish_pass_fbo(struct gl_video *p, struct fbotex *dst_fbo,
     fbotex_change(dst_fbo, p->gl, p->log, w, h, p->opts.fbo_format, flags);
 
     finish_pass_direct(p, dst_fbo->fbo, dst_fbo->rw, dst_fbo->rh,
-                       &(struct mp_rect){0, 0, w, h}, 0);
+                       &(struct mp_rect){0, 0, w, h});
 }
 
 static void skip_unused(struct gl_video *p, int num_components)
@@ -1051,6 +1045,7 @@ static void uninit_scaler(struct gl_video *p, struct scaler *scaler)
 {
     GL *gl = p->gl;
     fbotex_uninit(&scaler->sep_fbo);
+    fbotex_uninit(&scaler->sep_rot_fbo);
     gl->DeleteTextures(1, &scaler->gl_lut);
     scaler->gl_lut = 0;
     scaler->kernel = NULL;
@@ -1243,6 +1238,19 @@ static void reinit_scaler(struct gl_video *p, struct scaler *scaler,
 static void pass_sample_separated(struct gl_video *p, struct img_tex src,
                                   struct scaler *scaler, int w, int h)
 {
+    // Remove rotation, because it's "too hard" to deal with it.
+    // Note: this is very stupid and could be transparently handled as part
+    // of the first scale pass or so. But for now prefer the simpler solution,
+    // because applying rotation is very rare.
+    if (p->image_params.rotate != 0 || p->image.image_flipped) {
+        GLSLF("// rotate\n");
+        sampler_prelude(p->sc, pass_bind(p, src));
+        GLSL(color = texture(tex, pos);)
+        finish_pass_fbo(p, &scaler->sep_rot_fbo, src.w, src.h, 0);
+        src = img_tex_fbo(&scaler->sep_rot_fbo, identity_trans, PLANE_RGB,
+                          src.components);
+    }
+
     // Separate the transformation into x and y components, per pass
     struct gl_transform t_x = {
         .m = {{src.transform.m[0][0], 0.0}, {src.transform.m[1][0], 1.0}},
@@ -1574,7 +1582,7 @@ static void pass_read_video(struct gl_video *p)
 
             int id = pass_bind(p, tex[n]);
             pass_sample_deband(p->sc, p->opts.deband_opts, id, tex[n].multiplier,
-                               p->gl_target, &p->lfg);
+                               tex[n].gl_target, &p->lfg);
             skip_unused(p, tex[n].components);
             finish_pass_fbo(p, &p->deband_fbo[n], tex[n].w, tex[n].h, 0);
             tex[n] = img_tex_fbo(&p->deband_fbo[n], identity_trans,
@@ -1730,49 +1738,49 @@ static void pass_convert_yuv(struct gl_video *p)
         GLSL(color.a = 1.0;)
     } else if (p->opts.alpha_mode == 2) { // blend against black
         GLSL(color = vec4(color.rgb * color.a, 1.0);)
-    } else if (p->opts.alpha_mode == 3) { // blend against tiles
-        GLSL(bvec2 tile = lessThan(fract(gl_FragCoord.xy / 32.0), vec2(0.5));)
-        GLSL(vec3 background = vec3(tile.x == tile.y ? 1.0 : 0.75);)
-        GLSL(color.rgb = color.rgb * color.a + background * (1.0 - color.a);)
     } else { // alpha present in image
         p->components = 4;
-        if (p->gl->fb_premultiplied)
-            GLSL(color = vec4(color.rgb * color.a, color.a);)
+        GLSL(color = vec4(color.rgb * color.a, color.a);)
     }
 }
 
 static void get_scale_factors(struct gl_video *p, double xy[2])
 {
-    xy[0] = (p->dst_rect.x1 - p->dst_rect.x0) /
-            (double)(p->src_rect.x1 - p->src_rect.x0);
-    xy[1] = (p->dst_rect.y1 - p->dst_rect.y0) /
-            (double)(p->src_rect.y1 - p->src_rect.y0);
+    double target_w = p->src_rect.x1 - p->src_rect.x0;
+    double target_h = p->src_rect.y1 - p->src_rect.y0;
+    if (p->image_params.rotate % 180 == 90)
+        MPSWAP(double, target_w, target_h);
+    xy[0] = (p->dst_rect.x1 - p->dst_rect.x0) / target_w;
+    xy[1] = (p->dst_rect.y1 - p->dst_rect.y0) / target_h;
 }
 
 // Compute the cropped and rotated transformation of the video source rectangle.
-// vp_w and vp_h are set to the _destination_ video size.
-static void compute_src_transform(struct gl_video *p, struct gl_transform *tr,
-                                  int *vp_w, int *vp_h)
+static void compute_src_transform(struct gl_video *p, struct gl_transform *tr)
 {
     float sx = (p->src_rect.x1 - p->src_rect.x0) / (float)p->texture_w,
           sy = (p->src_rect.y1 - p->src_rect.y0) / (float)p->texture_h,
           ox = p->src_rect.x0,
           oy = p->src_rect.y0;
-    struct gl_transform transform = {{{sx,0.0}, {0.0,sy}}, {ox,oy}};
+    struct gl_transform transform = {{{sx, 0}, {0, sy}}, {ox, oy}};
+
+    int a = p->image_params.rotate % 90 ? 0 : p->image_params.rotate / 90;
+    int sin90[4] = {0, 1, 0, -1}; // just to avoid rounding issues etc.
+    int cos90[4] = {1, 0, -1, 0};
+    struct gl_transform rot = {{{cos90[a], sin90[a]}, {-sin90[a], cos90[a]}}};
+    gl_transform_trans(rot, &transform);
+
+    // basically, recenter to keep the whole image in view
+    float b[2] = {1, 1};
+    gl_transform_vec(rot, &b[0], &b[1]);
+    transform.t[0] += b[0] < 0 ? p->texture_w : 0;
+    transform.t[1] += b[1] < 0 ? p->texture_h : 0;
+
+    if (p->image.image_flipped) {
+        struct gl_transform flip = {{{1, 0}, {0, -1}}, {0, p->texture_h}};
+        gl_transform_trans(flip, &transform);
+    }
 
     gl_transform_trans(p->texture_offset, &transform);
-
-    int xc = 0, yc = 1;
-    *vp_w = p->dst_rect.x1 - p->dst_rect.x0,
-    *vp_h = p->dst_rect.y1 - p->dst_rect.y0;
-
-    if ((p->image_params.rotate % 180) == 90) {
-        MPSWAP(float, transform.m[0][xc], transform.m[0][yc]);
-        MPSWAP(float, transform.m[1][xc], transform.m[1][yc]);
-        MPSWAP(float, transform.t[0], transform.t[1]);
-        MPSWAP(int, xc, yc);
-        MPSWAP(int, *vp_w, *vp_h);
-    }
 
     *tr = transform;
 }
@@ -1835,9 +1843,10 @@ static void pass_scale_main(struct gl_video *p)
                 sig_center, sig_scale, sig_offset, sig_slope);
     }
 
+    int vp_w = p->dst_rect.x1 - p->dst_rect.x0;
+    int vp_h = p->dst_rect.y1 - p->dst_rect.y0;
     struct gl_transform transform;
-    int vp_w, vp_h;
-    compute_src_transform(p, &transform, &vp_w, &vp_h);
+    compute_src_transform(p, &transform);
 
     GLSLF("// main scaling\n");
     finish_pass_fbo(p, &p->indirect_fbo, p->texture_w, p->texture_h, 0);
@@ -1867,10 +1876,16 @@ static void pass_colormanage(struct gl_video *p, enum mp_csp_prim prim_src,
     enum mp_csp_prim prim_dst = p->opts.target_prim;
 
     if (p->use_lut_3d) {
-        // The 3DLUT is hard-coded against BT.2020's gamut during creation, and
-        // we never want to adjust its output (so treat it as linear)
-        prim_dst = MP_CSP_PRIM_BT_2020;
-        trc_dst = MP_CSP_TRC_LINEAR;
+        // The 3DLUT is always generated against the original source space
+        enum mp_csp_prim prim_orig = p->image_params.primaries;
+        enum mp_csp_trc trc_orig = p->image_params.gamma;
+
+        if (gl_video_get_lut3d(p, prim_orig, trc_orig)) {
+            prim_dst = prim_orig;
+            trc_dst = trc_orig;
+        } else {
+            p->use_lut_3d = false;
+        }
     }
 
     if (prim_dst == MP_CSP_PRIM_AUTO)
@@ -1884,10 +1899,10 @@ static void pass_colormanage(struct gl_video *p, enum mp_csp_prim prim_src,
             trc_dst = MP_CSP_TRC_GAMMA22;
     }
 
-    bool need_cms = prim_src != prim_dst || p->use_lut_3d;
-    bool need_gamma = trc_src != trc_dst || need_cms;
+    bool need_gamma = trc_src != trc_dst || prim_src != prim_dst;
     if (need_gamma)
         pass_linearize(p->sc, trc_src);
+
     // Adapt to the right colorspace if necessary
     if (prim_src != prim_dst) {
         struct mp_csp_primaries csp_src = mp_get_csp_primaries(prim_src),
@@ -1897,16 +1912,14 @@ static void pass_colormanage(struct gl_video *p, enum mp_csp_prim prim_src,
         gl_sc_uniform_mat3(p->sc, "cms_matrix", true, &m[0][0]);
         GLSL(color.rgb = cms_matrix * color.rgb;)
     }
-    if (p->use_lut_3d) {
-        gl_sc_uniform_sampler(p->sc, "lut_3d", GL_TEXTURE_3D, TEXUNIT_3DLUT);
-        // For the 3DLUT we are arbitrarily using 2.4 as input gamma to reduce
-        // the severity of quantization errors.
-        GLSL(color.rgb = clamp(color.rgb, 0.0, 1.0);)
-        GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.4));)
-        GLSL(color.rgb = texture3D(lut_3d, color.rgb).rgb;)
-    }
+
     if (need_gamma)
         pass_delinearize(p->sc, trc_dst);
+
+    if (p->use_lut_3d) {
+        gl_sc_uniform_sampler(p->sc, "lut_3d", GL_TEXTURE_3D, TEXUNIT_3DLUT);
+        GLSL(color.rgb = texture3D(lut_3d, color.rgb).rgb;)
+    }
 }
 
 static void pass_dither(struct gl_video *p)
@@ -2062,8 +2075,7 @@ static void pass_render_frame_dumb(struct gl_video *p, int fbo)
     pass_get_img_tex(p, &p->image, tex);
 
     struct gl_transform transform;
-    int vp_w, vp_h;
-    compute_src_transform(p, &transform, &vp_w, &vp_h);
+    compute_src_transform(p, &transform);
 
     struct gl_transform tchroma = transform;
     tchroma.t[0] /= 1 << p->image_desc.chroma_xs;
@@ -2167,12 +2179,20 @@ static void pass_draw_to_screen(struct gl_video *p, int fbo)
         GLSL(color.rgb = clamp(color.rgb, 0.0, 1.0);)
         GLSL(color.rgb = pow(color.rgb, vec3(user_gamma));)
     }
+
     pass_colormanage(p, p->image_params.primaries,
                      p->use_linear ? MP_CSP_TRC_LINEAR : p->image_params.gamma);
+
+    // Draw checkerboard pattern to indicate transparency
+    if (p->has_alpha && p->opts.alpha_mode == 3) {
+        GLSLF("// transparency checkerboard\n");
+        GLSL(bvec2 tile = lessThan(fract(gl_FragCoord.xy / 32.0), vec2(0.5));)
+        GLSL(vec3 background = vec3(tile.x == tile.y ? 1.0 : 0.75);)
+        GLSL(color.rgb = mix(background, color.rgb, color.a);)
+    }
+
     pass_dither(p);
-    int flags = (p->image_params.rotate % 90 ? 0 : p->image_params.rotate / 90)
-              | (p->image.image_flipped ? 4 : 0);
-    finish_pass_direct(p, fbo, p->vp_w, p->vp_h, &p->dst_rect, flags);
+    finish_pass_direct(p, fbo, p->vp_w, p->vp_h, &p->dst_rect);
 }
 
 // Draws an interpolate frame to fbo, based on the frame timing in t
@@ -2673,7 +2693,7 @@ static void check_gl_features(struct gl_video *p)
 
     // GLES3 doesn't provide filtered 16 bit integer textures
     // GLES2 doesn't even provide 3D textures
-    if (p->use_lut_3d && !(have_3d_tex && have_float_tex)) {
+    if (p->use_lut_3d && (!have_3d_tex || gl->es)) {
         p->use_lut_3d = false;
         MP_WARN(p, "Disabling color management (GLES unsupported).\n");
     }
@@ -2993,7 +3013,8 @@ void gl_video_set_osd_source(struct gl_video *p, struct osd_state *osd)
     recreate_osd(p);
 }
 
-struct gl_video *gl_video_init(GL *gl, struct mp_log *log, struct mpv_global *g)
+struct gl_video *gl_video_init(GL *gl, struct mp_log *log, struct mpv_global *g,
+                               struct gl_lcms *cms)
 {
     if (gl->version < 210 && gl->es < 200) {
         mp_err(log, "At least OpenGL 2.1 or OpenGL ES 2.0 required.\n");
@@ -3005,6 +3026,7 @@ struct gl_video *gl_video_init(GL *gl, struct mp_log *log, struct mpv_global *g)
         .gl = gl,
         .global = g,
         .log = log,
+        .cms = cms,
         .opts = gl_video_opts_def,
         .gl_target = GL_TEXTURE_2D,
         .texture_16bit_depth = 16,

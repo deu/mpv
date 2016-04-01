@@ -15,18 +15,16 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MPV_DXVA2_H
-#define MPV_DXVA2_H
+#ifndef MPV_D3D11_H
+#define MPV_D3D11_H
 
-#include <d3d9.h>
-#include <dxva2api.h>
+#include <d3d11.h>
 
 struct mp_image;
-struct mp_image_pool;
 
-IDirect3DSurface9 *d3d9_surface_in_mp_image(struct mp_image *mpi);
-
-struct mp_image *dxva2_new_ref(IDirectXVideoDecoder *decoder,
-                               IDirect3DSurface9 *d3d9_surface, int w, int h);
+ID3D11VideoDecoderOutputView *d3d11_surface_in_mp_image(struct mp_image *mpi);
+ID3D11Texture2D              *d3d11_texture_in_mp_image(struct mp_image *mpi);
+struct mp_image *d3d11va_new_ref(ID3D11VideoDecoderOutputView *view,
+                                 int w, int h);
 
 #endif

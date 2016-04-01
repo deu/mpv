@@ -126,7 +126,9 @@ extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi;
 extern const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
+extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_rpi;
+extern const struct vd_lavc_hwdec mp_vd_lavc_mediacodec;
 
 static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #if HAVE_RPI
@@ -145,6 +147,12 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #if HAVE_DXVA2_HWACCEL
     &mp_vd_lavc_dxva2,
     &mp_vd_lavc_dxva2_copy,
+#endif
+#if HAVE_D3D11VA_HWACCEL
+    &mp_vd_lavc_d3d11va_copy,
+#endif
+#if HAVE_ANDROID
+    &mp_vd_lavc_mediacodec,
 #endif
     NULL
 };
@@ -366,7 +374,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     ctx->hwdec_info = vd->hwdec_info;
 
     ctx->codec_timebase = (AVRational){0};
-    if (strstr(decoder, "_mmal"))
+    if (strstr(decoder, "_mmal") || strstr(decoder, "_mediacodec"))
         ctx->codec_timebase = (AVRational){1, 1000000};
 
     ctx->pix_fmt = AV_PIX_FMT_NONE;
@@ -436,8 +444,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
                    mp_imgfmt_to_name(c->codec_tag));
     }
 
-    if (c->lav_headers)
-        mp_copy_lav_codec_headers(avctx, c->lav_headers);
+    mp_set_lav_codec_headers(avctx, c);
 
     /* open it */
     if (avcodec_open2(avctx, lavc_codec, NULL) < 0)
