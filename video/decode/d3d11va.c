@@ -480,10 +480,10 @@ fail:
 
 static int d3d11va_probe(struct vd_lavc_hwdec *hwdec,
                          struct mp_hwdec_info *info,
-                         const char *decoder)
+                         const char *codec)
 {
     hwdec_request_api(info, "d3d11va");
-    return d3d_probe_codec(decoder);
+    return d3d_probe_codec(codec);
 }
 
 const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy = {
@@ -495,4 +495,5 @@ const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy = {
     .init_decoder   = d3d11va_init_decoder,
     .allocate_image = d3d11va_allocate_image,
     .process_image  = d3d11va_retrieve_image,
+    .delay_queue    = HWDEC_DELAY_QUEUE_COUNT,
 };

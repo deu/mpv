@@ -618,7 +618,7 @@ Video
     The ``vaapi-copy`` and ``dxva2-copy`` modes allow you to use hardware
     decoding with any VO, backend or filter. Because these copy the decoded
     video back to system RAM, they're likely less efficient than the ``vaapi``
-    or ``dxva2`` modes respectivley.
+    or ``dxva2`` modes respectively.
 
     .. note::
 
@@ -744,12 +744,10 @@ Video
     appear in files, but can't be handled properly by mpv.
 
 ``--video-zoom=<value>``
-    Adjust the video display scale factor by the given value. The unit is in
-    fractions of the (scaled) window video size.
-
-    For example, given a 1280x720 video shown in a 1280x720 window,
-    ``--video-zoom=-0.1`` would make the video by 128 pixels smaller in
-    X direction, and 72 pixels in Y direction.
+    Adjust the video display scale factor by the given value. The parameter is
+    given log 2. For example, ``--video-zoom=0`` is unscaled,
+    ``--video-zoom=1`` is twice the size, ``--video-zoom=-2`` is one fourth of
+    the size, and so on.
 
     This option is disabled if the ``--no-keepaspect`` option is used.
 
@@ -2086,8 +2084,8 @@ Window
     This option might be removed in the future.
 
 ``--x11-bypass-compositor=<yes|no>``
-    If set to ``yes`` (default), then ask the compositor to unredirect the
-    mpv window. This uses the ``_NET_WM_BYPASS_COMPOSITOR`` hint.
+    If set to ``yes``, then ask the compositor to unredirect the mpv window
+    (default: no). This uses the ``_NET_WM_BYPASS_COMPOSITOR`` hint.
 
 
 Disc Devices
@@ -2639,6 +2637,9 @@ OSD
 ``--osd-bold=<yes|no>``, ``--sub-text-bold=<yes|no>``
     Format text on bold.
 
+``--osd-italic=<yes|no>``, ``--sub-text-italic=<yes|no>``
+    Format text on italic.
+
 ``--osd-border-color=<color>``, ``--sub-text-border-color=<color>``
     See ``--osd-color``. Color used for the OSD/sub font border.
 
@@ -2978,6 +2979,22 @@ Terminal
         :v:         verbose messages
         :debug:     debug messages
         :trace:     very noisy debug messages
+
+    .. admonition:: Example
+
+        ::
+
+            mpv --msg-level=ao/sndio=no
+
+        Completely silences the output of ao_sndio, which uses the log
+        prefix ``[ao/sndio]``.
+
+        ::
+
+            mpv --msg-level=all=warn,ao/alsa=error
+
+        Only show warnings or worse, and let the ao_alsa output show errors
+        only.
 
 ``--term-osd, --no-term-osd``, ``--term-osd=force``
     Display OSD messages on the console when no video output is available.

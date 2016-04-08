@@ -1412,7 +1412,7 @@ static void pass_prescale_luma(struct gl_video *p, struct img_tex *tex,
         case 2:
             upload_nnedi3_weights(p);
             pass_nnedi3(p->gl, p->sc, planes, id, step, tex->multiplier,
-                        p->opts.nnedi3_opts, &step_transform);
+                        p->opts.nnedi3_opts, &step_transform, tex->gl_target);
             break;
         default:
             abort();
@@ -2120,10 +2120,9 @@ static void pass_render_frame(struct gl_video *p)
             .w = p->texture_w, .h = p->texture_h,
             .display_par = scale[1] / scale[0], // counter compensate scaling
         };
-        finish_pass_fbo(p, &p->blend_subs_fbo,
-                        p->texture_w, p->texture_h, 0);
+        finish_pass_fbo(p, &p->blend_subs_fbo, rect.w, rect.h, 0);
         pass_draw_osd(p, OSD_DRAW_SUB_ONLY, vpts, rect,
-                      p->texture_w, p->texture_h, p->blend_subs_fbo.fbo, false);
+                      rect.w, rect.h, p->blend_subs_fbo.fbo, false);
         GLSL(color = texture(texture0, texcoord0);)
         pass_read_fbo(p, &p->blend_subs_fbo);
     }
