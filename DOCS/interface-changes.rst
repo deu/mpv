@@ -19,6 +19,9 @@ Interface changes
 
 ::
 
+ --- mpv 0.17.1 ---
+    - now ab-loops are active even if the "ab-loop-b" property is unset ("no"),
+      in which case the end of the file is used as B loop point
  --- mpv 0.17.0 ---
     - deprecate "track-list/N/audio-channels" property (use
       "track-list/N/demux-channel-count" instead)
@@ -28,6 +31,8 @@ Interface changes
     - rename --input-unix-socket to --input-ipc-server, and make it work on
       Windows too
     - change the exact behavior of the "video-zoom" property
+    - --video-unscaled no longer disables --video-zoom and --video-aspect
+      To force the old behavior, set --video-zoom=0 and --video-aspect=0
  --- mpv 0.16.0 ---
     - change --audio-channels default to stereo (use --audio-channels=auto to
       get the old default)

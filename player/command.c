@@ -1518,10 +1518,10 @@ static int mp_property_cache_buffering(void *ctx, struct m_property *prop,
                                        int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    double state = get_cache_buffering_percentage(mpctx);
+    int state = get_cache_buffering_percentage(mpctx);
     if (state < 0)
         return M_PROPERTY_UNAVAILABLE;
-    return m_property_int_ro(action, arg, state * 100);
+    return m_property_int_ro(action, arg, state);
 }
 
 static int mp_property_clock(void *ctx, struct m_property *prop,
@@ -2324,12 +2324,9 @@ static int panscan_property_helper(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    if (!mpctx->video_out
-        || vo_control(mpctx->video_out, VOCTRL_GET_PANSCAN, NULL) != VO_TRUE)
-        return M_PROPERTY_UNAVAILABLE;
 
     int r = mp_property_generic_option(mpctx, prop, action, arg);
-    if (action == M_PROPERTY_SET)
+    if (mpctx->video_out && action == M_PROPERTY_SET)
         vo_control(mpctx->video_out, VOCTRL_SET_PANSCAN, NULL);
     return r;
 }
@@ -3907,6 +3904,23 @@ int mp_property_do(const char *name, int action, void *val,
     int r = m_property_do(ctx->log, mp_properties, name, action, val, ctx);
     if (r == M_PROPERTY_OK && is_property_set(action, val))
         mp_notify_property(ctx, (char *)name);
+    if (mp_msg_test(ctx->log, MSGL_V) && is_property_set(action, val)) {
+        struct m_option ot = {0};
+        void *data = val;
+        switch (action) {
+        case M_PROPERTY_SET_NODE:
+            ot.type = &m_option_type_node;
+            break;
+        case M_PROPERTY_SET_STRING:
+            ot.type = &m_option_type_string;
+            data = &val;
+            break;
+        }
+        char *t = ot.type ? m_option_print(&ot, data) : NULL;
+        MP_VERBOSE(ctx, "Set property: %s%s%s -> %d\n",
+                   name, t ? "=" : "", t ? t : "", r);
+        talloc_free(t);
+    }
     return r;
 }
 
@@ -5231,12 +5245,13 @@ void handle_ab_loop(struct MPContext *mpctx)
     struct MPOpts *opts = mpctx->opts;
 
     double now = mpctx->restart_complete ? mpctx->playback_pts : MP_NOPTS_VALUE;
-    if (now != MP_NOPTS_VALUE && opts->ab_loop[0] != MP_NOPTS_VALUE &&
-        opts->ab_loop[1] != MP_NOPTS_VALUE)
-    {
+    if (now != MP_NOPTS_VALUE && opts->ab_loop[0] != MP_NOPTS_VALUE) {
+        double end = opts->ab_loop[1];
+        if (end == MP_NOPTS_VALUE)
+            end = INFINITY;
         if (ctx->prev_pts >= opts->ab_loop[0] &&
-            ctx->prev_pts < opts->ab_loop[1] &&
-            (now >= opts->ab_loop[1] || mpctx->stop_play == AT_END_OF_FILE))
+            ctx->prev_pts < end &&
+            (now >= end || mpctx->stop_play == AT_END_OF_FILE))
         {
             mark_seek(mpctx);
             queue_seek(mpctx, MPSEEK_ABSOLUTE, opts->ab_loop[0],
