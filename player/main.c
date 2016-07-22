@@ -52,7 +52,6 @@
 
 #include "audio/decode/dec_audio.h"
 #include "audio/out/ao.h"
-#include "audio/mixer.h"
 #include "demux/demux.h"
 #include "stream/stream.h"
 #include "sub/osd.h"
@@ -360,7 +359,6 @@ struct MPContext *mp_create(void)
 
     mpctx->input = mp_input_init(mpctx->global);
     screenshot_init(mpctx);
-    mpctx->mixer = mixer_init(mpctx, mpctx->global);
     command_init(mpctx);
     init_libav(mpctx->global);
     mp_clients_init(mpctx);
@@ -417,6 +415,18 @@ int mp_initialize(struct MPContext *mpctx, char **options)
 
     if (handle_help_options(mpctx))
         return -2;
+
+    if (!print_libav_versions(mp_null_log, 0)) {
+        // Using mismatched libraries can be legitimate, but even then it's
+        // a bad idea. We don't acknowledge its usefulness and stability.
+        print_libav_versions(mpctx->log, MSGL_FATAL);
+        MP_FATAL(mpctx, "\nmpv was compiled against a different version of "
+                 "FFmpeg/Libav than the shared\nlibrary it is linked against. "
+                 "This is most likely a broken build and could\nresult in "
+                 "misbehavior and crashes.\n\nmpv does not support this "
+                 "configuration and will not run - rebuild mpv instead.\n");
+        return -1;
+    }
 
     if (opts->dump_stats && opts->dump_stats[0]) {
         if (mp_msg_open_stats_file(mpctx->global, opts->dump_stats) < 0)

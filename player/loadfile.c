@@ -42,7 +42,6 @@
 #include "common/encode.h"
 #include "input/input.h"
 
-#include "audio/mixer.h"
 #include "audio/audio.h"
 #include "audio/audio_buffer.h"
 #include "audio/decode/dec_audio.h"
@@ -475,7 +474,7 @@ void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type
         if (type == STREAM_VIDEO) {
             uninit_video_chain(mpctx);
             if (!track)
-                handle_force_window(mpctx, false);
+                handle_force_window(mpctx, true);
         } else if (type == STREAM_AUDIO) {
             clear_audio_output_buffers(mpctx);
             uninit_audio_chain(mpctx);

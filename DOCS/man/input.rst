@@ -459,6 +459,8 @@ Input Commands that are Possibly Subject to Change
         Remove all filters. Note that like the other sub-commands, this does
         not control automatically inserted filters.
 
+    The argument is always needed. E.g. in case of ``clr`` use ``vf clr ""``.
+
     You can assign labels to filter by prefixing them with ``@name:`` (where
     ``name`` is a user-chosen arbitrary identifier). Labels can be used to
     refer to filters by name in all of the filter chain modification commands.
@@ -561,29 +563,20 @@ Input Commands that are Possibly Subject to Change
     the resolution is reduced to that of the video's. You can read the
     ``osd-width`` and ``osd-height`` properties. At least with ``--vo-xv`` and
     anamorphic video (such as DVD), ``osd-par`` should be read as well, and the
-    overlay should be aspect-compensated. (Future directions: maybe mpv should
-    take care of some of these things automatically, but it's hard to tell
-    where to draw the line.)
+    overlay should be aspect-compensated.
 
     ``id`` is an integer between 0 and 63 identifying the overlay element. The
     ID can be used to add multiple overlay parts, update a part by using this
     command with an already existing ID, or to remove a part with
     ``overlay-remove``. Using a previously unused ID will add a new overlay,
-    while reusing an ID will update it. (Future directions: there should be
-    something to ensure different programs wanting to create overlays don't
-    conflict with each others, should that ever be needed.)
+    while reusing an ID will update it.
 
     ``x`` and ``y`` specify the position where the OSD should be displayed.
 
     ``file`` specifies the file the raw image data is read from. It can be
     either a numeric UNIX file descriptor prefixed with ``@`` (e.g. ``@4``),
-    or a filename. The file will be mapped into memory with ``mmap()``. Some VOs
-    will pass the mapped pointer directly to display APIs (e.g. opengl or
-    vdpau), so no actual copying is involved. Truncating the source file while
-    the overlay is active will crash the player. You shouldn't change the data
-    while the overlay is active, because the data is essentially accessed at
-    random points. Instead, call ``overlay-add`` again (preferably with a
-    different memory region to prevent tearing).
+    or a filename. The file will be mapped into memory with ``mmap()``,
+    copied, and unmapped before the command returns (changed in mpv 0.18.1).
 
     It is also possible to pass a raw memory address for use as bitmap memory
     by passing a memory address as integer prefixed with an ``&`` character.
@@ -616,15 +609,14 @@ Input Commands that are Possibly Subject to Change
     (Technically, the minimum size would be ``stride * (h - 1) + w * 4``, but
     for simplicity, the player will access all ``stride * h`` bytes.)
 
-    .. admonition:: Warning
+    .. note::
 
-        When updating the overlay, you should prepare a second shared memory
-        region (e.g. make use of the offset parameter) and add this as overlay,
-        instead of reusing the same memory every time. Otherwise, you might
-        get the equivalent of tearing, when your application and mpv write/read
-        the buffer at the same time. Also, keep in mind that mpv might access
-        an overlay's memory at random times whenever it feels the need to do
-        so, for example when redrawing the screen.
+        Before mpv 0.18.1, you had to do manual "double buffering" when updating
+        an overlay by replacing it with a different memory buffer. Since mpv
+        0.18.1, the memory is simply copied and doesn't reference any of the
+        memory indicated by the command's arguments after the commend returns.
+        If you want to use this command before mpv 0.18.1, reads the old docs
+        to see how to handle this correctly.
 
 ``overlay-remove <id>``
     Remove an overlay added with ``overlay-add`` and the same ID. Does nothing
@@ -634,10 +626,10 @@ Input Commands that are Possibly Subject to Change
     Send a message to all clients, and pass it the following list of arguments.
     What this message means, how many arguments it takes, and what the arguments
     mean is fully up to the receiver and the sender. Every client receives the
-    message, so be careful about name clashes (or use ``script_message_to``).
+    message, so be careful about name clashes (or use ``script-message-to``).
 
 ``script-message-to "<target>" "<arg1>" "<arg2>" ...``
-    Same as ``script_message``, but send it only to the client named
+    Same as ``script-message``, but send it only to the client named
     ``<target>``. Each client (scripts etc.) has a unique name. For example,
     Lua scripts can get their name via ``mp.get_script_name()``.
 
@@ -648,11 +640,11 @@ Input Commands that are Possibly Subject to Change
     The argument is the name of the binding.
 
     It can optionally be prefixed with the name of the script, using ``/`` as
-    separator, e.g. ``script_binding scriptname/bindingname``.
+    separator, e.g. ``script-binding scriptname/bindingname``.
 
     For completeness, here is how this command works internally. The details
-    could change any time. On any matching key event, ``script_message_to``
-    or ``script_message`` is called (depending on whether the script name is
+    could change any time. On any matching key event, ``script-message-to``
+    or ``script-message`` is called (depending on whether the script name is
     included), with the following arguments:
 
     1. The string ``key-binding``.
@@ -817,7 +809,7 @@ Input sections group a set of bindings, and enable or disable them at once.
 In ``input.conf``, each key binding is assigned to an input section, rather
 than actually having explicit text sections.
 
-See also: ``enable_section`` and ``disable_section`` commands.
+See also: ``enable-section`` and ``disable-section`` commands.
 
 Predefined bindings:
 
@@ -1081,9 +1073,8 @@ Property list
                 "default"           MPV_FORMAT_FLAG
 
 ``ab-loop-a``, ``ab-loop-b`` (RW)
-    Set/get A-B loop points. See corresponding options and ``ab-loop`` command.
-    The special value ``no`` on ``ab-loop-a`` disables looping, while setting
-    ``ab-loop-b`` to ``no`` loops when the end of the file is reached.
+    Set/get A-B loop points. See corresponding options and ``ab-loop`` command
+    for details.
 
 ``angle`` (RW)
     Current DVD angle.
@@ -1243,29 +1234,31 @@ Property list
     See ``--hr-seek``.
 
 ``mixer-active``
-    Return ``yes`` if the audio mixer is active, ``no`` otherwise. This has
-    implications for ``--softvol=no`` mode: if the mixer is inactive, changing
-    ``volume`` doesn't actually change anything on the system mixer. If the
-    ``--volume`` or ``--mute`` option are used, these might not be applied
-    properly until the mixer becomes active either. (The options, if set, will
-    just overwrite the mixer state at audio initialization.)
+    Return ``yes`` if the audio mixer is active, ``no`` otherwise.
 
-    While the behavior with ``mixer-active==yes`` is relatively well-defined,
-    the ``no`` case will provide possibly wrong or insignificant values.
-
-    Note that an active mixer does not necessarily imply active audio output,
-    although this is implied in the current implementation.
+    This option is relatively useless. Before mpv 0.18.1, it could be used to
+    infer behavior of the ``volume`` property.
 
 ``volume`` (RW)
-    Current volume (see ``--volume`` for details). Also see ``mixer-active``
-    property.
+    Current volume (see ``--volume`` for details).
 
-``volume-max``
-    Current maximum value the volume property can be set to. (This may depend
-    on the ``--softvol-max`` option.)
+``volume-max`` (RW)
+    Current maximum value the volume property can be set to. (Equivalent to the
+    ``--volume-max`` option.)
 
 ``mute`` (RW)
-    Current mute status (``yes``/``no``). Also see ``mixer-active`` property.
+    Current mute status (``yes``/``no``).
+
+``ao-volume`` (RW)
+    System volume. This property is available only if mpv audio output is
+    currently active, and only if the underlying implementation supports volume
+    control. What this option does depends on the API. For example, on ALSA
+    this usually changes system-wide audio, while with PulseAudio this controls
+    per-application volume.
+
+``ao-mute`` (RW)
+    Similar to ``ao-volume``, but controls the mute state. May be unimplemented
+    even if ``ao-volume`` works.
 
 ``audio-delay`` (RW)
     See ``--audio-delay``.
@@ -1328,6 +1321,8 @@ Property list
     It doesn't change the volumes of each channel, but instead sets up a pan
     matrix to mix the left and right channels.)
 
+    Deprecated.
+
 ``fullscreen`` (RW)
     See ``--fullscreen``.
 
@@ -1349,6 +1344,9 @@ Property list
 
 ``colormatrix-primaries`` (R)
     See ``colormatrix``.
+
+``taskbar-progress`` (RW)
+    See ``--taskbar-progress``.
 
 ``ontop`` (RW)
     See ``--ontop``.
@@ -1386,14 +1384,39 @@ Property list
     properties to see whether this was successful.
 
     Unlike in mpv 0.9.x and before, this does not return the currently active
-    hardware decoder.
+    hardware decoder. Since mpv 0.18.0, ``hwdec-current`` is available for
+    this purpose.
+
+``hwdec-current``
+    Return the current hardware decoding in use. If decoding is active, return
+    one of the values used by the ``hwdec`` option/property. ``no`` indicates
+    software decoding. If no decoder is loaded, the property is unavailable.
+
+``hwdec-interop``
+    This returns the currently loaded hardware decoding/output interop driver.
+    This is known only once the VO has opened (and possibly later). With some
+    VOs (like ``opengl``), this might be never known in advance, but only when
+    the decoder attempted to create the hw decoder successfully. (Using
+    ``--hwdec-preload`` can load it eagerly.) If there are multiple drivers
+    loaded, they will be separated by ``,``.
+
+    If no VO is active or no interop driver is known, this property is
+    unavailable.
+
+    This does not necessarily use the same values as ``hwdec``. There can be
+    multiple interop drivers for the same hardware decoder, depending on
+    platform and VO.
 
 ``hwdec-active``
+    Deprecated. To be removed in mpv 0.20.0. Use ``hwdec-current`` instead.
+
     Return ``yes`` or ``no``, depending on whether any type of hardware decoding
     is actually in use.
 
 ``hwdec-detected``
-    If software decoding is active, this returns the hardware decoder in use.
+    Deprecated. To be removed in mpv 0.20.0.
+
+    If hardware decoding is active, this returns the hardware decoder in use.
     Otherwise, it returns either ``no``, or if applicable, the currently loaded
     hardware decoding API. This is known only once the VO has opened (and
     possibly later). With some VOs (like ``opengl``), this is never known in
@@ -1458,6 +1481,12 @@ Property list
     ``video-params/gamma``
         The gamma function in use as string. (Exact values subject to change.)
 
+    ``video-params/nom-peak``
+        The video encoding's nominal peak brightness as float.
+
+    ``video-params/sig-peak``
+        The video file's tagged signal peak as float.
+
     ``video-params/chroma-location``
         Chroma location as string. (Exact values subject to change.)
 
@@ -1484,6 +1513,9 @@ Property list
             "colormatrix"       MPV_FORMAT_STRING
             "colorlevels"       MPV_FORMAT_STRING
             "primaries"         MPV_FORMAT_STRING
+            "gamma"             MPV_FORMAT_STRING
+            "nom-peak"          MPV_FORMAT_DOUBLE
+            "sig-peak"          MPV_FORMAT_DOUBLE
             "chroma-location"   MPV_FORMAT_STRING
             "rotate"            MPV_FORMAT_INT64
             "stereo-in"         MPV_FORMAT_STRING
@@ -1564,7 +1596,7 @@ Property list
 
 ``osd-width``, ``osd-height``
     Last known OSD width (can be 0). This is needed if you want to use the
-    ``overlay_add`` command. It gives you the actual OSD size, which can be
+    ``overlay-add`` command. It gives you the actual OSD size, which can be
     different from the window size in some cases.
 
 ``osd-par``
@@ -1646,6 +1678,9 @@ Property list
 ``playlist-pos`` (RW)
     Current position on playlist. The first entry is on position 0. Writing
     to the property will restart playback at the written entry.
+
+``playlist-pos-1`` (RW)
+    Same as ``playlist-pos``, but 1-based.
 
 ``playlist-count``
     Number of total playlist entries.
@@ -1788,9 +1823,11 @@ Property list
                 "albumart"          MPV_FORMAT_FLAG
                 "default"           MPV_FORMAT_FLAG
                 "forced"            MPV_FORMAT_FLAG
+                "selected"          MPV_FORMAT_FLAG
                 "external"          MPV_FORMAT_FLAG
                 "external-filename" MPV_FORMAT_STRING
                 "codec"             MPV_FORMAT_STRING
+                "ff-index"          MPV_FORMAT_INT64
                 "decoder-desc"      MPV_FORMAT_STRING
                 "demux-w"           MPV_FORMAT_INT64
                 "demux-h"           MPV_FORMAT_INT64
@@ -1904,6 +1941,44 @@ Property list
     Return whether the VO is configured right now. Usually this corresponds to
     whether the video window is visible. If the ``--force-window`` option is
     used, this is usually always returns ``yes``.
+
+``vo-performance``
+    Some video output performance metrics. Not implemented by all VOs. This has
+    a number of sup-properties, of the form ``vo-performance/<metric>-<value>``,
+    all of them in milliseconds.
+
+    ``<metric>`` refers to one of:
+
+    ``upload``
+        Time needed to make the frame available to the GPU (if necessary).
+    ``render``
+        Time needed to perform all necessary video postprocessing and rendering
+        passes (if necessary).
+    ``present``
+        Time needed to present a rendered frame on-screen.
+
+    When a step is unnecessary or skipped, it will have the value 0.
+
+    ``<value>`` refers to one of:
+
+    ``last``
+        Last measured value.
+    ``avg``
+        Average over a fixed number of past samples. (The exact timeframe
+        varies, but it should generally be a handful of seconds)
+    ``peak``
+        The peak (highest value) within this averaging range.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``,
+    or with Lua ``mp.get_property_native``, this will return a mpv_node with
+    the following contents:
+
+    ::
+
+        MPV_FORMAT_NODE_MAP
+            "<metric>-<value>"  MPV_FORMAT_INT64
+
+    (One entry for each ``<metric>`` and ``<value>`` combination)
 
 ``video-bitrate``, ``audio-bitrate``, ``sub-bitrate``
     Bitrate values calculated on the packet level. This works by dividing the
@@ -2064,7 +2139,7 @@ Property list
 
     (Note that if an option is marked as file-local, even ``options/`` will
     access the local value, and the ``old`` value, which will be restored on
-    end of playback, can not be read or written until end of playback.)
+    end of playback, cannot be read or written until end of playback.)
 
 ``option-info/<name>``
     Additional per-option information.

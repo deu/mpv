@@ -40,6 +40,7 @@
 
 #include "vo.h"
 #include "win_state.h"
+#include "osdep/io.h"
 #include "osdep/timer.h"
 
 #include "input/input.h"
@@ -57,7 +58,7 @@ static void schedule_resize(struct vo_wayland_state *wl,
                             int32_t width,
                             int32_t height);
 
-static void vo_wayland_fullscreen (struct vo *vo);
+static void vo_wayland_fullscreen(struct vo *vo);
 
 static const struct wl_callback_listener frame_listener;
 
@@ -189,9 +190,22 @@ static void output_handle_mode(void *data,
     output->refresh_rate = refresh;
 }
 
+static void output_handle_done(void* data, struct wl_output *wl_output)
+{
+}
+
+static void output_handle_scale(void* data, struct wl_output *wl_output,
+                                int32_t factor)
+{
+    struct vo_wayland_output *output = data;
+    output->scale = factor;
+}
+
 static const struct wl_output_listener output_listener = {
     output_handle_geometry,
-    output_handle_mode
+    output_handle_mode,
+    output_handle_done,
+    output_handle_scale
 };
 
 
@@ -211,6 +225,8 @@ static void surface_handle_enter(void *data,
             break;
         }
     }
+
+    wl->window.events |= VO_EVENT_WIN_STATE | VO_EVENT_RESIZE;
 }
 
 static void surface_handle_leave(void *data,
@@ -401,11 +417,15 @@ static void pointer_handle_motion(void *data,
                                   wl_fixed_t sx_w,
                                   wl_fixed_t sy_w)
 {
+    int32_t scale = 1;
     struct vo_wayland_state *wl = data;
 
+    if (wl->display.current_output)
+        scale = wl->display.current_output->scale;
+
     wl->cursor.pointer = pointer;
-    wl->window.mouse_x = wl_fixed_to_int(sx_w);
-    wl->window.mouse_y = wl_fixed_to_int(sy_w);
+    wl->window.mouse_x = scale*wl_fixed_to_int(sx_w);
+    wl->window.mouse_y = scale*wl_fixed_to_int(sy_w);
 
     mp_input_set_mouse_pos(wl->vo->input_ctx, wl->window.mouse_x,
                                               wl->window.mouse_y);
@@ -521,7 +541,7 @@ static void data_device_handle_data_offer(void *data,
 {
     struct vo_wayland_state *wl = data;
     if (wl->input.offer) {
-        MP_ERR(wl, "There is already a dnd entry point.\n");
+        MP_DBG(wl, "There is already a dnd entry point.\n");
         wl_data_offer_destroy(wl->input.offer);
     }
 
@@ -595,18 +615,17 @@ static const struct wl_data_device_listener data_device_listener = {
     data_device_handle_selection
 };
 
-static void registry_handle_global (void *data,
-                                    struct wl_registry *reg,
-                                    uint32_t id,
-                                    const char *interface,
-                                    uint32_t version)
+static void registry_handle_global(void *data, struct wl_registry *reg,
+                                   uint32_t id, const char *interface,
+                                   uint32_t version)
 {
     struct vo_wayland_state *wl = data;
 
     if (strcmp(interface, "wl_compositor") == 0) {
 
         wl->display.compositor = wl_registry_bind(reg, id,
-                                                  &wl_compositor_interface, 1);
+                                                  &wl_compositor_interface,
+                                                  MPMIN(3, version));
     }
 
     else if (strcmp(interface, "wl_shell") == 0) {
@@ -625,7 +644,9 @@ static void registry_handle_global (void *data,
             talloc_zero(wl, struct vo_wayland_output);
 
         output->id = id;
-        output->output = wl_registry_bind(reg, id, &wl_output_interface, 1);
+        output->scale = 1;
+        output->output = wl_registry_bind(reg, id, &wl_output_interface,
+                                          MPMIN(2, version));
 
         wl_output_add_listener(output->output, &output_listener, output);
         wl_list_insert(&wl->display.output_list, &output->link);
@@ -656,9 +677,9 @@ static void registry_handle_global (void *data,
     }
 }
 
-static void registry_handle_global_remove (void *data,
-                                           struct wl_registry *registry,
-                                           uint32_t id)
+static void registry_handle_global_remove(void *data,
+                                          struct wl_registry *registry,
+                                          uint32_t id)
 {
 }
 
@@ -739,7 +760,6 @@ static void schedule_resize(struct vo_wayland_state *wl,
 {
     int32_t minimum_size = 150;
     int32_t x, y;
-    float temp_aspect = width / (float) MPMAX(height, 1);
     float win_aspect = wl->window.aspect;
     if (win_aspect <= 0)
         win_aspect = 1;
@@ -770,12 +790,6 @@ static void schedule_resize(struct vo_wayland_state *wl,
         case WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT:
             height = (1 / win_aspect) * width;
             break;
-        default:
-            if (wl->window.aspect < temp_aspect)
-                width = wl->window.aspect * height;
-            else
-                height = (1 / win_aspect) * width;
-            break;
     }
 
     if (edges & WL_SHELL_SURFACE_RESIZE_LEFT)
@@ -792,7 +806,7 @@ static void schedule_resize(struct vo_wayland_state *wl,
     wl->window.sh_height = height;
     wl->window.sh_x = x;
     wl->window.sh_y = y;
-    wl->window.events |= VO_EVENT_RESIZE;
+    wl->window.events |= VO_EVENT_WIN_STATE | VO_EVENT_RESIZE;
     wl->vo->dwidth = width;
     wl->vo->dheight = height;
 }
@@ -818,17 +832,13 @@ static void frame_callback(void *data,
 
     wl_callback_add_listener(wl->frame.callback, &frame_listener, wl);
     wl_surface_commit(wl->window.video_surface);
-
-    wl->frame.last_us = mp_time_us();
-    wl->frame.pending = true;
-    wl->frame.dropping = false;
 }
 
 static const struct wl_callback_listener frame_listener = {
     frame_callback
 };
 
-static bool create_display (struct vo_wayland_state *wl)
+static bool create_display(struct vo_wayland_state *wl)
 {
     if (wl->vo->probing && !getenv("XDG_RUNTIME_DIR"))
         return false;
@@ -853,7 +863,7 @@ static bool create_display (struct vo_wayland_state *wl)
     return true;
 }
 
-static void destroy_display (struct vo_wayland_state *wl)
+static void destroy_display(struct vo_wayland_state *wl)
 {
     struct vo_wayland_output *output = NULL;
     struct vo_wayland_output *tmp = NULL;
@@ -887,7 +897,7 @@ static void destroy_display (struct vo_wayland_state *wl)
     }
 }
 
-static bool create_window (struct vo_wayland_state *wl)
+static bool create_window(struct vo_wayland_state *wl)
 {
     wl->window.video_surface =
         wl_compositor_create_surface(wl->display.compositor);
@@ -914,7 +924,7 @@ static bool create_window (struct vo_wayland_state *wl)
     return true;
 }
 
-static void destroy_window (struct vo_wayland_state *wl)
+static void destroy_window(struct vo_wayland_state *wl)
 {
     if (wl->window.shell_surface)
         wl_shell_surface_destroy(wl->window.shell_surface);
@@ -926,7 +936,7 @@ static void destroy_window (struct vo_wayland_state *wl)
         wl_callback_destroy(wl->frame.callback);
 }
 
-static bool create_cursor (struct vo_wayland_state *wl)
+static bool create_cursor(struct vo_wayland_state *wl)
 {
     if (!wl->display.shm) {
         MP_ERR(wl->vo, "no shm interface available\n");
@@ -946,7 +956,7 @@ static bool create_cursor (struct vo_wayland_state *wl)
     return true;
 }
 
-static void destroy_cursor (struct vo_wayland_state *wl)
+static void destroy_cursor(struct vo_wayland_state *wl)
 {
     if (wl->cursor.theme)
         wl_cursor_theme_destroy(wl->cursor.theme);
@@ -955,7 +965,7 @@ static void destroy_cursor (struct vo_wayland_state *wl)
         wl_surface_destroy(wl->cursor.surface);
 }
 
-static bool create_input (struct vo_wayland_state *wl)
+static bool create_input(struct vo_wayland_state *wl)
 {
     wl->input.xkb.context = xkb_context_new(0);
 
@@ -969,7 +979,7 @@ static bool create_input (struct vo_wayland_state *wl)
     return true;
 }
 
-static void destroy_input (struct vo_wayland_state *wl)
+static void destroy_input(struct vo_wayland_state *wl)
 {
     if (wl->input.keyboard) {
         wl_keyboard_destroy(wl->input.keyboard);
@@ -995,12 +1005,15 @@ static void destroy_input (struct vo_wayland_state *wl)
 
 /*** mplayer2 interface ***/
 
-int vo_wayland_init (struct vo *vo)
+int vo_wayland_init(struct vo *vo)
 {
     vo->wayland = talloc_zero(NULL, struct vo_wayland_state);
     struct vo_wayland_state *wl = vo->wayland;
-    wl->vo = vo;
-    wl->log = mp_log_new(wl, vo->log, "wayland");
+    *wl = (struct vo_wayland_state){
+        .vo = vo,
+        .log = mp_log_new(wl, vo->log, "wayland"),
+        .wakeup_pipe = {-1, -1},
+    };
 
     wl_list_init(&wl->display.output_list);
 
@@ -1023,29 +1036,32 @@ int vo_wayland_init (struct vo *vo)
                        "\tvendor: %s\n"
                        "\tmodel: %s\n"
                        "\tw: %d, h: %d\n"
-                       "\tHz: %d\n",
+                       "\tscale: %d\n"
+                       "\tHz: %f\n",
                        o->make, o->model,
-                       o->width, o->height,
-                       o->refresh_rate / 1000);
+                       o->width, o->height, o->scale,
+                       o->refresh_rate / 1000.0f);
     }
 
-    vo->event_fd = wl->display.display_fd;
+    mp_make_wakeup_pipe(wl->wakeup_pipe);
 
     return true;
 }
 
-void vo_wayland_uninit (struct vo *vo)
+void vo_wayland_uninit(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
     destroy_cursor(wl);
     destroy_window(wl);
     destroy_display(wl);
     destroy_input(wl);
+    for (int n = 0; n < 2; n++)
+        close(wl->wakeup_pipe[n]);
     talloc_free(wl);
     vo->wayland = NULL;
 }
 
-static void vo_wayland_ontop (struct vo *vo)
+static void vo_wayland_ontop(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
     MP_DBG(wl, "going ontop\n");
@@ -1054,7 +1070,7 @@ static void vo_wayland_ontop (struct vo *vo)
     schedule_resize(wl, 0, wl->window.width, wl->window.height);
 }
 
-static void vo_wayland_fullscreen (struct vo *vo)
+static void vo_wayland_fullscreen(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
     if (!wl->display.shell)
@@ -1080,47 +1096,11 @@ static void vo_wayland_fullscreen (struct vo *vo)
     }
 }
 
-static int vo_wayland_poll (struct vo *vo, int timeout_msecs)
-{
-    struct vo_wayland_state *wl = vo->wayland;
-    struct wl_display *dp = wl->display.display;
-
-    wl_display_dispatch_pending(dp);
-    wl_display_flush(dp);
-
-    struct pollfd fd = {
-        wl->display.display_fd,
-        POLLIN | POLLOUT | POLLERR | POLLHUP,
-        0
-    };
-
-    /* wl_display_dispatch is blocking
-     * wl_dipslay_dispatch_pending is non-blocking but does not read from the fd
-     *
-     * when pausing no input events get queued so we have to check if there
-     * are events to read from the file descriptor through poll */
-    int polled;
-    if ((polled = poll(&fd, 1, timeout_msecs)) > 0) {
-        if (fd.revents & POLLERR || fd.revents & POLLHUP) {
-            MP_FATAL(wl, "error occurred on the display fd: "
-                         "closing file descriptor\n");
-            close(wl->display.display_fd);
-            mp_input_put_key(vo->input_ctx, MP_KEY_CLOSE_WIN);
-        }
-        if (fd.revents & POLLIN)
-            wl_display_dispatch(dp);
-        if (fd.revents & POLLOUT)
-            wl_display_flush(dp);
-    }
-
-    return polled;
-}
-
-static int vo_wayland_check_events (struct vo *vo)
+static int vo_wayland_check_events(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
 
-    vo_wayland_poll(vo, 0);
+    vo_wayland_wait_events(vo, 0);
 
     /* If drag & drop was ended poll the file descriptor from the offer if
      * there is data to read.
@@ -1229,7 +1209,7 @@ static void vo_wayland_update_screeninfo(struct vo *vo, struct mp_rect *screenrc
     wl->window.fs_height = screenrc->y1;
 }
 
-int vo_wayland_control (struct vo *vo, int *events, int request, void *arg)
+int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
 {
     struct vo_wayland_state *wl = vo->wayland;
     wl_display_dispatch_pending(wl->display.display);
@@ -1276,7 +1256,7 @@ int vo_wayland_control (struct vo *vo, int *events, int request, void *arg)
             break;
 
         // refresh rate is stored in milli-Hertz (mHz)
-        double fps = wl->display.current_output->refresh_rate / 1000;
+        double fps = wl->display.current_output->refresh_rate / 1000.0f;
         *(double*) arg = fps;
         return VO_TRUE;
     }
@@ -1284,7 +1264,7 @@ int vo_wayland_control (struct vo *vo, int *events, int request, void *arg)
     return VO_NOTIMPL;
 }
 
-bool vo_wayland_config (struct vo *vo)
+bool vo_wayland_config(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
 
@@ -1315,29 +1295,38 @@ void vo_wayland_request_frame(struct vo *vo, void *data, vo_wayland_frame_cb cb)
     frame_callback(wl, NULL, 0);
 }
 
-bool vo_wayland_wait_frame(struct vo *vo)
+void vo_wayland_wakeup(struct vo *vo)
 {
     struct vo_wayland_state *wl = vo->wayland;
+    (void)write(wl->wakeup_pipe[1], &(char){0}, 1);
+}
 
-    if (!wl->frame.callback || wl->frame.dropping)
-        return false;
+void vo_wayland_wait_events(struct vo *vo, int64_t until_time_us)
+{
+    struct vo_wayland_state *wl = vo->wayland;
+    struct wl_display *dp = wl->display.display;
 
-    // If mpv isn't receiving frame callbacks (for 100ms), this usually means that
-    // mpv window is not visible and compositor tells kindly to not draw anything.
-    while (!wl->frame.pending) {
-        int64_t timeout = wl->frame.last_us + (100 * 1000) - mp_time_us();
+    wl_display_dispatch_pending(dp);
+    wl_display_flush(dp);
 
-        if (timeout <= 0)
-            break;
+    struct pollfd fds[2] = {
+        {.fd = wl->display.display_fd, .events = POLLIN },
+        {.fd = wl->wakeup_pipe[0],     .events = POLLIN },
+    };
 
-        if (vo_wayland_poll(vo, timeout) <= 0)
-            break;
+    int64_t wait_us = until_time_us - mp_time_us();
+    int timeout_ms = MPCLAMP((wait_us + 500) / 1000, 0, 10000);
+
+    poll(fds, 2, timeout_ms);
+
+    if (fds[0].revents & POLLERR || fds[0].revents & POLLHUP) {
+        MP_FATAL(wl, "error occurred on the display fd: "
+                     "closing file descriptor\n");
+        close(wl->display.display_fd);
+        mp_input_put_key(vo->input_ctx, MP_KEY_CLOSE_WIN);
+    } else if (fds[0].revents & POLLIN) {
+        wl_display_dispatch(dp);
+    } else if (fds[1].revents & POLLIN) {
+        wl_display_dispatch_pending(dp);
     }
-
-    wl->frame.dropping = !wl->frame.pending;
-    wl->frame.pending = false;
-
-    // Return false if the frame callback was not received
-    // Handler should act accordingly.
-    return !wl->frame.dropping;
 }

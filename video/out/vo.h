@@ -61,9 +61,8 @@ enum mp_voctrl {
     VOCTRL_SET_EQUALIZER,               // struct voctrl_set_equalizer_args*
     VOCTRL_GET_EQUALIZER,               // struct voctrl_get_equalizer_args*
 
-    /* for hardware decoding */
-    VOCTRL_GET_HWDEC_INFO,              // struct mp_hwdec_info**
-    VOCTRL_LOAD_HWDEC_API,              // private to vo_opengl
+    /* private to vo_opengl */
+    VOCTRL_LOAD_HWDEC_API,
 
     // Redraw the image previously passed to draw_image() (basically, repeat
     // the previous draw_image call). If this is handled, the OSD should also
@@ -77,6 +76,8 @@ enum mp_voctrl {
 
     VOCTRL_UPDATE_WINDOW_TITLE,         // char*
     VOCTRL_UPDATE_PLAYBACK_STATE,       // struct voctrl_playback_state*
+
+    VOCTRL_PERFORMANCE_DATA,            // struct voctrl_performance_data*
 
     VOCTRL_SET_CURSOR_VISIBILITY,       // bool*
 
@@ -132,9 +133,20 @@ struct voctrl_get_equalizer_args {
 
 // VOCTRL_UPDATE_PLAYBACK_STATE
 struct voctrl_playback_state {
+    bool taskbar_progress;
     bool playing;
     bool paused;
     int percent_pos;
+};
+
+// VOCTRL_PERFORMANCE_DATA
+struct voctrl_performance_entry {
+    // Times are in microseconds
+    uint64_t last, avg, peak;
+};
+
+struct voctrl_performance_data {
+    struct voctrl_performance_entry upload, render, present;
 };
 
 enum {
@@ -257,9 +269,8 @@ struct vo_driver {
     void (*flip_page)(struct vo *vo);
 
     /* These optional callbacks can be provided if the GUI framework used by
-     * the VO requires entering a message loop for receiving events, does not
-     * provide event_fd, and does not call vo_wakeup() from a separate thread
-     * when there are new events.
+     * the VO requires entering a message loop for receiving events and does
+     * not call vo_wakeup() from a separate thread when there are new events.
      *
      * wait_events() will wait for new events, until the timeout expires, or the
      * function is interrupted. wakeup() is used to possibly interrupt the
@@ -270,7 +281,7 @@ struct vo_driver {
      * immediately.
      */
     void (*wakeup)(struct vo *vo);
-    int (*wait_events)(struct vo *vo, int64_t until_time_us);
+    void (*wait_events)(struct vo *vo, int64_t until_time_us);
 
     /*
      * Closes driver. Should restore the original state of the system.
@@ -296,16 +307,17 @@ struct vo {
     struct vo_w32_state *w32;
     struct vo_cocoa_state *cocoa;
     struct vo_wayland_state *wayland;
+    struct mp_hwdec_devices *hwdec_devs;
     struct input_ctx *input_ctx;
     struct osd_state *osd;
     struct encode_lavc_context *encode_lavc_ctx;
     struct vo_internal *in;
     struct mp_vo_opts *opts;
     struct vo_extra extra;
+    struct m_config *config;
 
     // --- The following fields are generally only changed during initialization.
 
-    int event_fd;  // check_events() should be called when this has input
     bool probing;
 
     // --- The following fields are only changed with vo_reconfig(), and can
@@ -356,6 +368,7 @@ double vo_get_display_fps(struct vo *vo);
 double vo_get_delay(struct vo *vo);
 
 void vo_wakeup(struct vo *vo);
+void vo_wait_default(struct vo *vo, int64_t until_time);
 
 struct mp_keymap {
   int from;

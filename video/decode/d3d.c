@@ -15,6 +15,8 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <pthread.h>
+
 #include <libavcodec/avcodec.h>
 
 #include "lavc.h"
@@ -22,6 +24,7 @@
 #include "common/av_common.h"
 #include "video/fmt-conversion.h"
 #include "video/mp_image.h"
+#include "video/mp_image_pool.h"
 #include "osdep/windows_utils.h"
 
 #include "d3d.h"
@@ -48,7 +51,6 @@ DEFINE_GUID(DXVA2_ModeVP9_VLD_Profile0,         0x463707f8, 0xa1d0, 0x4585, 0x87
 
 DEFINE_GUID(DXVA2_NoEncrypt,                    0x1b81beD0, 0xa0c7, 0x11d3, 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5);
 
-static const int PROF_MPEG2_SIMPLE[] = {FF_PROFILE_MPEG2_SIMPLE, 0};
 static const int PROF_MPEG2_MAIN[]   = {FF_PROFILE_MPEG2_SIMPLE,
                                         FF_PROFILE_MPEG2_MAIN, 0};
 static const int PROF_H264_HIGH[]    = {FF_PROFILE_H264_CONSTRAINED_BASELINE,
@@ -67,10 +69,10 @@ struct d3dva_mode {
 
 #define MODE2(id) &MP_CONCAT(DXVA2_Mode, id), # id
 #define  MODE(id) &MP_CONCAT(DXVA_,      id), # id
-// Prefered modes must come first
+// Preferred modes must come first
 static const struct d3dva_mode d3dva_modes[] = {
     // MPEG-1/2
-    {MODE2(MPEG2_VLD),        AV_CODEC_ID_MPEG2VIDEO, PROF_MPEG2_SIMPLE},
+    {MODE2(MPEG2_VLD),        AV_CODEC_ID_MPEG2VIDEO, PROF_MPEG2_MAIN},
     {MODE2(MPEG2and1_VLD),    AV_CODEC_ID_MPEG2VIDEO, PROF_MPEG2_MAIN},
     {MODE2(MPEG2and1_VLD),    AV_CODEC_ID_MPEG1VIDEO},
 
@@ -96,6 +98,22 @@ static const struct d3dva_mode d3dva_modes[] = {
 };
 #undef MODE
 #undef MODE2
+
+HMODULE d3d11_dll, d3d9_dll, dxva2_dll;
+
+static pthread_once_t d3d_load_once = PTHREAD_ONCE_INIT;
+
+static void d3d_do_load(void)
+{
+    d3d11_dll = LoadLibrary(L"d3d11.dll");
+    d3d9_dll  = LoadLibrary(L"d3d9.dll");
+    dxva2_dll = LoadLibrary(L"dxva2.dll");
+}
+
+void d3d_load_dlls(void)
+{
+    pthread_once(&d3d_load_once, d3d_do_load);
+}
 
 int d3d_probe_codec(const char *codec)
 {
@@ -132,12 +150,13 @@ static bool mode_supported(const struct d3dva_mode *mode,
 
 struct d3d_decoder_fmt d3d_select_decoder_mode(
     struct lavc_ctx *s, const GUID *device_guids, UINT n_guids,
-    DWORD (*get_dxfmt_cb)(struct lavc_ctx *s, const GUID *guid, int depth))
+    const struct d3d_decoded_format *formats, int n_formats,
+    bool (*test_fmt_cb)(struct lavc_ctx *s, const GUID *guid,
+                        const struct d3d_decoded_format *fmt))
 {
     struct d3d_decoder_fmt fmt = {
-        .guid          = &GUID_NULL,
-        .mpfmt_decoded = IMGFMT_NONE,
-        .dxfmt_decoded = 0,
+        .guid   = &GUID_NULL,
+        .format = NULL,
     };
 
     // this has the right bit-depth, but is unfortunately not the native format
@@ -146,8 +165,6 @@ struct d3d_decoder_fmt d3d_select_decoder_mode(
         return fmt;
 
     int depth = IMGFMT_RGB_DEPTH(sw_img_fmt);
-    int p010  = mp_imgfmt_find(1, 1, 2, 10, MP_IMGFLAG_YUV_NV);
-    int mpfmt_decoded = depth <= 8 ? IMGFMT_NV12 : p010;
 
     for (int i = 0; i < MP_ARRAY_SIZE(d3dva_modes); i++) {
         const struct d3dva_mode *mode = &d3dva_modes[i];
@@ -155,12 +172,23 @@ struct d3d_decoder_fmt d3d_select_decoder_mode(
             profile_compatible(mode, s->avctx->profile) &&
             mode_supported(mode, device_guids, n_guids)) {
 
-            DWORD dxfmt_decoded = get_dxfmt_cb(s, mode->guid, depth);
-            if (dxfmt_decoded) {
-                fmt.guid          = mode->guid;
-                fmt.mpfmt_decoded = mpfmt_decoded;
-                fmt.dxfmt_decoded = dxfmt_decoded;
-                return fmt;
+            for (int n = 0; n < n_formats; n++) {
+                const struct d3d_decoded_format *format = &formats[n];
+
+                if (depth <= format->depth && test_fmt_cb(s, mode->guid, format))
+                {
+                    MP_VERBOSE(s, "Selecting %s ",
+                               d3d_decoder_guid_to_desc(mode->guid));
+                    if (format->dxfmt >= (1 << 16)) {
+                        MP_VERBOSE(s, "%s\n", mp_tag_str(format->dxfmt));
+                    } else {
+                        MP_VERBOSE(s, "%d\n", (int)format->dxfmt);
+                    }
+
+                    fmt.guid   = mode->guid;
+                    fmt.format = format;
+                    return fmt;
+                }
             }
         }
     }
@@ -238,4 +266,96 @@ void copy_nv12(struct mp_image *dest, uint8_t *src_bits,
     buf.planes[1] = src_bits + src_pitch * surf_height;
     buf.stride[1] = src_pitch;
     mp_image_copy_gpu(dest, &buf);
+}
+
+// Test if Direct3D11 can be used by us. Basically, this prevents trying to use
+// D3D11 on Win7, and then failing somewhere in the process.
+bool d3d11_check_decoding(ID3D11Device *dev)
+{
+    HRESULT hr;
+    // We assume that NV12 is always supported, if hw decoding is supported at
+    // all.
+    UINT supported = 0;
+    hr = ID3D11Device_CheckFormatSupport(dev, DXGI_FORMAT_NV12, &supported);
+    return !FAILED(hr) && (supported & D3D11_BIND_DECODER);
+}
+
+static int get_dxgi_mpfmt(DWORD dxgi_fmt)
+{
+    switch (dxgi_fmt) {
+    case DXGI_FORMAT_NV12: return IMGFMT_NV12;
+    case DXGI_FORMAT_P010: return IMGFMT_P010;
+    case DXGI_FORMAT_P016: return IMGFMT_P010;
+    }
+    return 0;
+}
+
+struct mp_image *d3d11_download_image(struct mp_hwdec_ctx *ctx,
+                                      struct mp_image *mpi,
+                                      struct mp_image_pool *swpool)
+{
+    HRESULT hr;
+    ID3D11Device *device = ctx->ctx;
+
+    if (mpi->imgfmt != IMGFMT_D3D11VA && mpi->imgfmt != IMGFMT_D3D11NV12)
+        return NULL;
+
+    ID3D11Texture2D *texture = (void *)mpi->planes[1];
+    int subindex = (intptr_t)mpi->planes[2];
+    if (!texture)
+        return NULL;
+
+    D3D11_TEXTURE2D_DESC tex_desc;
+    ID3D11Texture2D_GetDesc(texture, &tex_desc);
+    int mpfmt = get_dxgi_mpfmt(tex_desc.Format);
+    if (!mpfmt)
+        return NULL;
+
+    // create staging texture shared with the CPU with mostly the same
+    // parameters as the source texture
+    tex_desc.MipLevels      = 1;
+    tex_desc.MiscFlags      = 0;
+    tex_desc.ArraySize      = 1;
+    tex_desc.Usage          = D3D11_USAGE_STAGING;
+    tex_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    tex_desc.BindFlags      = 0;
+    ID3D11Texture2D *staging = NULL;
+    hr = ID3D11Device_CreateTexture2D(device, &tex_desc, NULL, &staging);
+    if (FAILED(hr))
+        return NULL;
+
+    bool ok = false;
+    struct mp_image *sw_img = NULL;
+    ID3D11DeviceContext *device_ctx = NULL;
+    ID3D11Device_GetImmediateContext(device, &device_ctx);
+
+    // copy to the staging texture
+    ID3D11DeviceContext_CopySubresourceRegion(
+        device_ctx,
+        (ID3D11Resource *)staging, 0, 0, 0, 0,
+        (ID3D11Resource *)texture, subindex, NULL);
+
+    sw_img = mp_image_pool_get(swpool, mpfmt, tex_desc.Width, tex_desc.Height);
+    if (!sw_img)
+        goto done;
+
+    // copy staging texture to the cpu mp_image
+    D3D11_MAPPED_SUBRESOURCE lock;
+    hr = ID3D11DeviceContext_Map(device_ctx, (ID3D11Resource *)staging,
+                                 0, D3D11_MAP_READ, 0, &lock);
+    if (FAILED(hr))
+        goto done;
+    copy_nv12(sw_img, lock.pData, lock.RowPitch, tex_desc.Height);
+    ID3D11DeviceContext_Unmap(device_ctx, (ID3D11Resource *)staging, 0);
+
+    mp_image_set_size(sw_img, mpi->w, mpi->h);
+    mp_image_copy_attributes(sw_img, mpi);
+    ok = true;
+
+done:
+    ID3D11Texture2D_Release(staging);
+    ID3D11DeviceContext_Release(device_ctx);
+    if (!ok)
+        mp_image_unrefp(&sw_img);
+    return sw_img;
 }

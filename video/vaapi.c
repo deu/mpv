@@ -128,8 +128,7 @@ struct mp_vaapi_ctx *va_initialize(VADisplay *display, struct mp_log *plog,
         .display = display,
         .hwctx = {
             .type = HWDEC_VAAPI,
-            .priv = res,
-            .vaapi_ctx = res,
+            .ctx = res,
             .download_image = ctx_download_image,
         },
     };
@@ -510,7 +509,7 @@ void va_surface_init_subformat(struct mp_image *mpi)
     if (status != VA_STATUS_SUCCESS)
         goto err;
 
-    mpi->params.hw_subfmt = va_image.format.fourcc;
+    mpi->params.hw_subfmt = va_fourcc_to_imgfmt(va_image.format.fourcc);
 
     status = vaDestroyImage(p->display, va_image.image_id);
     CHECK_VA_STATUS(p->ctx, "vaDestroyImage()");

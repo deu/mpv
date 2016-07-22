@@ -273,8 +273,13 @@ Playback Control
 ``--ab-loop-a=<time>``, ``--ab-loop-b=<time>``
     Set loop points. If playback passes the ``b`` timestamp, it will seek to
     the ``a`` timestamp. Seeking past the ``b`` point doesn't loop (this is
-    intentional). The loop-points can be adjusted at runtime with the
-    corresponding properties. See also ``ab_loop`` command.
+    intentional).
+
+    If both options are set to ``no``, looping is disabled. Otherwise, the
+    start/end of the file is used if one of the options is set to ``no``.
+
+    The loop-points can be adjusted at runtime with the corresponding
+    properties. See also ``ab-loop`` command.
 
 ``--ordered-chapters``, ``--no-ordered-chapters``
     Enabled by default.
@@ -411,7 +416,7 @@ Program Behavior
 ``--no-resume-playback``
     Do not restore playback position from the ``watch_later`` configuration
     subdirectory (usually ``~/.config/mpv/watch_later/``).
-    See ``quit_watch_later`` input command.
+    See ``quit-watch-later`` input command.
 
 ``--profile=<profile1,profile2,...>``
     Use the given profile(s), ``--profile=help`` displays a list of the
@@ -588,14 +593,19 @@ Video
 
     :no:        always use software decoding (default)
     :auto:      see below
+    :auto-copy: see below
     :vdpau:     requires ``--vo=vdpau`` or ``--vo=opengl`` (Linux only)
     :vaapi:     requires ``--vo=opengl`` or ``--vo=vaapi`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with Intel GPUs only)
     :videotoolbox: requires ``--vo=opengl`` (OS X 10.8 and up only)
+    :videotoolbox-copy: copies video back into system RAM (OS X 10.8 and up only)
     :dxva2: requires ``--vo=opengl:backend=angle`` or
+
         ``--vo=opengl:backend=dxinterop`` (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
-    :d3d11va-copy: experimental (Windows only)
+    :d3d11va: requires ``--vo=opengl:backend=angle`` (Windows only)
+    :d3d11va-copy: copies video back to system RAM (Windows only)
+    :mediacodec: copies video back to system RAM (Android only)
     :rpi:       requires ``--vo=rpi`` (Raspberry Pi only - default if available)
 
     ``auto`` tries to automatically enable hardware decoding using the first
@@ -604,6 +614,13 @@ Video
     never be enabled. Also note that if the first found method doesn't actually
     work, it will always fall back to software decoding, instead of trying the
     next method (might matter on some Linux systems).
+
+    ``auto-copy`` selects only modes that copy the video data back to system
+    memory after decoding. Currently, this selects only one of the following
+    modes: ``vaapi-copy``, ``dxva2-copy``, ``d3d11va-copy``, ``mediacodec``.
+    If none of these work, hardware decoding is disabled. This mode is always
+    guaranteed to incur no additional loss compared to software decoding, and
+    will allow CPU processing with video filters.
 
     The ``vaapi`` mode, if used with ``--vo=opengl``, requires Mesa 11 and most
     likely works with Intel GPUs only. It also requires the opengl EGL backend
@@ -626,6 +643,46 @@ Video
         codecs. See ``--hwdec-codecs`` to enable hardware decoding for more
         codecs.
 
+    .. admonition:: Quality reduction with hardware decoding
+
+        Normally, hardware decoding does not reduce video quality (at least for
+        the codecs h264 and HEVC). However, due to restrictions in video output
+        APIs, there can be some loss, or blatantly incorrect results.
+
+        In some cases, RGB conversion is forced, which means the RGB conversion
+        is performed by the hardware decoding API, instead of the OpenGL code
+        used by ``--vo=opengl``. This means certain obscure colorspaces may
+        not display correctly, not certain filtering (such as debanding)
+        cannot be applied in an ideal way.
+
+        ``vdpau`` is usually safe. If deinterlacing enabled (or the ``vdpaupp``
+        video filter is active in general), it forces RGB conversion. The latter
+        currently does not treat certain colorspaces like BT.2020 correctly
+        (which is mostly a mpv-specific restriction). The ``vdpauprb`` video
+        filter retrieves image data without RGB conversion and is safe (but
+        precludes use of vdpau postprocessing).
+
+        ``vaapi`` is safe if the ``vaapi-egl`` backend is indicated in the logs.
+        If ``vaapi-glx`` is indicated, and the video colorspace is either BT.601
+        or BT.709, a forced but correct RGB conversion is performed. Otherwise,
+        the result will be incorrect.
+
+        ``d3d11va`` is usually safe (if used with ANGLE builds that support
+        ``EGL_KHR_stream path`` - otherwise, it converts to RGB), except that
+        10 bit input (HEVC main 10 profiles) will be rounded down to 8 bits.
+
+        ``dxva2`` is not safe. It appears to always use BT.601 for forced RGB
+        conversion, but actual behavior depends on the GPU drivers. Some drivers
+        appear to convert to limited range RGB, which gives a faded appearance.
+        In addition to driver-specific behavior, global system settings might
+        affect this additionally. This can give incorrect results even with
+        completely ordinary video sources.
+
+        All other methods, in particular the copy-back methods (like
+        ``dxva2-copy`` etc.) are either fully safe, or not worse than software
+        decoding. In particular, ``auto-copy`` will only select safe modes
+        (although potentially slower than other methods).
+
 ``--hwdec-preload=<api>``
     This is useful for the ``opengl`` and ``opengl-cb`` VOs for creating the
     hardware decoding OpenGL interop context, but without actually enabling
@@ -647,8 +704,8 @@ Video
     choice of the format can influence performance considerably. On the other
     hand, there doesn't appear to be a good way to detect the best format for
     the given hardware. ``nv12``, the default, works better on modern hardware,
-    while ``uyvy422`` appears to be better for old hardware. ``rgb0`` also
-    works.
+    while ``uyvy422`` appears to be better for old hardware. ``rgb0`` and
+    ``yuv420p`` also work.
 
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
@@ -1029,14 +1086,15 @@ Audio
 
 ``--volume=<value>``
     Set the startup volume. 0 means silence, 100 means no volume reduction or
-    amplification. A value of -1 (the default) will not change the volume. See
-    also ``--softvol``.
+    amplification. Negative values can be passed for compatibility, but are
+    treated as 0.
 
-    .. note::
+    Since mpv 0.18.1, this always controls the internal mixer (aka "softvol").
 
-        This was changed after the mpv 0.9 release. Before that, 100 actually
-        meant maximum volume. At the same time, the volume scale was made cubic,
-        so the old values won't match up with the new ones anyway.
+``--balance=<value>``
+    How much left/right channels contribute to the audio.
+
+    Deprecated.
 
 ``--audio-delay=<sec>``
     Audio delay in seconds (positive or negative float value). Positive values
@@ -1051,20 +1109,17 @@ Audio
 
     See also: ``--volume``.
 
-``--softvol=<mode>``
-    Control whether to use the volume controls of the audio output driver or
-    the internal mpv volume filter.
+``--softvol=<no|yes|auto>``
+    Deprecated/unfunctional. Before mpv 0.18.1, this used to control whether
+    to use the volume controls of the audio output driver or the internal mpv
+    volume filter.
 
-    :no:    prefer audio driver controls, use the volume filter only if
-            absolutely needed
-    :yes:   always use the volume filter
-    :auto:  prefer the volume filter if the audio driver uses the system mixer
-            (default)
+    The current behavior is as if this option was set to ``yes``. The other
+    behaviors are not available anymore, although ``auto`` almost matches
+    current behavior in most cases.
 
-    The intention of ``auto`` is to avoid changing system mixer settings from
-    within mpv with default settings. mpv is a video player, not a mixer panel.
-    On the other hand, mixer controls are enabled for sound servers like
-    PulseAudio, which provide per-application volume.
+    The ``no`` behavior is still partially available through the ``ao-volume``
+    and ``ao-mute`` properties. But there are no options to reset these.
 
 ``--audio-demuxer=<[+]name>``
     Use this audio demuxer type when using ``--audio-file``. Use a '+' before
@@ -1221,9 +1276,11 @@ Audio
     their start timestamps differ, and then video timing is gradually adjusted
     if necessary to reach correct synchronization later.
 
-``--softvol-max=<100.0-1000.0>``
+``--volume-max=<100.0-1000.0>``, ``--softvol-max=<...>``
     Set the maximum amplification level in percent (default: 130). A value of
     130 will allow you to adjust the volume up to about double the normal level.
+
+    ``--softvol-max`` is a deprecated alias and should not be used.
 
 ``--audio-file-auto=<no|exact|fuzzy|all>``, ``--no-audio-file-auto``
     Load additional audio files matching the video filename. The parameter
@@ -1233,7 +1290,7 @@ Audio
     :no:    Don't automatically load external audio files.
     :exact: Load the media filename with audio file extension (default).
     :fuzzy: Load all audio files containing media filename.
-    :all:   Load all aufio files in the current and ``--audio-file-paths``
+    :all:   Load all audio files in the current and ``--audio-file-paths``
             directories.
 
 ``--audio-file-paths=<path1:path2:...>``
@@ -1245,7 +1302,7 @@ Audio
     or to set your own application name when using libmpv.
 
 ``--volume-restore-data=<string>``
-    Used internally for use by playback resume (e.g. with ``quit_watch_later``).
+    Used internally for use by playback resume (e.g. with ``quit-watch-later``).
     Restoring value has to be done carefully, because different AOs as well as
     softvol can have different value ranges, and we don't want to restore
     volume if setting the volume changes it system wide. The normal options
@@ -1277,7 +1334,7 @@ Subtitles
 .. note::
 
     Changing styling and position does not work with all subtitles. Image-based
-    subtitles (DVD, Bluray/PGS, DVB) can not changed for fundamental reasons.
+    subtitles (DVD, Bluray/PGS, DVB) cannot changed for fundamental reasons.
     Subtitles in ASS format are normally not changed intentionally, but
     overriding them can be controlled with ``--ass-style-override``.
 
@@ -1435,7 +1492,7 @@ Subtitles
 
         Using this option may lead to incorrect subtitle rendering.
 
-``--ass-style-override=<yes|no|force>``
+``--ass-style-override=<yes|no|force|signfs|strip>``
     Control whether user style overrides should be applied.
 
     :yes:   Apply all the ``--ass-*`` style override options. Changing the default
@@ -1445,6 +1502,8 @@ Subtitles
     :no:    Render subtitles as forced by subtitle scripts.
     :force: Try to force the font style as defined by the ``--sub-text-*``
             options. Can break rendering easily.
+    :strip: Radically strip all ASS tags and styles from the subtitle. This
+            is equivalent to the old ``--no-ass`` / ``--no-sub-ass`` options.
 
 ``--ass-force-margins``
     Enables placing toptitles and subtitles in black borders when they are
@@ -1541,6 +1600,13 @@ Subtitles
 ``--sub-ass``, ``--no-sub-ass``
     Render ASS subtitles natively (enabled by default).
 
+    .. note::
+
+        This has been deprecated by ``--ass-style-override=strip``. You also
+        may need ``--embeddedfonts=no`` to get the same behavior. Also,
+        using ``--ass-style-override=force`` should give better results
+        without breaking subtitles too much.
+
     If ``--no-sub-ass`` is specified, all tags and style declarations are
     stripped and ignored on display. The subtitle renderer uses the font style
     as specified by the ``--sub-text-`` options instead.
@@ -1550,10 +1616,6 @@ Subtitles
         Using ``--no-sub-ass`` may lead to incorrect or completely broken
         rendering of ASS/SSA subtitles. It can sometimes be useful to forcibly
         override the styling of ASS subtitles, but should be avoided in general.
-
-    .. note::
-
-        Try using ``--ass-style-override=force`` instead.
 
 ``--sub-auto=<no|exact|fuzzy|all>``, ``--no-sub-auto``
     Load additional subtitle files matching the video filename. The parameter
@@ -1795,6 +1857,12 @@ Window
         mode can be used to create the window always on program start, but this
         may cause other issues.
 
+``--taskbar-progress``, ``--no-taskbar-progress``
+    (Windows only)
+    Enable/disable playback progress rendering in taskbar (Windows 7 and above).
+    
+    Enabled by default.
+
 ``--ontop``
     Makes the player window stay on top of other windows.
 
@@ -1805,6 +1873,12 @@ Window
 ``--border``, ``--no-border``
     Play video with window border and decorations. Since this is on by
     default, use ``--no-border`` to disable the standard window decorations.
+
+``--fit-border``, ``--no-fit-border``
+    (Windows only) Fit the whole window with border and decorations on the
+    screen. Since this is on by default, use ``--no-fit-border`` to make mpv
+    try to only fit client area with video on the screen. This behavior only
+    applied to window/video with size exceeding size of the screen.
 
 ``--on-all-workspaces``
     (X11 only)
@@ -1897,7 +1971,7 @@ Window
             Make the window width 70% of the screen size, keeping aspect ratio.
         ``1000``
             Set the window width to 1000 pixels, keeping aspect ratio.
-        ``70%:60%``
+        ``70%x60%``
             Make the window as large as possible, without being wider than 70%
             of the screen width, or higher than 60% of the screen height.
 
@@ -1959,6 +2033,14 @@ Window
     be the default behavior. Currently only affects X11 VOs.
 
 ``--heartbeat-cmd=<command>``
+
+    .. warning::
+
+        This option is redundant with Lua scripting. Further, it shouldn't be
+        needed for disabling screensaver anyway, since mpv will call
+        ``xdg-screensaver`` when using X11 backend. As a consequence this
+        option has been deprecated with no direct replacement.
+
     Command that is executed every 30 seconds during playback via *system()* -
     i.e. using the shell. The time between the commands can be customized with
     the ``--heartbeat-interval`` option. The command is not run while playback
@@ -1984,7 +2066,7 @@ Window
 
     .. admonition:: Example for GNOME screensaver
 
-        ``mpv --heartbeat-cmd="gnome-screensaver-command -p" file``
+        ``mpv --heartbeat-cmd="gnome-screensaver-command --deactivate" file``
 
 
 ``--heartbeat-interval=<sec>``
@@ -2080,9 +2162,17 @@ Window
 
     This option might be removed in the future.
 
-``--x11-bypass-compositor=<yes|no>``
+``--x11-bypass-compositor=<yes|no|fs-only|never>``
     If set to ``yes``, then ask the compositor to unredirect the mpv window
-    (default: no). This uses the ``_NET_WM_BYPASS_COMPOSITOR`` hint.
+    (default: ``fs-only``). This uses the ``_NET_WM_BYPASS_COMPOSITOR`` hint.
+
+    ``fs-only`` asks the window manager to disable the compositor only in
+    fullscreen mode.
+
+    ``no`` sets ``_NET_WM_BYPASS_COMPOSITOR`` to 0, which is the default value
+    as declared by the EWMH specification, i.e. no change is done.
+
+    ``never`` asks the window manager to never disable the compositor.
 
 
 Disc Devices
@@ -2370,7 +2460,7 @@ Demuxer
     stop reading additional packets as soon as one of the limits is reached.
     (The limits still can be slightly overstepped due to technical reasons.)
 
-    Set these limits highher if you get a packet queue overflow warning, and
+    Set these limits higher if you get a packet queue overflow warning, and
     you think normal playback would be possible with a larger packet queue.
 
     See ``--list-options`` for defaults and value range.
@@ -2395,7 +2485,7 @@ Demuxer
 
 ``--force-seekable=<yes|no>``
     If the player thinks that the media is not seekable (e.g. playing from a
-    pipe, or it's a http stream with a server that doesn't support range
+    pipe, or it's an http stream with a server that doesn't support range
     requests), seeking will be disabled. This option can forcibly enable it.
     For seeks within the cache, there's a good chance of success.
 
@@ -2587,7 +2677,7 @@ OSD
     (default), then the playback time, duration, and some more information is
     shown.
 
-    This is also used for the ``show_progress`` command (by default mapped to
+    This is also used for the ``show-progress`` command (by default mapped to
     ``P``), or in some non-default cases when seeking.
 
     ``--osd-status-msg`` is a legacy equivalent (but with a minor difference).
@@ -2595,7 +2685,7 @@ OSD
 ``--osd-status-msg=<string>``
     Show a custom string during playback instead of the standard status text.
     This overrides the status text used for ``--osd-level=3``, when using the
-    ``show_progress`` command (by default mapped to ``P``), or in some
+    ``show-progress`` command (by default mapped to ``P``), or in some
     non-default cases when seeking. Expands properties. See
     `Property Expansion`_.
 
@@ -3222,7 +3312,7 @@ Cache
     With ``auto``, the cache will usually be enabled for network streams,
     using the size set by ``--cache-default``. With ``yes``, the cache will
     always be enabled with the size set by ``--cache-default`` (unless the
-    stream can not be cached, or ``--cache-default`` disables caching).
+    stream cannot be cached, or ``--cache-default`` disables caching).
 
     May be useful when playing files from slow media, but can also have
     negative effects, especially with file formats that require a lot of
@@ -3536,7 +3626,7 @@ Miscellaneous
     frame dropping due to the audio "overshooting" and skipping multiple video
     frames before the sync logic can react.
 
-``--video-sync-adrop-size=<value``
+``--video-sync-adrop-size=<value>``
     For the ``--video-sync=display-adrop`` mode. This mode duplicates/drops
     audio data to keep audio in sync with video. To avoid audio artifacts on
     jitter (which would add/remove samples all the time), this is done in
@@ -3609,7 +3699,7 @@ Miscellaneous
     - A label of the form ``aidN`` selects audio track N as input (e.g.
       ``aid1``).
     - A label of the form ``vidN`` selects video track N as input.
-    - A label named ``ao`` will be connected to the audio input.
+    - A label named ``ao`` will be connected to the audio output.
     - A label named ``vo`` will be connected to the video output.
 
     Each label can be used only once. If you want to use e.g. an audio stream
@@ -3617,7 +3707,7 @@ Miscellaneous
     video or audio outputs are not possible, but you can use filters to merge
     them into one.
 
-    The complex filter can not be changed yet during playback. It's also not
+    The complex filter cannot be changed yet during playback. It's also not
     possible to change the tracks connected to the filter at runtime. Other
     tracks, as long as they're not connected to the filter, and the
     corresponding output is not connected to the filter, can still be freely
@@ -3646,4 +3736,5 @@ Miscellaneous
         - ``null:// --lavfi-complex='life [vo]'``
           Conways' Life Game.
 
-    See the FFmpeg libavfilter documentation for details on the filter.
+    See the FFmpeg libavfilter documentation for details on the available
+    filters.

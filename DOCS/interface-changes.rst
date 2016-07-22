@@ -19,9 +19,43 @@ Interface changes
 
 ::
 
- --- mpv 0.17.1 ---
-    - now ab-loops are active even if the "ab-loop-b" property is unset ("no"),
-      in which case the end of the file is used as B loop point
+ --- mpv 0.18.2 ---
+    - deprecate "balance" option/property (no replacement)
+ --- mpv 0.18.1 ---
+    - deprecate --heartbeat-cmd
+    - remove --softvol=no capability:
+        - deprecate --softvol, it now does nothing
+        - --volume, --mute, and the corresponding properties now always control
+          softvol, and behave as expected without surprises (e.g. you can set
+          them normally while no audio is initialized)
+        - rename --softvol-max to --volume-max (deprecated alias is added)
+        - the --volume-restore-data option and property are removed without
+          replacement. They were _always_ internal, and used for watch-later
+          resume/restore. Now --volume/--mute are saved directly instead.
+        - the previous point means resuming files with older watch-later configs
+          will print an error about missing --volume-restore-data (which you can
+          ignore), and will not restore the previous value
+        - as a consequence, volume controls will no longer control PulseAudio
+          per-application value, or use the system mixer's per-application
+          volume processing
+        - system or per-application volume can still be controlled with the
+          ao-volume and ao-mute properties (there are no command line options)
+ --- mpv 0.18.0 ---
+    - now ab-loops are active even if one of the "ab-loop-a"/"-b" properties is
+      unset ("no"), in which case the start of the file is used if the A loop
+      point is unset, and the end of the file for an unset B loop point
+    - deprecate --sub-ass=no option by --ass-style-override=strip
+      (also needs --embeddedfonts=no)
+    - add "hwdec-interop" and "hwdec-current" properties
+    - deprecated "hwdec-active" and "hwdec-detected" properties (to be removed
+      in mpv 0.20.0)
+    - choice option/property values that are "yes" or "no" will now be returned
+      as booleans when using the mpv_node functions in the client API, the
+      "native" property accessors in Lua, and the JSON API. They can be set as
+      such as well.
+    - the VO opengl fbo-format sub-option does not accept "rgb" or "rgba"
+      anymore
+    - all VO opengl prescalers have been removed (replaced by user scripts)
  --- mpv 0.17.0 ---
     - deprecate "track-list/N/audio-channels" property (use
       "track-list/N/demux-channel-count" instead)

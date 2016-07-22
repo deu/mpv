@@ -271,10 +271,6 @@ static int glx_init(struct MPGLContext *ctx, int flags)
     if (!success)
         goto uninit;
 
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_RED_SIZE, &ctx->gl->fb_r);
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_GREEN_SIZE, &ctx->gl->fb_g);
-    glXGetFBConfigAttrib(vo->x11->display, fbc, GLX_BLUE_SIZE, &ctx->gl->fb_b);
-
     return 0;
 
 uninit:
@@ -312,6 +308,16 @@ static void glx_swap_buffers(struct MPGLContext *ctx)
     glXSwapBuffers(ctx->vo->x11->display, ctx->vo->x11->window);
 }
 
+static void glx_wakeup(struct MPGLContext *ctx)
+{
+    vo_x11_wakeup(ctx->vo);
+}
+
+static void glx_wait_events(struct MPGLContext *ctx, int64_t until_time_us)
+{
+    vo_x11_wait_events(ctx->vo, until_time_us);
+}
+
 const struct mpgl_driver mpgl_driver_x11 = {
     .name           = "x11",
     .priv_size      = sizeof(struct glx_context),
@@ -319,6 +325,8 @@ const struct mpgl_driver mpgl_driver_x11 = {
     .reconfig       = glx_reconfig,
     .swap_buffers   = glx_swap_buffers,
     .control        = glx_control,
+    .wakeup         = glx_wakeup,
+    .wait_events    = glx_wait_events,
     .uninit         = glx_uninit,
 };
 
@@ -329,5 +337,7 @@ const struct mpgl_driver mpgl_driver_x11_probe = {
     .reconfig       = glx_reconfig,
     .swap_buffers   = glx_swap_buffers,
     .control        = glx_control,
+    .wakeup         = glx_wakeup,
+    .wait_events    = glx_wait_events,
     .uninit         = glx_uninit,
 };

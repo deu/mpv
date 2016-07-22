@@ -39,14 +39,10 @@
 // usually copy the whole struct, so that fields added later will be preserved.
 struct mp_image_params {
     enum mp_imgfmt imgfmt;      // pixel format
-    uint64_t hw_subfmt;         // underlying format for some hwaccel pixfmts
-                                // (will use the HW API's format identifiers)
+    enum mp_imgfmt hw_subfmt;   // underlying format for some hwaccel pixfmts
     int w, h;                   // image dimensions
-    int p_w, p_h;               // define pixel aspect ratio (never 0/0)
-    enum mp_csp colorspace;
-    enum mp_csp_levels colorlevels;
-    enum mp_csp_prim primaries;
-    enum mp_csp_trc gamma;
+    int p_w, p_h;               // define pixel aspect ratio (undefined: 0/0)
+    struct mp_colorspace color;
     enum mp_chroma_location chroma_location;
     // The image should be rotated clockwise (0-359 degrees).
     int rotate;

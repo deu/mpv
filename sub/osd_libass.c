@@ -90,7 +90,6 @@ void osd_destroy_backend(struct osd_state *osd)
     for (int n = 0; n < MAX_OSD_PARTS; n++) {
         struct osd_object *obj = osd->objs[n];
         destroy_ass_renderer(&obj->ass);
-        talloc_free(obj->parts_cache.parts);
         for (int i = 0; i < obj->num_externals; i++)
             destroy_external(&obj->externals[i]);
         obj->num_externals = 0;
@@ -179,12 +178,9 @@ static void clear_ass(struct ass_state *ass)
 void osd_get_function_sym(char *buffer, size_t buffer_size, int osd_function)
 {
     // 0xFF is never valid UTF-8, so we can use it to escape OSD symbols.
+    // (Same trick as OSD_ASS_0/OSD_ASS_1.)
     snprintf(buffer, buffer_size, "\xFF%c", osd_function);
 }
-
-// Same trick as above: never valid UTF-8, so we expect it's free for use.
-const char *const osd_ass_0 = "\xFD";
-const char *const osd_ass_1 = "\xFE";
 
 static void mangle_ass(bstr *dst, const char *in)
 {
@@ -198,8 +194,8 @@ static void mangle_ass(bstr *dst, const char *in)
             in += 2;
             continue;
         }
-        if (*in == '\xFD' || *in == '\xFE') {
-            escape_ass = *in == '\xFE';
+        if (*in == OSD_ASS_0[0] || *in == OSD_ASS_1[0]) {
+            escape_ass = *in == OSD_ASS_1[0];
             in += 1;
             continue;
         }
@@ -504,7 +500,7 @@ void osd_set_external(struct osd_state *osd, void *id, int res_x, int res_y,
         entry->res_x = res_x;
         entry->res_y = res_y;
         update_external(osd, obj, entry);
-        obj->parts_cache.change_id = 1;
+        obj->changed = true;
         osd_changed_unlocked(osd, obj->type);
     }
 
@@ -513,28 +509,40 @@ done:
 }
 
 static void append_ass(struct ass_state *ass, struct mp_osd_res *res,
-                       struct sub_bitmaps *imgs)
+                       ASS_Image **img_list, bool *changed)
 {
-    if (!ass->render || !ass->track)
+    if (!ass->render || !ass->track) {
+        *img_list = NULL;
         return;
+    }
 
     ass_set_frame_size(ass->render, res->w, res->h);
     ass_set_aspect_ratio(ass->render, res->display_par, 1.0);
-    mp_ass_render_frame(ass->render, ass->track, 0, imgs);
+
+    int ass_changed;
+    *img_list = ass_render_frame(ass->render, ass->track, 0, &ass_changed);
+    *changed |= ass_changed;
 }
 
 void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
-                            struct sub_bitmaps *out_imgs)
+                            int format, struct sub_bitmaps *out_imgs)
 {
     if (obj->force_redraw && obj->type == OSDTYPE_OSD)
         update_osd(osd, obj);
 
-    append_ass(&obj->ass, &obj->vo_res, &obj->parts_cache);
-    for (int n = 0; n < obj->num_externals; n++)
-        append_ass(&obj->externals[n].ass, &obj->vo_res, &obj->parts_cache);
+    if (!obj->ass_packer)
+        obj->ass_packer = mp_ass_packer_alloc(obj);
 
-    *out_imgs = obj->parts_cache;
+    MP_TARRAY_GROW(obj, obj->ass_imgs, obj->num_externals + 1);
 
-    obj->parts_cache.change_id = 0;
-    obj->parts_cache.num_parts = 0;
+    append_ass(&obj->ass, &obj->vo_res, &obj->ass_imgs[0], &obj->changed);
+    for (int n = 0; n < obj->num_externals; n++) {
+        append_ass(&obj->externals[n].ass, &obj->vo_res, &obj->ass_imgs[n + 1],
+                   &obj->changed);
+    }
+
+    mp_ass_packer_pack(obj->ass_packer, obj->ass_imgs, obj->num_externals + 1,
+                       obj->changed, format, out_imgs);
+
+    obj->changed = false;
 }

@@ -1387,7 +1387,7 @@ function osc_init()
     ne.content = "\238\132\144"
     ne.visible = have_pl
     ne.eventresponder["mouse_btn0_up"] =
-        function () mp.commandv("playlist_prev", "weak") end
+        function () mp.commandv("playlist-prev", "weak") end
     ne.eventresponder["shift+mouse_btn0_up"] =
         function () show_message(mp.get_property_osd("playlist"), 3) end
 
@@ -1397,7 +1397,7 @@ function osc_init()
     ne.content = "\238\132\129"
     ne.visible = have_pl
     ne.eventresponder["mouse_btn0_up"] =
-        function () mp.commandv("playlist_next", "weak") end
+        function () mp.commandv("playlist-next", "weak") end
     ne.eventresponder["shift+mouse_btn0_up"] =
         function () show_message(mp.get_property_osd("playlist"), 3) end
 
@@ -1425,7 +1425,7 @@ function osc_init()
     ne.eventresponder["mouse_btn0_down"] =
         function () mp.commandv("seek", -5, "relative", "keyframes") end
     ne.eventresponder["shift+mouse_btn0_down"] =
-        function () mp.commandv("frame_back_step") end
+        function () mp.commandv("frame-back-step") end
     ne.eventresponder["mouse_btn2_down"] =
         function () mp.commandv("seek", -30, "relative", "keyframes") end
 
@@ -1437,7 +1437,7 @@ function osc_init()
     ne.eventresponder["mouse_btn0_down"] =
         function () mp.commandv("seek", 10, "relative", "keyframes") end
     ne.eventresponder["shift+mouse_btn0_down"] =
-        function () mp.commandv("frame_step") end
+        function () mp.commandv("frame-step") end
     ne.eventresponder["mouse_btn2_down"] =
         function () mp.commandv("seek", 60, "relative", "keyframes") end
 

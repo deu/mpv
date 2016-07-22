@@ -9,9 +9,11 @@
 typedef struct mp_vo_opts {
     struct m_obj_settings *video_driver_list, *vo_defs;
 
+    int taskbar_progress;
     int ontop;
     int fullscreen;
     int border;
+    int fit_border;
     int all_workspaces;
 
     int screen_id;
@@ -87,9 +89,9 @@ typedef struct MPOpts {
     int ao_null_fallback;
     int force_vo;
     int softvol;
-    float mixer_init_volume;
-    int mixer_init_mute;
-    char *mixer_restore_volume_data;
+    float softvol_volume;
+    float balance;
+    int softvol_mute;
     float softvol_max;
     int gapless_audio;
     double audio_buffer;

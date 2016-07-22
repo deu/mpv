@@ -49,6 +49,8 @@
 #include "command.h"
 #include "screenshot.h"
 
+#define VF_DEINTERLACE_LABEL "deinterlace"
+
 enum {
     // update_video() - code also uses: <0 error, 0 eof, >0 progress
     VD_ERROR = -1,
@@ -153,8 +155,45 @@ static int try_filter(struct vo_chain *vo_c, char *name, char *label, char **arg
     return 0;
 }
 
+static bool check_output_format(struct vo_chain *vo_c, int imgfmt)
+{
+    return vo_c->vf->output_params.imgfmt == imgfmt;
+}
+
+static int probe_deint_filters(struct vo_chain *vo_c)
+{
+    // Usually, we prefer inserting/removing deint filters. But If there's VO
+    // support, or the user inserted a filter that supports swichting deint and
+    // that has no VF_DEINTERLACE_LABEL, or if the filter was auto-inserted
+    // for other reasons and supports switching deint (like vf_d3d11vpp), then
+    // use the runtime switching method.
+    if (video_vf_vo_control(vo_c, VFCTRL_SET_DEINTERLACE, &(int){1}) == CONTROL_OK)
+        return 0;
+
+    if (check_output_format(vo_c, IMGFMT_VDPAU)) {
+        char *args[5] = {"deint", "yes"};
+        int pref = 0;
+        vo_control(vo_c->vo, VOCTRL_GET_PREF_DEINT, &pref);
+        pref = pref < 0 ? -pref : pref;
+        if (pref > 0 && pref <= 4) {
+            const char *types[] =
+                {"", "first-field", "bob", "temporal", "temporal-spatial"};
+            args[2] = "deint-mode";
+            args[3] = (char *)types[pref];
+        }
+
+        return try_filter(vo_c, "vdpaupp", VF_DEINTERLACE_LABEL, args);
+    }
+    if (check_output_format(vo_c, IMGFMT_VAAPI))
+        return try_filter(vo_c, "vavpp", VF_DEINTERLACE_LABEL, NULL);
+    if (check_output_format(vo_c, IMGFMT_D3D11VA) ||
+        check_output_format(vo_c, IMGFMT_D3D11NV12))
+        return try_filter(vo_c, "d3d11vpp", VF_DEINTERLACE_LABEL, NULL);
+    return try_filter(vo_c, "yadif", VF_DEINTERLACE_LABEL, NULL);
+}
+
 // Reconfigure the filter chain according to the new input format.
-static void filter_reconfig(struct vo_chain *vo_c)
+static void filter_reconfig(struct MPContext *mpctx, struct vo_chain *vo_c)
 {
     struct mp_image_params params = vo_c->input_format;
     if (!params.imgfmt)
@@ -162,18 +201,21 @@ static void filter_reconfig(struct vo_chain *vo_c)
 
     set_allowed_vo_formats(vo_c);
 
-    if (vf_reconfig(vo_c->vf, &params) < 0)
-        return;
-
-    char *filters[] = {"autorotate", "autostereo3d", NULL};
+    char *filters[] = {"autorotate", "autostereo3d", "deinterlace", NULL};
     for (int n = 0; filters[n]; n++) {
         struct vf_instance *vf = vf_find_by_label(vo_c->vf, filters[n]);
-        if (vf) {
+        if (vf)
             vf_remove_filter(vo_c->vf, vf);
-            if (vf_reconfig(vo_c->vf, &params) < 0)
-                return;
-        }
     }
+
+    if (vo_c->vf->initialized < 1) {
+        if (vf_reconfig(vo_c->vf, &params) < 0)
+            return;
+    }
+
+    // Make sure to reset this even if runtime deint switching is used.
+    if (mpctx->opts->deinterlace >= 0)
+        video_vf_vo_control(vo_c, VFCTRL_SET_DEINTERLACE, &(int){0});
 
     if (params.rotate && (params.rotate % 90 == 0)) {
         if (!(vo_c->vo->driver->caps & VO_CAP_ROTATE90)) {
@@ -194,6 +236,42 @@ static void filter_reconfig(struct vo_chain *vo_c)
                 MP_ERR(vo_c, "Can't insert 3D conversion filter.\n");
         }
     }
+
+    if (mpctx->opts->deinterlace == 1)
+        probe_deint_filters(vo_c);
+}
+
+static void recreate_auto_filters(struct MPContext *mpctx)
+{
+    filter_reconfig(mpctx, mpctx->vo_chain);
+
+    mp_force_video_refresh(mpctx);
+
+    mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
+}
+
+int get_deinterlacing(struct MPContext *mpctx)
+{
+    struct vo_chain *vo_c = mpctx->vo_chain;
+    int enabled = 0;
+    if (video_vf_vo_control(vo_c, VFCTRL_GET_DEINTERLACE, &enabled) != CONTROL_OK)
+        enabled = -1;
+    if (enabled < 0) {
+        // vf_lavfi doesn't support VFCTRL_GET_DEINTERLACE
+        if (vf_find_by_label(vo_c->vf, VF_DEINTERLACE_LABEL))
+            enabled = 1;
+    }
+    return enabled;
+}
+
+void set_deinterlacing(struct MPContext *mpctx, bool enable)
+{
+    if (enable == (get_deinterlacing(mpctx) > 0))
+        return;
+
+    mpctx->opts->deinterlace = enable;
+    recreate_auto_filters(mpctx);
+    mpctx->opts->deinterlace = get_deinterlacing(mpctx) > 0;
 }
 
 static void recreate_video_filters(struct MPContext *mpctx)
@@ -204,7 +282,7 @@ static void recreate_video_filters(struct MPContext *mpctx)
 
     vf_destroy(vo_c->vf);
     vo_c->vf = vf_new(mpctx->global);
-    vo_c->vf->hwdec = vo_c->hwdec_info;
+    vo_c->vf->hwdec_devs = vo_c->hwdec_devs;
     vo_c->vf->wakeup_callback = wakeup_playloop;
     vo_c->vf->wakeup_callback_ctx = mpctx;
     vo_c->vf->container_fps = vo_c->container_fps;
@@ -230,7 +308,7 @@ int reinit_video_filters(struct MPContext *mpctx)
     recreate_video_filters(mpctx);
 
     if (need_reconfig)
-        filter_reconfig(vo_c);
+        filter_reconfig(mpctx, vo_c);
 
     mp_force_video_refresh(mpctx);
 
@@ -314,7 +392,6 @@ void uninit_video_chain(struct MPContext *mpctx)
 
         mpctx->video_status = STATUS_EOF;
 
-        remove_deint_filter(mpctx);
         mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
     }
 }
@@ -334,7 +411,7 @@ int init_video_decoder(struct MPContext *mpctx, struct track *track)
     d_video->codec = track->stream->codec;
     d_video->fps = d_video->header->codec->fps;
     if (mpctx->vo_chain)
-        d_video->hwdec_info = mpctx->vo_chain->hwdec_info;
+        d_video->hwdec_devs = mpctx->vo_chain->hwdec_devs;
 
     MP_VERBOSE(d_video, "Container reported FPS: %f\n", d_video->fps);
 
@@ -404,7 +481,7 @@ int reinit_video_chain_src(struct MPContext *mpctx, struct lavfi_pad *src)
     vo_c->vo = mpctx->video_out;
     vo_c->vf = vf_new(mpctx->global);
 
-    vo_control(vo_c->vo, VOCTRL_GET_HWDEC_INFO, &vo_c->hwdec_info);
+    vo_c->hwdec_devs = vo_c->vo->hwdec_devs;
 
     vo_c->filter_src = src;
     if (!vo_c->filter_src) {
@@ -522,22 +599,6 @@ static int decode_image(struct MPContext *mpctx)
     }
 }
 
-// Called after video reinit. This can be generally used to try to insert more
-// filters using the filter chain edit functionality in command.c.
-static void init_filter_params(struct MPContext *mpctx)
-{
-    struct MPOpts *opts = mpctx->opts;
-
-    // Note that the filter chain is already initialized. This code might
-    // recreate the chain a second time, which is not very elegant, but allows
-    // us to test whether enabling deinterlacing works with the current video
-    // format and other filters.
-    if (opts->deinterlace >= 0) {
-        remove_deint_filter(mpctx);
-        set_deinterlacing(mpctx, opts->deinterlace != 0);
-    }
-}
-
 // Feed newly decoded frames to the filter, take care of format changes.
 // If eof=true, drain the filter chain, and return VD_EOF if empty.
 static int video_filter(struct MPContext *mpctx, bool eof)
@@ -564,7 +625,8 @@ static int video_filter(struct MPContext *mpctx, bool eof)
             return VD_PROGRESS;
 
         // The filter chain is drained; execute the filter format change.
-        filter_reconfig(mpctx->vo_chain);
+        vf->initialized = 0;
+        filter_reconfig(mpctx, mpctx->vo_chain);
 
         mp_notify(mpctx, MPV_EVENT_VIDEO_RECONFIG, NULL);
 
@@ -586,7 +648,6 @@ static int video_filter(struct MPContext *mpctx, bool eof)
             MP_FATAL(mpctx, "Cannot initialize video filters.\n");
             return VD_ERROR;
         }
-        init_filter_params(mpctx);
         return VD_RECONFIG;
     }
 
@@ -685,7 +746,7 @@ static void handle_new_frame(struct MPContext *mpctx)
     double pts = mpctx->next_frames[0]->pts;
     if (mpctx->video_pts != MP_NOPTS_VALUE) {
         frame_time = pts - mpctx->video_pts;
-        double tolerance = 15;
+        double tolerance = mpctx->demuxer->ts_resets_possible ? 5 : 1e4;
         if (frame_time <= 0 || frame_time >= tolerance) {
             // Assume a discontinuity.
             MP_WARN(mpctx, "Invalid video timestamp: %f -> %f\n",
@@ -1130,6 +1191,10 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
     drop_repeat = MPCLAMP(drop_repeat, -num_vsyncs, num_vsyncs * 10);
     num_vsyncs += drop_repeat;
 
+    // Always show the first frame.
+    if (mpctx->num_past_frames <= 1 && num_vsyncs < 1)
+        num_vsyncs = 1;
+
     // Estimate the video position, so we can calculate a good A/V difference
     // value below. This is used to estimate A/V drift.
     double time_left = vo_get_delay(vo);
@@ -1356,11 +1421,13 @@ void write_video(struct MPContext *mpctx)
     };
     calculate_frame_duration(mpctx);
 
+    int req = vo_get_num_req_frames(mpctx->video_out);
+    assert(req >= 1 && req <= VO_MAX_REQ_FRAMES);
     struct vo_frame dummy = {
         .pts = pts,
         .duration = -1,
         .still = mpctx->step_frames > 0,
-        .num_frames = MPMIN(mpctx->num_next_frames, VO_MAX_REQ_FRAMES),
+        .num_frames = MPMIN(mpctx->num_next_frames, req),
         .num_vsyncs = 1,
     };
     for (int n = 0; n < dummy.num_frames; n++)
@@ -1380,7 +1447,6 @@ void write_video(struct MPContext *mpctx)
 
     mpctx->video_pts = mpctx->next_frames[0]->pts;
     mpctx->last_vo_pts = mpctx->video_pts;
-    mpctx->playback_pts = mpctx->video_pts;
 
     shift_frames(mpctx);
 

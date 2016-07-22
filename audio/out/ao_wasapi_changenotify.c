@@ -17,6 +17,7 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <initguid.h>
 #include <wchar.h>
 
 #include "ao_wasapi.h"
@@ -94,7 +95,7 @@ static HRESULT STDMETHODCALLTYPE sIMMNotificationClient_OnDeviceAdded(
     return S_OK;
 }
 
-// maybe MPV can go over to the prefered device once it is plugged in?
+// maybe MPV can go over to the preferred device once it is plugged in?
 static HRESULT STDMETHODCALLTYPE sIMMNotificationClient_OnDeviceRemoved(
     IMMNotificationClient *This,
     LPCWSTR pwstrDeviceId)

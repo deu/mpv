@@ -20,6 +20,8 @@
 #include <math.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <unistd.h>
+#include <poll.h>
 
 #include "config.h"
 #include "misc/bstr.h"
@@ -38,6 +40,7 @@
 #include "vo.h"
 #include "win_state.h"
 #include "osdep/atomics.h"
+#include "osdep/io.h"
 #include "osdep/timer.h"
 #include "osdep/subprocess.h"
 
@@ -280,6 +283,9 @@ static void vo_set_cursor_hidden(struct vo *vo, bool cursor_hidden)
 static int x11_errorhandler(Display *display, XErrorEvent *event)
 {
     struct mp_log *log = x11_error_output;
+    if (!log)
+        return 0;
+
     char msg[60];
     XGetErrorText(display, event->error_code, (char *) &msg, sizeof(msg));
 
@@ -511,7 +517,7 @@ static void *screensaver_thread(void *arg)
             break;
 
         char *args[] = {"xdg-screensaver", "reset", NULL};
-        int status = mp_subprocess(args, NULL, NULL, NULL, NULL, &(char*){0});
+        int status = mp_subprocess(args, NULL, NULL, mp_devnull, mp_devnull, &(char*){0});
         if (status) {
             MP_VERBOSE(x11, "Disabling screensaver failed (%d). Make sure the "
                             "xdg-screensaver script is installed.\n", status);
@@ -537,6 +543,7 @@ int vo_x11_init(struct vo *vo)
         .input_ctx = vo->input_ctx,
         .screensaver_enabled = true,
         .xrandr_event = -1,
+        .wakeup_pipe = {-1, -1},
     };
     vo->x11 = x11;
 
@@ -590,7 +597,8 @@ int vo_x11_init(struct vo *vo)
 
     x11->wm_type = vo_wm_detect(vo);
 
-    vo->event_fd = ConnectionNumber(x11->display);
+    x11->event_fd = ConnectionNumber(x11->display);
+    mp_make_wakeup_pipe(x11->wakeup_pipe);
 
     xrandr_read(x11);
 
@@ -746,8 +754,8 @@ void vo_x11_uninit(struct vo *vo)
     if (x11->xim)
         XCloseIM(x11->xim);
     if (x11->display) {
-        x11_error_output = NULL;
         XSetErrorHandler(NULL);
+        x11_error_output = NULL;
         XCloseDisplay(x11->display);
     }
 
@@ -757,6 +765,9 @@ void vo_x11_uninit(struct vo *vo)
         pthread_join(x11->screensaver_thread, NULL);
         sem_destroy(&x11->screensaver_sem);
     }
+
+    for (int n = 0; n < 2; n++)
+        close(x11->wakeup_pipe[n]);
 
     talloc_free(x11);
     vo->x11 = NULL;
@@ -950,6 +961,22 @@ static int get_mods(unsigned int state)
     return modifiers;
 }
 
+static void vo_x11_update_composition_hint(struct vo *vo)
+{
+    struct vo_x11_state *x11 = vo->x11;
+
+    long hint = 0;
+    switch (vo->opts->x11_bypass_compositor) {
+    case 0: hint = 0; break; // leave default
+    case 1: hint = 1; break; // always bypass
+    case 2: hint = x11->fs ? 1 : 0; break; // bypass in FS
+    case 3: hint = 2; break; // always enable
+    }
+
+    XChangeProperty(x11->display, x11->window, XA(x11,_NET_WM_BYPASS_COMPOSITOR),
+                    XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&hint, 1);
+}
+
 static void vo_x11_check_net_wm_state_fullscreen_change(struct vo *vo)
 {
     struct vo_x11_state *x11 = vo->x11;
@@ -986,6 +1013,8 @@ static void vo_x11_check_net_wm_state_fullscreen_change(struct vo *vo)
 
             x11->size_changed_during_fs = false;
             x11->pos_changed_during_fs = false;
+
+            vo_x11_update_composition_hint(vo);
         }
     }
 }
@@ -1102,6 +1131,7 @@ int vo_x11_check_events(struct vo *vo)
         case MapNotify:
             x11->window_hidden = false;
             x11->pseudo_mapped = true;
+            x11->current_icc_screen = -1;
             vo_x11_update_geometry(vo);
             break;
         case DestroyNotify:
@@ -1437,15 +1467,11 @@ static void vo_x11_create_window(struct vo *vo, XVisualInfo *vis,
     }
 
     if (!x11->parent) {
-        if (vo->opts->x11_bypass_compositor) {
-            long v = 1; // request disabling compositor
-            XChangeProperty(x11->display, x11->window,
-                XA(x11,_NET_WM_BYPASS_COMPOSITOR), XA_CARDINAL, 32,
-                PropModeReplace, (unsigned char *)&v, 1);
-        }
+        vo_x11_update_composition_hint(vo);
         vo_x11_set_wm_icon(x11);
         vo_x11_update_window_title(vo);
         vo_x11_dnd_init_window(vo);
+        vo_x11_set_property_utf8(vo, XA(x11, _GTK_THEME_VARIANT), "dark");
     }
     vo_x11_xembed_update(x11, 0);
 }
@@ -1485,9 +1511,11 @@ static void vo_x11_map_window(struct vo *vo, struct mp_rect rc)
                         XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&v, 1);
     }
 
+    vo_x11_update_composition_hint(vo);
+
     // map window
     int events = StructureNotifyMask | ExposureMask | PropertyChangeMask |
-                 LeaveWindowMask | EnterWindowMask;
+                 LeaveWindowMask | EnterWindowMask | FocusChangeMask;
     if (mp_input_mouse_enabled(x11->input_ctx))
         events |= PointerMotionMask | ButtonPressMask | ButtonReleaseMask;
     if (mp_input_vo_keyboard_enabled(x11->input_ctx))
@@ -1649,6 +1677,23 @@ static bool rc_overlaps(struct mp_rect rc1, struct mp_rect rc2)
     return mp_rect_intersection(&rc1, &rc2); // changes the first argument
 }
 
+// which screen's ICC profile we're going to use
+static int get_icc_screen(struct vo *vo)
+{
+    struct vo_x11_state *x11 = vo->x11;
+    int cx = x11->winrc.x0 + (x11->winrc.x1 - x11->winrc.x0)/2,
+    cy = x11->winrc.y0 + (x11->winrc.y1 - x11->winrc.y0)/2;
+    int screen = 0; // xinerama screen number
+    for (int n = 0; n < x11->num_displays; n++) {
+        struct xrandr_display *disp = &x11->displays[n];
+        if (mp_rect_contains(&disp->rc, cx, cy)) {
+            screen = n;
+            break;
+        }
+    }
+    return screen;
+}
+
 // update x11->winrc with current boundaries of vo->x11->window
 static void vo_x11_update_geometry(struct vo *vo)
 {
@@ -1681,7 +1726,12 @@ static void vo_x11_update_geometry(struct vo *vo)
         MP_VERBOSE(x11, "Current display FPS: %f\n", fps);
     x11->current_display_fps = fps;
     // might have changed displays
-    x11->pending_vo_events |= VO_EVENT_WIN_STATE | VO_EVENT_ICC_PROFILE_CHANGED;
+    x11->pending_vo_events |= VO_EVENT_WIN_STATE;
+    int icc_screen = get_icc_screen(vo);
+    if (x11->current_icc_screen != icc_screen) {
+        x11->current_icc_screen = icc_screen;
+        x11->pending_vo_events |= VO_EVENT_ICC_PROFILE_CHANGED;
+    }
 }
 
 static void vo_x11_fullscreen(struct vo *vo)
@@ -1731,6 +1781,8 @@ static void vo_x11_fullscreen(struct vo *vo)
 
     x11->size_changed_during_fs = false;
     x11->pos_changed_during_fs = false;
+
+    vo_x11_update_composition_hint(vo);
 }
 
 int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
@@ -1819,16 +1871,7 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
     case VOCTRL_GET_ICC_PROFILE: {
         if (!x11->pseudo_mapped)
             return VO_NOTAVAIL;
-        int cx = x11->winrc.x0 + (x11->winrc.x1 - x11->winrc.x0)/2,
-            cy = x11->winrc.y0 + (x11->winrc.y1 - x11->winrc.y0)/2;
-        int screen = 0; // xinerama screen number
-        for (int n = 0; n < x11->num_displays; n++) {
-            struct xrandr_display *disp = &x11->displays[n];
-            if (mp_rect_contains(&disp->rc, cx, cy)) {
-                screen = n;
-                break;
-            }
-        }
+        int screen = get_icc_screen(vo);
         char prop[80];
         snprintf(prop, sizeof(prop), "_ICC_PROFILE");
         if (screen > 0)
@@ -1870,6 +1913,32 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
     }
     }
     return VO_NOTIMPL;
+}
+
+void vo_x11_wakeup(struct vo *vo)
+{
+    struct vo_x11_state *x11 = vo->x11;
+
+    (void)write(x11->wakeup_pipe[1], &(char){0}, 1);
+}
+
+void vo_x11_wait_events(struct vo *vo, int64_t until_time_us)
+{
+    struct vo_x11_state *x11 = vo->x11;
+
+    struct pollfd fds[2] = {
+        { .fd = x11->event_fd, .events = POLLIN },
+        { .fd = x11->wakeup_pipe[0], .events = POLLIN },
+    };
+    int64_t wait_us = until_time_us - mp_time_us();
+    int timeout_ms = MPCLAMP((wait_us + 500) / 1000, 0, 10000);
+
+    poll(fds, 2, timeout_ms);
+
+    if (fds[1].revents & POLLIN) {
+        char buf[100];
+        (void)read(x11->wakeup_pipe[0], buf, sizeof(buf)); // flush
+    }
 }
 
 static void xscreensaver_heartbeat(struct vo_x11_state *x11)

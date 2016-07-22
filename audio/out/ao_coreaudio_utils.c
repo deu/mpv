@@ -114,6 +114,13 @@ OSStatus ca_select_device(struct ao *ao, char* name, AudioDeviceID *device)
             kAudioObjectSystemObject, &p_addr, 0, 0, &size, &v);
         CFRelease(uid);
         CHECK_CA_ERROR("unable to query for device UID");
+
+        uint32_t is_alive = 1;
+        err = CA_GET(*device, kAudioDevicePropertyDeviceIsAlive, &is_alive);
+        CHECK_CA_ERROR("could not check whether device is alive (invalid device?)");
+
+        if (!is_alive)
+            MP_WARN(ao, "device is not alive!\n");
     } else {
         // device not set by user, get the default one
         err = CA_GET(kAudioObjectSystemObject,
@@ -140,7 +147,7 @@ bool check_ca_st(struct ao *ao, int level, OSStatus code, const char *message)
 {
     if (code == noErr) return true;
 
-    mp_msg(ao->log, level, "%s (%s)\n", message, mp_tag_str(code));
+    mp_msg(ao->log, level, "%s (%s/%d)\n", message, mp_tag_str(code), (int)code);
 
     return false;
 }

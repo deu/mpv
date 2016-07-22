@@ -189,7 +189,7 @@ struct lib {
     unsigned runv;
 };
 
-void print_libav_versions(struct mp_log *log, int v)
+bool print_libav_versions(struct mp_log *log, int v)
 {
     const struct lib libs[] = {
         {"libavutil",     LIBAVUTIL_VERSION_INT,     avutil_version()},
@@ -207,17 +207,22 @@ void print_libav_versions(struct mp_log *log, int v)
 
     mp_msg(log, v, "%s library versions:\n", LIB_PREFIX);
 
+    bool mismatch = false;
     for (int n = 0; n < MP_ARRAY_SIZE(libs); n++) {
         const struct lib *l = &libs[n];
         mp_msg(log, v, "   %-15s %d.%d.%d", l->name, V(l->buildv));
-        if (l->buildv != l->runv)
+        if (l->buildv != l->runv) {
             mp_msg(log, v, " (runtime %d.%d.%d)", V(l->runv));
+            mismatch = true;
+        }
         mp_msg(log, v, "\n");
     }
 
 #if HAVE_AV_VERSION_INFO
     mp_msg(log, v, "%s version: %s\n", LIB_PREFIX, av_version_info());
 #endif
+
+    return !mismatch;
 }
 
 #undef V

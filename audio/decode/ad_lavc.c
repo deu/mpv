@@ -45,6 +45,7 @@ struct priv {
     uint32_t skip_samples, trim_samples;
     bool preroll_done;
     double next_pts;
+    bool needs_reset;
     AVRational codec_timebase;
 };
 
@@ -173,6 +174,7 @@ static int control(struct dec_audio *da, int cmd, void *arg)
         ctx->trim_samples = 0;
         ctx->preroll_done = false;
         ctx->next_pts = MP_NOPTS_VALUE;
+        ctx->needs_reset = false;
         return CONTROL_TRUE;
     }
     return CONTROL_UNKNOWN;
@@ -184,6 +186,12 @@ static int decode_packet(struct dec_audio *da, struct demux_packet *mpkt,
     struct priv *priv = da->priv;
     AVCodecContext *avctx = priv->avctx;
 
+    // If the decoder discards the timestamp for some reason, we use the
+    // interpolated PTS. Initialize it so that it works for the initial
+    // packet as well.
+    if (mpkt && priv->next_pts == MP_NOPTS_VALUE)
+        priv->next_pts = mpkt->pts;
+
     int in_len = mpkt ? mpkt->len : 0;
 
     AVPacket pkt;
@@ -191,6 +199,9 @@ static int decode_packet(struct dec_audio *da, struct demux_packet *mpkt,
 
     int got_frame = 0;
     av_frame_unref(priv->avframe);
+
+    if (priv->needs_reset)
+        control(da, ADCTRL_RESET, NULL);
 
 #if HAVE_AVCODEC_NEW_CODEC_API
     int ret = avcodec_send_packet(avctx, &pkt);
@@ -200,6 +211,8 @@ static int decode_packet(struct dec_audio *da, struct demux_packet *mpkt,
         ret = avcodec_receive_frame(avctx, priv->avframe);
         if (ret >= 0)
             got_frame = 1;
+        if (ret == AVERROR_EOF)
+            priv->needs_reset = true;
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
             ret = 0;
     }

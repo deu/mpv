@@ -407,8 +407,8 @@ static int preinit(struct vo *vo)
         goto error;
 
     p->gc = XCreateGC(x11->display, x11->window, 0, NULL);
-    MP_WARN(vo, "Warning: this legacy VO has bad performance. Consider fixing"
-                "your graphic drivers, or not forcing the x11 VO.\n");
+    MP_WARN(vo, "Warning: this legacy VO has bad performance. Consider fixing "
+                "your graphics drivers, or not forcing the x11 VO.\n");
     return 0;
 
 error:
@@ -449,5 +449,7 @@ const struct vo_driver video_out_x11 = {
     .control = control,
     .draw_image = draw_image,
     .flip_page = flip_page,
+    .wakeup = vo_x11_wakeup,
+    .wait_events = vo_x11_wait_events,
     .uninit = uninit,
 };

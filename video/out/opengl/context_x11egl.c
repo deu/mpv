@@ -21,6 +21,11 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#ifndef EGL_VERSION_1_5
+#define EGL_CONTEXT_OPENGL_PROFILE_MASK         0x30FD
+#define EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT     0x00000001
+#endif
+
 #include "common/common.h"
 #include "video/out/x11_common.h"
 #include "context.h"
@@ -79,8 +84,14 @@ static bool create_context_egl(MPGLContext *ctx, EGLConfig config,
     EGLint context_attributes[] = {
         // aka EGL_CONTEXT_MAJOR_VERSION_KHR
         EGL_CONTEXT_CLIENT_VERSION, es ? 2 : 3,
+        EGL_NONE, EGL_NONE,
         EGL_NONE
     };
+
+    if (!es) {
+        context_attributes[2] = EGL_CONTEXT_OPENGL_PROFILE_MASK;
+        context_attributes[3] = EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT;
+    }
 
     p->egl_surface = eglCreateWindowSurface(p->egl_display, config, window, NULL);
 
@@ -152,7 +163,6 @@ static int mpegl_init(struct MPGLContext *ctx, int flags)
 
     void *(*gpa)(const GLubyte*) = (void *(*)(const GLubyte*))eglGetProcAddress;
     mpgl_load_functions(ctx->gl, gpa, egl_exts, vo->log);
-    mp_egl_get_depth(ctx->gl, config);
 
     ctx->native_display_type = "x11";
     ctx->native_display = vo->x11->display;
@@ -181,6 +191,16 @@ static void mpegl_swap_buffers(MPGLContext *ctx)
     eglSwapBuffers(p->egl_display, p->egl_surface);
 }
 
+static void mpegl_wakeup(struct MPGLContext *ctx)
+{
+    vo_x11_wakeup(ctx->vo);
+}
+
+static void mpegl_wait_events(struct MPGLContext *ctx, int64_t until_time_us)
+{
+    vo_x11_wait_events(ctx->vo, until_time_us);
+}
+
 const struct mpgl_driver mpgl_driver_x11egl = {
     .name           = "x11egl",
     .priv_size      = sizeof(struct priv),
@@ -188,5 +208,7 @@ const struct mpgl_driver mpgl_driver_x11egl = {
     .reconfig       = mpegl_reconfig,
     .swap_buffers   = mpegl_swap_buffers,
     .control        = mpegl_control,
+    .wakeup         = mpegl_wakeup,
+    .wait_events    = mpegl_wait_events,
     .uninit         = mpegl_uninit,
 };

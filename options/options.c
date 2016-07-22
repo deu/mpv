@@ -40,7 +40,6 @@
 #include "video/csputils.h"
 #include "video/hwdec.h"
 #include "sub/osd.h"
-#include "audio/mixer.h"
 #include "audio/filter/af.h"
 #include "audio/decode/dec_audio.h"
 #include "player/core.h"
@@ -82,12 +81,15 @@ extern const struct m_obj_list ao_obj_list;
 const struct m_opt_choice_alternatives mp_hwdec_names[] = {
     {"no",          HWDEC_NONE},
     {"auto",        HWDEC_AUTO},
+    {"auto-copy",   HWDEC_AUTO_COPY},
     {"vdpau",       HWDEC_VDPAU},
     {"videotoolbox",HWDEC_VIDEOTOOLBOX},
+    {"videotoolbox-copy",HWDEC_VIDEOTOOLBOX_COPY},
     {"vaapi",       HWDEC_VAAPI},
     {"vaapi-copy",  HWDEC_VAAPI_COPY},
     {"dxva2",       HWDEC_DXVA2},
     {"dxva2-copy",  HWDEC_DXVA2_COPY},
+    {"d3d11va",     HWDEC_D3D11VA},
     {"d3d11va-copy",HWDEC_D3D11VA_COPY},
     {"rpi",         HWDEC_RPI},
     {"mediacodec",  HWDEC_MEDIACODEC},
@@ -374,7 +376,7 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE("ass-shaper", ass_shaper, 0,
                ({"simple", 0}, {"complex", 1})),
     OPT_CHOICE("ass-style-override", ass_style_override, 0,
-               ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4})),
+               ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4}, {"strip", 5})),
     OPT_FLAG("sub-scale-by-window", sub_scale_by_window, 0),
     OPT_FLAG("sub-scale-with-window", sub_scale_with_window, 0),
     OPT_FLAG("ass-scale-with-window", ass_scale_with_window, 0),
@@ -397,8 +399,10 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("audio-fallback-to-null", ao_null_fallback, 0),
     OPT_CHOICE("force-window", force_vo, 0,
                ({"no", 0}, {"yes", 1}, {"immediate", 2})),
+    OPT_FLAG("taskbar-progress", vo.taskbar_progress, 0),
     OPT_FLAG("ontop", vo.ontop, M_OPT_FIXED),
     OPT_FLAG("border", vo.border, M_OPT_FIXED),
+    OPT_FLAG("fit-border", vo.fit_border, M_OPT_FIXED),
     OPT_FLAG("on-all-workspaces", vo.all_workspaces, M_OPT_FIXED),
 
     OPT_FLAG("window-dragging", allow_win_drag, CONF_GLOBAL),
@@ -407,19 +411,20 @@ const m_option_t mp_opts[] = {
                ({"no", SOFTVOL_NO},
                 {"yes", SOFTVOL_YES},
                 {"auto", SOFTVOL_AUTO})),
-    OPT_FLOATRANGE("softvol-max", softvol_max, 0, 100, 1000),
-    OPT_FLOATRANGE("volume", mixer_init_volume, 0, -1, 1000),
-    OPT_CHOICE("mute", mixer_init_mute, 0,
+    OPT_FLOATRANGE("volume-max", softvol_max, 0, 100, 1000),
+    // values <0 for volume and mute are legacy and ignored
+    OPT_FLOATRANGE("volume", softvol_volume, 0, -1, 1000),
+    OPT_CHOICE("mute", softvol_mute, 0,
                ({"auto", -1},
                 {"no", 0},
                 {"yes", 1})),
-    OPT_STRING("volume-restore-data", mixer_restore_volume_data, 0),
     OPT_CHOICE("gapless-audio", gapless_audio, 0,
                ({"no", 0},
                 {"yes", 1},
                 {"weak", -1})),
     OPT_DOUBLE("audio-buffer", audio_buffer, M_OPT_MIN | M_OPT_MAX,
                .min = 0, .max = 10),
+    OPT_FLOATRANGE("balance", balance, 0, -1, 1),
 
     OPT_GEOMETRY("geometry", vo.geometry, 0),
     OPT_SIZE_BOX("autofit", vo.autofit, 0),
@@ -459,13 +464,15 @@ const m_option_t mp_opts[] = {
 #if HAVE_X11
     OPT_CHOICE("x11-netwm", vo.x11_netwm, 0,
                ({"auto", 0}, {"no", -1}, {"yes", 1})),
-    OPT_FLAG("x11-bypass-compositor", vo.x11_bypass_compositor, 0),
+    OPT_CHOICE("x11-bypass-compositor", vo.x11_bypass_compositor, 0,
+               ({"no", 0}, {"yes", 1}, {"fs-only", 2}, {"never", 3})),
 #endif
 #if HAVE_WIN32
     OPT_STRING("vo-mmcss-profile", vo.mmcss_profile, M_OPT_FIXED),
 #endif
 
-    OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0),
+    OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0,
+               .deprecation_message = "use Lua scripting instead"),
     OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
 
     OPT_CHOICE_OR_INT("screen", vo.screen_id, 0, 0, 32,
@@ -680,6 +687,7 @@ const m_option_t mp_opts[] = {
     OPT_REPLACED("ass-use-margins", "sub-use-margins"),
     OPT_REPLACED("media-title", "force-media-title"),
     OPT_REPLACED("input-unix-socket", "input-ipc-server"),
+    OPT_REPLACED("softvol-max", "volume-max"),
 
     {0}
 };
@@ -693,8 +701,8 @@ const struct MPOpts mp_default_opts = {
     .deinterlace = -1,
     .softvol = SOFTVOL_AUTO,
     .softvol_max = 130,
-    .mixer_init_volume = -1,
-    .mixer_init_mute = -1,
+    .softvol_volume = 100,
+    .softvol_mute = 0,
     .gapless_audio = -1,
     .audio_buffer = 0.2,
     .audio_device = "auto",
@@ -707,10 +715,12 @@ const struct MPOpts mp_default_opts = {
         .panscan = 0.0f,
         .keepaspect = 1,
         .keepaspect_window = 1,
+        .taskbar_progress = 1,
         .border = 1,
+        .fit_border = 1,
         .WinID = -1,
         .window_scale = 1.0,
-        .x11_bypass_compositor = 0,
+        .x11_bypass_compositor = 2,
         .mmcss_profile = "Playback",
     },
     .allow_win_drag = 1,
