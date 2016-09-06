@@ -90,7 +90,25 @@ double get_play_end_pts(struct MPContext *mpctx)
         if (cend != MP_NOPTS_VALUE && (end == MP_NOPTS_VALUE || cend < end))
             end = cend;
     }
+    if (mpctx->ab_loop_clip && opts->ab_loop[1] != MP_NOPTS_VALUE &&
+        opts->ab_loop[1] > opts->ab_loop[0])
+    {
+        if (end == MP_NOPTS_VALUE || end > opts->ab_loop[1])
+            end = opts->ab_loop[1];
+    }
     return end;
+}
+
+double get_track_seek_offset(struct MPContext *mpctx, struct track *track)
+{
+    struct MPOpts *opts = mpctx->opts;
+    if (track->selected) {
+        if (track->type == STREAM_AUDIO)
+            return -opts->audio_delay;
+        if (track->type == STREAM_SUB)
+            return -opts->sub_delay;
+    }
+    return 0;
 }
 
 float mp_get_cache_percent(struct MPContext *mpctx)
@@ -113,10 +131,10 @@ bool mp_get_cache_idle(struct MPContext *mpctx)
 
 void update_vo_playback_state(struct MPContext *mpctx)
 {
-    if (mpctx->video_out) {
+    if (mpctx->video_out && mpctx->video_out->config_ok) {
         struct voctrl_playback_state oldstate = mpctx->vo_playback_state;
         struct voctrl_playback_state newstate = {
-            .taskbar_progress = mpctx->opts->vo.taskbar_progress,
+            .taskbar_progress = mpctx->opts->vo->taskbar_progress,
             .playing = mpctx->playing,
             .paused = mpctx->paused,
             .percent_pos = get_percent_pos(mpctx),
@@ -131,8 +149,8 @@ void update_vo_playback_state(struct MPContext *mpctx)
             if ((oldstate.playing && oldstate.taskbar_progress) ||
                 (newstate.playing && newstate.taskbar_progress))
             {
-                vo_control(mpctx->video_out,
-                           VOCTRL_UPDATE_PLAYBACK_STATE, &newstate);
+                vo_control_async(mpctx->video_out,
+                                 VOCTRL_UPDATE_PLAYBACK_STATE, &newstate);
             }
             mpctx->vo_playback_state = newstate;
         }
@@ -243,6 +261,7 @@ struct mpv_global *create_sub_global(struct MPContext *mpctx)
     struct m_config *new_config = m_config_dup(new, mpctx->mconfig);
     *new = (struct mpv_global){
         .log = mpctx->global->log,
+        .config = mpctx->global->config,
         .opts = new_config->optstruct,
         .client_api = mpctx->clients,
     };

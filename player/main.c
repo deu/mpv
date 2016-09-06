@@ -134,6 +134,15 @@ static const char def_config[] =
     "osc=no\n"
     "framedrop=no\n"
 #endif
+    "\n"
+    "[opengl-hq]\n"
+    "scale=spline36\n"
+    "cscale=spline36\n"
+    "dscale=mitchell\n"
+    "dither-depth=auto\n"
+    "correct-downscaling=yes\n"
+    "sigmoid-upscaling=yes\n"
+    "deband=yes\n"
 ;
 
 static pthread_mutex_t terminal_owner_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -303,11 +312,30 @@ static bool handle_help_options(struct MPContext *mpctx)
         ao_print_devices(mpctx->global, log);
         opt_exit = 1;
     }
+    if (opts->property_print_help) {
+        property_print_help(mpctx);
+        opt_exit = 1;
+    }
 #if HAVE_ENCODING
     if (encode_lavc_showhelp(log, opts->encode_opts))
         opt_exit = 1;
 #endif
     return opt_exit;
+}
+
+static void handle_deprecated_options(struct MPContext *mpctx)
+{
+    struct MPOpts *opts = mpctx->opts;
+    struct m_obj_settings *vo = opts->vo->video_driver_list;
+    if (vo && vo->name && strcmp(vo->name, "opengl-hq") == 0) {
+        MP_WARN(mpctx,
+            "--vo=opengl-hq is deprecated! Use --profile=opengl-hq instead.\n");
+        // Fudge it. This will replace the --vo option too, which is why we
+        // unset/safe it, and later restore it.
+        talloc_free(vo->name);
+        vo->name = talloc_strdup(NULL, "opengl");
+        m_config_set_profile(mpctx->mconfig, "opengl-hq", 0);
+    }
 }
 
 static int cfg_include(void *ctx, char *filename, int flags)
@@ -317,6 +345,12 @@ static int cfg_include(void *ctx, char *filename, int flags)
     int r = m_config_parse_config_file(mpctx->mconfig, fname, NULL, flags);
     talloc_free(fname);
     return r;
+}
+
+void wakeup_playloop(void *ctx)
+{
+    struct MPContext *mpctx = ctx;
+    mp_input_wakeup(mpctx->input);
 }
 
 struct MPContext *mp_create(void)
@@ -354,6 +388,7 @@ struct MPContext *mp_create(void)
     mpctx->mconfig->is_toplevel = true;
     mpctx->mconfig->global = mpctx->global;
     m_config_parse(mpctx->mconfig, "", bstr0(def_config), NULL, 0);
+    m_config_create_shadow(mpctx->mconfig);
 
     mpctx->global->opts = mpctx->opts;
 
@@ -362,18 +397,16 @@ struct MPContext *mp_create(void)
     command_init(mpctx);
     init_libav(mpctx->global);
     mp_clients_init(mpctx);
+    mpctx->osd = osd_create(mpctx->global);
 
 #if HAVE_COCOA
     cocoa_set_input_context(mpctx->input);
 #endif
 
-    return mpctx;
-}
+    mp_input_set_cancel(mpctx->input, mpctx->playback_abort);
+    mp_dispatch_set_wakeup_fn(mpctx->dispatch, wakeup_playloop, mpctx);
 
-void wakeup_playloop(void *ctx)
-{
-    struct MPContext *mpctx = ctx;
-    mp_input_wakeup(mpctx->input);
+    return mpctx;
 }
 
 // Finish mpctx initialization. This must be done after setting up all options.
@@ -416,6 +449,8 @@ int mp_initialize(struct MPContext *mpctx, char **options)
     if (handle_help_options(mpctx))
         return -2;
 
+    handle_deprecated_options(mpctx);
+
     if (!print_libav_versions(mp_null_log, 0)) {
         // Using mismatched libraries can be legitimate, but even then it's
         // a bad idea. We don't acknowledge its usefulness and stability.
@@ -438,9 +473,6 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         return -3;
 
     mp_input_load(mpctx->input);
-    mp_input_set_cancel(mpctx->input, mpctx->playback_abort);
-
-    mp_dispatch_set_wakeup_fn(mpctx->dispatch, wakeup_playloop, mpctx);
 
 #if HAVE_ENCODING
     if (opts->encode_opts->file && opts->encode_opts->file[0]) {
@@ -451,11 +483,6 @@ int mp_initialize(struct MPContext *mpctx, char **options)
             return -1;
         }
         m_config_set_profile(mpctx->mconfig, "encoding", 0);
-        // never use auto
-        if (!opts->audio_output_channels.num) {
-            m_config_set_option_ext(mpctx->mconfig, bstr0("audio-channels"),
-                                    bstr0("stereo"), M_SETOPT_PRESERVE_CMDLINE);
-        }
         mp_input_enable_section(mpctx->input, "encode", MP_INPUT_EXCLUSIVE);
     }
 #endif
@@ -464,8 +491,6 @@ int mp_initialize(struct MPContext *mpctx, char **options)
     MP_WARN(mpctx, "Compiled without libass.\n");
     MP_WARN(mpctx, "There will be no OSD and no text subtitles.\n");
 #endif
-
-    mpctx->osd = osd_create(mpctx->global);
 
     // From this point on, all mpctx members are initialized.
     mpctx->initialized = true;

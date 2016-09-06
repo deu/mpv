@@ -115,17 +115,16 @@ void term_osd_set_subs(struct MPContext *mpctx, const char *text)
     term_osd_update(mpctx);
 }
 
-static void term_osd_set_text(struct MPContext *mpctx, const char *text)
+static void term_osd_set_text_lazy(struct MPContext *mpctx, const char *text)
 {
-    if ((mpctx->video_out && mpctx->opts->term_osd != 1) ||
-        !mpctx->opts->term_osd || !text)
+    bool video_osd = mpctx->video_out && mpctx->opts->video_osd;
+    if ((video_osd && mpctx->opts->term_osd != 1) || !text)
         text = ""; // disable
     talloc_free(mpctx->term_osd_text);
     mpctx->term_osd_text = talloc_strdup(mpctx, text);
-    term_osd_update(mpctx);
 }
 
-static void term_osd_set_status(struct MPContext *mpctx, const char *text)
+static void term_osd_set_status_lazy(struct MPContext *mpctx, const char *text)
 {
     talloc_free(mpctx->term_osd_status);
     mpctx->term_osd_status = talloc_strdup(mpctx, text);
@@ -134,8 +133,6 @@ static void term_osd_set_status(struct MPContext *mpctx, const char *text)
     terminal_get_size(&w, &h);
     if (strlen(mpctx->term_osd_status) > w && !strchr(mpctx->term_osd_status, '\n'))
         mpctx->term_osd_status[w] = '\0';
-
-    term_osd_update(mpctx);
 }
 
 static void add_term_osd_bar(struct MPContext *mpctx, char **line, int width)
@@ -167,7 +164,7 @@ static bool is_busy(struct MPContext *mpctx)
     return !mpctx->restart_complete && mp_time_sec() - mpctx->start_timestamp > 0.3;
 }
 
-static void print_status(struct MPContext *mpctx)
+static void term_osd_print_status_lazy(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
 
@@ -179,13 +176,13 @@ static void print_status(struct MPContext *mpctx)
 
     if (opts->quiet || !mpctx->playback_initialized || !mpctx->playing_msg_shown)
     {
-        term_osd_set_status(mpctx, "");
+        term_osd_set_status_lazy(mpctx, "");
         return;
     }
 
     if (opts->status_msg) {
         char *r = mp_property_expand_escaped_string(mpctx, opts->status_msg);
-        term_osd_set_status(mpctx, r);
+        term_osd_set_status_lazy(mpctx, r);
         talloc_free(r);
         return;
     }
@@ -292,7 +289,7 @@ static void print_status(struct MPContext *mpctx)
     }
 
     // end
-    term_osd_set_status(mpctx, line);
+    term_osd_set_status_lazy(mpctx, line);
     talloc_free(line);
 }
 
@@ -328,7 +325,8 @@ void set_osd_bar(struct MPContext *mpctx, int type,
                  double min, double max, double neutral, double val)
 {
     struct MPOpts *opts = mpctx->opts;
-    if (opts->osd_level < 1 || !opts->osd_bar_visible || !mpctx->video_out)
+    bool video_osd = mpctx->video_out && mpctx->opts->video_osd;
+    if (opts->osd_level < 1 || !opts->osd_bar_visible || !video_osd)
         return;
 
     mpctx->osd_visible = mp_time_sec() + opts->osd_duration / 1000.0;
@@ -463,7 +461,8 @@ static void add_seek_osd_messages(struct MPContext *mpctx)
     }
     if (mpctx->add_osd_seek_info & OSD_SEEK_INFO_TEXT) {
         // Never in term-osd mode
-        if (mpctx->video_out && mpctx->opts->term_osd != 1) {
+        bool video_osd = mpctx->video_out && mpctx->opts->video_osd;
+        if (video_osd && mpctx->opts->term_osd != 1) {
             if (set_osd_msg(mpctx, 1, mpctx->opts->osd_duration, ""))
                 mpctx->osd_show_pos = true;
         }
@@ -563,8 +562,12 @@ void update_osd_msg(struct MPContext *mpctx)
         update_osd_bar(mpctx, OSD_BAR_SEEK, 0, 1, MPCLAMP(pos, 0, 1));
     }
 
-    term_osd_set_text(mpctx, mpctx->osd_msg_text);
-    print_status(mpctx);
+    term_osd_set_text_lazy(mpctx, mpctx->osd_msg_text);
+    term_osd_print_status_lazy(mpctx);
+    term_osd_update(mpctx);
+
+    if (!opts->video_osd)
+        return;
 
     int osd_level = opts->osd_level;
     if (mpctx->osd_show_pos)

@@ -80,6 +80,11 @@ enum seek_precision {
     MPSEEK_VERY_EXACT,
 };
 
+enum seek_flags {
+    MPSEEK_FLAG_DELAY = 1 << 0, // give player chance to coalesce multiple seeks
+    MPSEEK_FLAG_NOFLUSH = 1 << 1, // keeping remaining data for seamless loops
+};
+
 enum video_sync {
     VS_DEFAULT = 0,
     VS_DISP_RESAMPLE,
@@ -185,6 +190,7 @@ struct ao_chain {
     struct af_stream *af;
     struct ao *ao;
     struct mp_audio_buffer *ao_buffer;
+    double ao_resume_time;
 
     // 1-element input frame queue.
     struct mp_audio *input_frame;
@@ -218,6 +224,7 @@ enum playback_status {
 typedef struct MPContext {
     bool initialized;
     bool autodetach;
+    int suspend_count;
     struct mpv_global *global;
     struct MPOpts *opts;
     struct mp_log *log;
@@ -321,6 +328,7 @@ typedef struct MPContext {
     bool hrseek_lastframe;  // drop everything until last frame reached
     bool hrseek_backstep;   // go to frame before seek target
     double hrseek_pts;
+    bool ab_loop_clip;      // clip to the "b" part of an A-B loop if available
     // AV sync: the next frame should be shown when the audio out has this
     // much (in seconds) buffered data left. Increased when more data is
     // written to the ao, decreased when moving to the next video frame.
@@ -379,8 +387,12 @@ typedef struct MPContext {
         enum seek_type type;
         enum seek_precision exact;
         double amount;
-        bool immediate; // disable seek delay logic
+        unsigned flags; // MPSEEK_FLAG_*
     } seek;
+
+    // Allow audio to issue a second seek if audio is too far ahead (for non-hr
+    // seeks with external audio tracks).
+    bool audio_allow_second_chance_seek;
 
     /* Heuristic for relative chapter seeks: keep track which chapter
      * the user wanted to go to, even if we aren't exactly within the
@@ -486,6 +498,7 @@ int stream_dump(struct MPContext *mpctx, const char *source_filename);
 int mpctx_run_reentrant(struct MPContext *mpctx, void (*thread_fn)(void *arg),
                         void *thread_arg);
 struct mpv_global *create_sub_global(struct MPContext *mpctx);
+double get_track_seek_offset(struct MPContext *mpctx, struct track *track);
 
 // osd.c
 void set_osd_bar(struct MPContext *mpctx, int type,
@@ -506,7 +519,7 @@ void pause_player(struct MPContext *mpctx);
 void unpause_player(struct MPContext *mpctx);
 void add_step_frame(struct MPContext *mpctx, int dir);
 void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
-                enum seek_precision exact, bool immediate);
+                enum seek_precision exact, int flags);
 double get_time_length(struct MPContext *mpctx);
 double get_current_time(struct MPContext *mpctx);
 double get_playback_time(struct MPContext *mpctx);

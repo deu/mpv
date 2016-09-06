@@ -86,7 +86,7 @@ static int init(struct dec_audio *da, const char *decoder)
     struct priv *ctx = talloc_zero(NULL, struct priv);
     da->priv = ctx;
 
-    ctx->codec_timebase = (AVRational){0};
+    ctx->codec_timebase = mp_get_codec_timebase(da->codec);
 
     ctx->force_channel_map = c->force_channels;
 
@@ -104,9 +104,13 @@ static int init(struct dec_audio *da, const char *decoder)
     lavc_context->codec_type = AVMEDIA_TYPE_AUDIO;
     lavc_context->codec_id = lavc_codec->id;
 
-    if (opts->downmix) {
+#if LIBAVCODEC_VERSION_MICRO >= 100
+    lavc_context->pkt_timebase = ctx->codec_timebase;
+#endif
+
+    if (opts->downmix && mpopts->audio_output_channels.num_chmaps == 1) {
         lavc_context->request_channel_layout =
-            mp_chmap_to_lavc(&mpopts->audio_output_channels);
+            mp_chmap_to_lavc(&mpopts->audio_output_channels.chmaps[0]);
     }
 
     // Always try to set - option only exists for AC3 at the moment

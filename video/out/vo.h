@@ -101,7 +101,7 @@ enum mp_voctrl {
     // Retrieve window contents. (Normal screenshots use vo_get_current_frame().)
     VOCTRL_SCREENSHOT_WIN,              // struct mp_image**
 
-    VOCTRL_SET_COMMAND_LINE,            // char**
+    VOCTRL_UPDATE_RENDER_OPTS,
 
     VOCTRL_GET_ICC_PROFILE,             // bstr*
     VOCTRL_GET_AMBIENT_LUX,             // int*
@@ -295,7 +295,17 @@ struct vo_driver {
     const void *priv_defaults;
 
     // List of options to parse into priv struct (requires priv_size to be set)
+    // Deprecated. Use global options or global_opts instead.
     const struct m_option *options;
+
+    // Global options to register if the VO is compiled in.
+    // mp_get_config_group() or other function can be used to access them.
+    const struct m_sub_options *global_opts;
+
+    // Evil hack: add .options as global options, using the provided prefix.
+    // For further evilness, the options will be copied to the priv struct
+    // like with normal .options behavior.
+    const char *legacy_prefix;
 };
 
 struct vo {
@@ -312,9 +322,7 @@ struct vo {
     struct osd_state *osd;
     struct encode_lavc_context *encode_lavc_ctx;
     struct vo_internal *in;
-    struct mp_vo_opts *opts;
     struct vo_extra extra;
-    struct m_config *config;
 
     // --- The following fields are generally only changed during initialization.
 
@@ -329,6 +337,10 @@ struct vo {
     // --- The following fields can be accessed only by the VO thread, or from
     //     anywhere _if_ the VO thread is suspended (use vo->dispatch).
 
+    struct m_config_cache *opts_cache; // cache for ->opts
+    struct mp_vo_opts *opts;
+    struct m_config *config; // config for ->priv
+
     bool want_redraw;   // redraw as soon as possible
 
     // current window state
@@ -341,7 +353,8 @@ struct mpv_global;
 struct vo *init_best_video_out(struct mpv_global *global, struct vo_extra *ex);
 int vo_reconfig(struct vo *vo, struct mp_image_params *p);
 
-int vo_control(struct vo *vo, uint32_t request, void *data);
+int vo_control(struct vo *vo, int request, void *data);
+void vo_control_async(struct vo *vo, int request, void *data);
 bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts);
 void vo_queue_frame(struct vo *vo, struct vo_frame *frame);
 void vo_wait_frame(struct vo *vo);
@@ -366,6 +379,7 @@ double vo_get_estimated_vsync_interval(struct vo *vo);
 double vo_get_estimated_vsync_jitter(struct vo *vo);
 double vo_get_display_fps(struct vo *vo);
 double vo_get_delay(struct vo *vo);
+void vo_discard_timing_info(struct vo *vo);
 
 void vo_wakeup(struct vo *vo);
 void vo_wait_default(struct vo *vo, int64_t until_time);

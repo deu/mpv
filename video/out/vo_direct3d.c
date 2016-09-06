@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <d3d9.h>
 #include <inttypes.h>
+#include <limits.h>
 #include "config.h"
 #include "options/options.h"
 #include "options/m_option.h"
@@ -1731,12 +1732,6 @@ static const struct m_option opts[] = {
     {0}
 };
 
-static const d3d_priv defaults_noshaders = {
-    .video_eq = { MP_CSP_EQ_CAPS_COLORMATRIX },
-    .opt_disable_shaders = 1,
-    .opt_disable_textures = 1,
-};
-
 static const d3d_priv defaults = {
     .video_eq = { MP_CSP_EQ_CAPS_COLORMATRIX },
 };
@@ -1752,21 +1747,7 @@ const struct vo_driver video_out_direct3d = {
     .flip_page = flip_page,
     .uninit = uninit,
     .priv_size = sizeof(d3d_priv),
-    .priv_defaults = &defaults_noshaders,
-    .options = opts,
-};
-
-const struct vo_driver video_out_direct3d_shaders = {
-    .description = "Direct3D 9 Renderer (using shaders for YUV conversion)",
-    .name = "direct3d_shaders",
-    .preinit = preinit,
-    .query_format = query_format,
-    .reconfig = reconfig,
-    .control = control,
-    .draw_image = draw_image,
-    .flip_page = flip_page,
-    .uninit = uninit,
-    .priv_size = sizeof(d3d_priv),
     .priv_defaults = &defaults,
     .options = opts,
+    .legacy_prefix = "vo-direct3d",
 };

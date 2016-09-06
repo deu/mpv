@@ -38,7 +38,6 @@ struct mpv_node;
 // Simple types
 extern const m_option_type_t m_option_type_flag;
 extern const m_option_type_t m_option_type_store;
-extern const m_option_type_t m_option_type_float_store;
 extern const m_option_type_t m_option_type_int;
 extern const m_option_type_t m_option_type_int64;
 extern const m_option_type_t m_option_type_intpair;
@@ -61,8 +60,10 @@ extern const m_option_type_t m_option_type_afmt;
 extern const m_option_type_t m_option_type_color;
 extern const m_option_type_t m_option_type_geometry;
 extern const m_option_type_t m_option_type_size_box;
-extern const m_option_type_t m_option_type_chmap;
+extern const m_option_type_t m_option_type_channels;
+extern const m_option_type_t m_option_type_aspect;
 extern const m_option_type_t m_option_type_node;
+extern const m_option_type_t m_option_type_subopt_legacy;
 
 // Used internally by m_config.c
 extern const m_option_type_t m_option_type_alias;
@@ -98,6 +99,13 @@ struct m_geometry {
 void m_geometry_apply(int *xpos, int *ypos, int *widw, int *widh,
                       int scrw, int scrh, struct m_geometry *gm);
 
+struct m_channels {
+    bool set : 1;
+    bool auto_safe : 1;
+    struct mp_chmap *chmaps;
+    int num_chmaps;
+};
+
 struct m_obj_desc {
     // Name which will be used in the option string
     const char *name;
@@ -122,6 +130,12 @@ struct m_obj_desc {
     // Set by m_obj_list_find(). If the requested name is an old alias, this
     // is set to the old name (while the name field uses the new name).
     const char *replaced_name;
+    // For convenience: these are added as global command-line options.
+    const struct m_sub_options *global_opts;
+    // Evil hack to essentially force-move .options to global_opts. All options
+    // will be added as global options with the given prefix, and using
+    // sub-options will be treated as deprecated and redirected.
+    const char *legacy_prefix;
 };
 
 // Extra definition needed for \ref m_option_type_obj_settings_list options.
@@ -135,6 +149,8 @@ struct m_obj_list {
     // Allow unknown entries, for which a dummy entry is inserted, and whose
     // options are skipped and ignored.
     bool allow_unknown_entries;
+    // This helps with confusing error messages if unknown flag options are used.
+    bool disallow_positional_parameters;
 };
 
 // Find entry by name
@@ -200,7 +216,6 @@ struct m_sub_options {
 union m_option_value {
     int flag; // not the C type "bool"!
     int store;
-    float float_store;
     int int_;
     int64_t int64;
     int intpair[2];
@@ -218,7 +233,7 @@ union m_option_value {
     struct m_color color;
     struct m_geometry geometry;
     struct m_geometry size_box;
-    struct mp_chmap chmap;
+    struct m_channels channels;
 };
 
 ////////////////////////////////////////////////////////////////////////////
@@ -283,13 +298,6 @@ struct m_option_type {
     // Multiply the value with the factor f. The callback must clip the result
     // to the valid value range of the option.
     void (*multiply)(const m_option_t *opt, void *val, double f);
-
-    // Clamp the value in val to the option's valid value range.
-    // Return values:
-    //  M_OPT_OUT_OF_RANGE: val was invalid, and modified (clamped) to be valid
-    //  M_OPT_INVALID:      val was invalid, and can't be made valid
-    //  0:                  val was already valid and is unchanged
-    int (*clamp)(const m_option_t *opt, void *val);
 
     // Set the option value in dst to the contents of src.
     // (If the option is dynamic, the old value in *dst has to be freed.)
@@ -370,6 +378,9 @@ struct m_option {
 // Logging-related option - used to update log/terminal settings eagerly
 #define M_OPT_TERM              (1 << 12)
 
+// Do not add as property.
+#define M_OPT_NOPROP            (1 << 13)
+
 // These are kept for compatibility with older code.
 #define CONF_MIN                M_OPT_MIN
 #define CONF_MAX                M_OPT_MAX
@@ -396,19 +407,11 @@ struct m_option {
  */
 #define M_OPT_TYPE_ALLOW_WILDCARD       (1 << 1)
 
-// Dynamic data type.
-/** This flag indicates that the data is dynamically allocated (m_option::p
- *  points to a pointer). It enables a little hack in the \ref Config which
- *  replaces the initial value of such variables with a dynamic copy in case
- *  the initial value is statically allocated (pretty common with strings).
- */
-#define M_OPT_TYPE_DYNAMIC              (1 << 2)
-
 // The parameter is optional and by default no parameter is preferred. If
 // ambiguous syntax is used ("--opt value"), the command line parser will
 // assume that the argument takes no parameter. In config files, these
 // options can be used without "=" and value.
-#define M_OPT_TYPE_OPTIONAL_PARAM       (1 << 3)
+#define M_OPT_TYPE_OPTIONAL_PARAM       (1 << 2)
 
 ///////////////////////////// Parser flags /////////////////////////////////
 
@@ -570,10 +573,6 @@ extern const char m_option_path_separator;
     OPT_GENERAL(int, optname, varname, flags, .max = value,     \
                 .type = &m_option_type_store)
 
-#define OPT_FLOAT_STORE(optname, varname, flags, value)         \
-    OPT_GENERAL(float, optname, varname, flags, .max = value,   \
-                .type = &m_option_type_float_store)
-
 #define OPT_STRINGLIST(...) \
     OPT_GENERAL(char**, __VA_ARGS__, .type = &m_option_type_string_list)
 
@@ -615,10 +614,11 @@ extern const char m_option_path_separator;
 #define OPT_STRING(...) \
     OPT_GENERAL(char*, __VA_ARGS__, .type = &m_option_type_string)
 
-#define OPT_SETTINGSLIST(optname, varname, flags, objlist)      \
+#define OPT_SETTINGSLIST(optname, varname, flags, objlist, ...) \
     OPT_GENERAL(m_obj_settings_t*, optname, varname, flags,     \
                 .type = &m_option_type_obj_settings_list,       \
-                .priv = (void*)MP_EXPECT_TYPE(const struct m_obj_list*, objlist))
+                .priv = (void*)MP_EXPECT_TYPE(const struct m_obj_list*, objlist), \
+                __VA_ARGS__)
 
 #define OPT_IMAGEFORMAT(...) \
     OPT_GENERAL(int, __VA_ARGS__, .type = &m_option_type_imgfmt)
@@ -626,9 +626,10 @@ extern const char m_option_path_separator;
 #define OPT_AUDIOFORMAT(...) \
     OPT_GENERAL(int, __VA_ARGS__, .type = &m_option_type_afmt)
 
-#define OPT_CHMAP(...) \
-    OPT_GENERAL(struct mp_chmap, __VA_ARGS__, .type = &m_option_type_chmap)
-
+// If .min==1, then passing auto is disallowed, but "" is still accepted, and
+// limit channel list to 1 item.
+#define OPT_CHANNELS(...) \
+    OPT_GENERAL(struct m_channels, __VA_ARGS__, .type = &m_option_type_channels)
 
 #define M_CHOICES(choices)                                              \
     .priv = (void *)&(const struct m_opt_choice_alternatives[]){        \
@@ -674,6 +675,9 @@ extern const char m_option_path_separator;
 #define OPT_TRACKCHOICE(name, var) \
     OPT_CHOICE_OR_INT(name, var, 0, 0, 8190, ({"no", -2}, {"auto", -1}))
 
+#define OPT_ASPECT(...) \
+    OPT_GENERAL(float, __VA_ARGS__, .type = &m_option_type_aspect)
+
 #define OPT_STRING_VALIDATE_(optname, varname, flags, validate_fn, ...)        \
     OPT_GENERAL(char*, optname, varname, flags, __VA_ARGS__,                   \
                 .priv = MP_EXPECT_TYPE(m_opt_string_validate_fn, validate_fn))
@@ -698,13 +702,32 @@ extern const char m_option_path_separator;
                        .type = &m_option_type_subconfig,        \
                        .priv = (void*)&subconf)
 
-// If "--name" was removed, but "--newname" has the same semantics.
+// Same as above, but for legacy suboption usage, which have no associated
+// field (no actual data anywhere).
+#define OPT_SUBSTRUCT_LEGACY(optname, subconf)                      \
+    {.name = optname, .offset = -1, .type = &m_option_type_subconfig,      \
+     .priv = (void*)&subconf}
+
+// Provide a another name for the option.
+#define OPT_ALIAS(optname, newname) \
+    {.name = optname, .type = &m_option_type_alias, .priv = newname, \
+     .offset = -1}
+
+// If "--optname" was removed, but "--newname" has the same semantics.
 // It will be redirected, and a warning will be printed on first use.
 #define OPT_REPLACED(optname, newname) \
-    {.name = optname, .type = &m_option_type_alias, .priv = newname, .offset = -1}
+    {.name = optname, .type = &m_option_type_alias, .priv = newname, \
+     .deprecation_message = "", .offset = -1}
 
-// "--name" doesn't exist, but inform the user about a replacement with msg.
+// "--optname" doesn't exist, but inform the user about a replacement with msg.
 #define OPT_REMOVED(optname, msg) \
-    {.name = optname, .type = &m_option_type_removed, .priv = msg, .offset = -1}
+    {.name = optname, .type = &m_option_type_removed, .priv = msg, \
+     .deprecation_message = "", .offset = -1}
+
+// Redirect a suboption (e.g. from --vo) to a global option. The redirection
+// is handled as a special case instead of being applied automatically.
+#define OPT_SUBOPT_LEGACY(optname, globalname) \
+    {.name = optname, .type = &m_option_type_subopt_legacy, .priv = globalname, \
+     .offset = -1}
 
 #endif /* MPLAYER_M_OPTION_H */

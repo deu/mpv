@@ -19,7 +19,7 @@ def _build_html(ctx):
         target       = 'DOCS/man/mpv.html',
         source       = 'DOCS/man/mpv.rst',
         rule         = '${RST2HTML} ${SRC} ${TGT}',
-        install_path = ctx.env.DOCDIR)
+        install_path = ctx.env.HTMLDIR)
 
     _add_rst_manual_dependencies(ctx)
 
@@ -110,7 +110,6 @@ def build(ctx):
         ( "audio/decode/dec_audio.c" ),
         ( "audio/filter/af.c" ),
         ( "audio/filter/af_channels.c" ),
-        ( "audio/filter/af_delay.c" ),
         ( "audio/filter/af_drc.c" ),
         ( "audio/filter/af_equalizer.c" ),
         ( "audio/filter/af_format.c" ),
@@ -196,6 +195,7 @@ def build(ctx):
         ( "misc/charset_conv.c" ),
         ( "misc/dispatch.c" ),
         ( "misc/json.c" ),
+        ( "misc/node.c" ),
         ( "misc/ring.c" ),
         ( "misc/rendezvous.c" ),
 
@@ -247,6 +247,7 @@ def build(ctx):
         ( "stream/stream_dvdnav.c",              "dvdnav" ),
         ( "stream/stream_edl.c" ),
         ( "stream/stream_file.c" ),
+        ( "stream/stream_cb.c" ),
         ( "stream/stream_lavf.c" ),
         ( "stream/stream_libarchive.c",          "libarchive" ),
         ( "stream/stream_memory.c" ),
@@ -513,7 +514,13 @@ def build(ctx):
                 "install_path": ctx.env.LIBDIR,
             }
 
-            if not ctx.dependency_satisfied('android'):
+            if shared and ctx.dependency_satisfied('android'):
+                # for Android we just add the linker flag without version
+                # as we still need the SONAME for proper linkage.
+                # (LINKFLAGS logic taken from waf's apply_vnum in ccroot.py)
+                v=ctx.env.SONAME_ST%'libmpv.so'
+                ctx.env.append_value('LINKFLAGS',v.split())
+            else:
                 # for all other configurations we want SONAME to be used
                 libmpv_kwargs["vnum"] = libversion
 
@@ -542,7 +549,7 @@ def build(ctx):
             PRIV_LIBS    = get_deps(),
         )
 
-        headers = ["client.h", "qthelper.hpp", "opengl_cb.h"]
+        headers = ["client.h", "qthelper.hpp", "opengl_cb.h", "stream_cb.h"]
         for f in headers:
             ctx.install_as(ctx.env.INCDIR + '/mpv/' + f, 'libmpv/' + f)
 

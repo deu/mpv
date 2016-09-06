@@ -59,7 +59,7 @@ static bool parse_3dlut_size(const char *arg, int *p1, int *p2, int *p3)
         return false;
     for (int n = 0; n < 3; n++) {
         int s = ((int[]) { *p1, *p2, *p3 })[n];
-        if (s < 2 || s > 512 || ((s - 1) & s))
+        if (s < 2 || s > 512)
             return false;
     }
     return true;
@@ -82,14 +82,15 @@ const struct m_sub_options mp_icc_conf = {
         OPT_STRING("icc-cache-dir", cache_dir, 0),
         OPT_INT("icc-intent", intent, 0),
         OPT_INTRANGE("icc-contrast", contrast, 0, 0, 100000),
-        OPT_STRING_VALIDATE("3dlut-size", size_str, 0, validate_3dlut_size_opt),
+        OPT_STRING_VALIDATE("icc-3dlut-size", size_str, 0, validate_3dlut_size_opt),
 
+        OPT_REPLACED("3dlut-size", "icc-3dlut-size"),
         OPT_REMOVED("icc-cache", "see icc-cache-dir"),
         {0}
     },
     .size = sizeof(struct mp_icc_opts),
     .defaults = &(const struct mp_icc_opts) {
-        .size_str = "128x256x64",
+        .size_str = "64x64x64",
         .intent = INTENT_RELATIVE_COLORIMETRIC,
     },
 };

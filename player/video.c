@@ -217,8 +217,8 @@ static void filter_reconfig(struct MPContext *mpctx, struct vo_chain *vo_c)
     if (mpctx->opts->deinterlace >= 0)
         video_vf_vo_control(vo_c, VFCTRL_SET_DEINTERLACE, &(int){0});
 
-    if (params.rotate && (params.rotate % 90 == 0)) {
-        if (!(vo_c->vo->driver->caps & VO_CAP_ROTATE90)) {
+    if (params.rotate) {
+        if (!(vo_c->vo->driver->caps & VO_CAP_ROTATE90) || params.rotate % 90) {
             // Try to insert a rotation filter.
             char *args[] = {"angle", "auto", NULL};
             if (try_filter(vo_c, "rotate", "autorotate", args) < 0)
@@ -539,11 +539,13 @@ void mp_force_video_refresh(struct MPContext *mpctx)
         return;
 
     // If not paused, the next frame should come soon enough.
-    if (opts->pause && mpctx->video_status == STATUS_PLAYING &&
+    if ((opts->pause || mpctx->time_frame >= 0.5) &&
+        (mpctx->video_status >= STATUS_PLAYING ||
+         mpctx->video_status <= STATUS_DRAINING) &&
         mpctx->last_vo_pts != MP_NOPTS_VALUE)
     {
         queue_seek(mpctx, MPSEEK_ABSOLUTE, mpctx->last_vo_pts,
-                   MPSEEK_VERY_EXACT, true);
+                   MPSEEK_VERY_EXACT, 0);
     }
 }
 
@@ -840,9 +842,11 @@ static int video_output_image(struct MPContext *mpctx)
         struct mp_image *img = vf_read_output_frame(vo_c->vf);
         if (img) {
             double endpts = get_play_end_pts(mpctx);
-            if (endpts != MP_NOPTS_VALUE && img->pts >= endpts) {
-                r = VD_EOF;
-            } else if (mpctx->max_frames == 0) {
+            if ((endpts != MP_NOPTS_VALUE && img->pts >= endpts) ||
+                mpctx->max_frames == 0)
+            {
+                vf_unread_output_frame(vo_c->vf, img);
+                img = NULL;
                 r = VD_EOF;
             } else if (hrseek && mpctx->hrseek_lastframe) {
                 mp_image_setrefp(&mpctx->saved_frame, img);
@@ -958,15 +962,15 @@ static void init_vo(struct MPContext *mpctx)
     struct MPOpts *opts = mpctx->opts;
     struct vo_chain *vo_c = mpctx->vo_chain;
 
-    if (opts->gamma_gamma != 1000)
+    if (opts->gamma_gamma != 0)
         video_set_colors(vo_c, "gamma", opts->gamma_gamma);
-    if (opts->gamma_brightness != 1000)
+    if (opts->gamma_brightness != 0)
         video_set_colors(vo_c, "brightness", opts->gamma_brightness);
-    if (opts->gamma_contrast != 1000)
+    if (opts->gamma_contrast != 0)
         video_set_colors(vo_c, "contrast", opts->gamma_contrast);
-    if (opts->gamma_saturation != 1000)
+    if (opts->gamma_saturation != 0)
         video_set_colors(vo_c, "saturation", opts->gamma_saturation);
-    if (opts->gamma_hue != 1000)
+    if (opts->gamma_hue != 0)
         video_set_colors(vo_c, "hue", opts->gamma_hue);
     video_set_colors(vo_c, "output-levels", opts->video_output_levels);
 
@@ -1023,8 +1027,11 @@ static double find_best_speed(struct MPContext *mpctx, double vsync)
 
 static bool using_spdif_passthrough(struct MPContext *mpctx)
 {
-    if (mpctx->ao_chain)
-        return !af_fmt_is_pcm(mpctx->ao_chain->input_format.format);
+    if (mpctx->ao_chain && mpctx->ao_chain->ao) {
+        struct mp_audio out_format = {0};
+        ao_get_format(mpctx->ao_chain->ao, &out_format);
+        return !af_fmt_is_pcm(out_format.format);
+    }
     return false;
 }
 
@@ -1206,6 +1213,12 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
     // Likewise, we know sync is off, but is going to be compensated.
     time_left += drop_repeat * vsync;
 
+    // If syncing took too long, disregard timing of the first frame.
+    if (mpctx->num_past_frames == 2 && time_left < 0) {
+        vo_discard_timing_info(vo);
+        time_left = 0;
+    }
+
     if (drop_repeat) {
         mpctx->mistimed_frames_total += 1;
         MP_STATS(mpctx, "mistimed");
@@ -1274,19 +1287,14 @@ static void calculate_frame_duration(struct MPContext *mpctx)
         double pts1 = mpctx->next_frames[1]->pts;
         if (pts0 != MP_NOPTS_VALUE && pts1 != MP_NOPTS_VALUE && pts1 >= pts0)
             duration = pts1 - pts0;
-    } else {
-        // E.g. last frame on EOF. Only use it if it's significant.
-        if (demux_duration >= 0.1)
-            duration = demux_duration;
     }
 
     // The following code tries to compensate for rounded Matroska timestamps
     // by "unrounding" frame durations, or if not possible, approximating them.
-    // These formats usually round on 1ms. (Some muxers do this incorrectly,
-    // and might be off by 2ms or more, and compensate for it later by an
-    // equal rounding error into the opposite direction. Don't try to deal
-    // with them; too much potential damage to timing.)
-    double tolerance = 0.0011;
+    // These formats usually round on 1ms. Some muxers do this incorrectly,
+    // and might go off by 1ms more, and compensate for it later by an equal
+    // rounding error into the opposite direction.
+    double tolerance = 0.001 * 3 + 0.0001;
 
     double total = 0;
     int num_dur = 0;
@@ -1305,7 +1313,7 @@ static void calculate_frame_duration(struct MPContext *mpctx)
         // Note that even if each timestamp is within rounding tolerance, it
         // could literally not add up (e.g. if demuxer FPS is rounded itself).
         if (fabs(duration - demux_duration) < tolerance &&
-            fabs(total - demux_duration * num_dur) < tolerance)
+            fabs(total - demux_duration * num_dur) < tolerance && num_dur >= 16)
         {
             approx_duration = demux_duration;
         }
@@ -1313,6 +1321,9 @@ static void calculate_frame_duration(struct MPContext *mpctx)
 
     mpctx->past_frames[0].duration = duration;
     mpctx->past_frames[0].approx_duration = approx_duration;
+
+    MP_STATS(mpctx, "value %f frame-duration", MPMAX(0, duration));
+    MP_STATS(mpctx, "value %f frame-duration-approx", MPMAX(0, approx_duration));
 }
 
 void write_video(struct MPContext *mpctx)
@@ -1341,17 +1352,32 @@ void write_video(struct MPContext *mpctx)
         return;
 
     if (r == VD_EOF) {
-        int prev_state = mpctx->video_status;
-        mpctx->video_status = STATUS_EOF;
-        if (mpctx->num_past_frames > 0 && mpctx->past_frames[0].duration > 0) {
-            if (vo_still_displaying(vo))
-                mpctx->video_status = STATUS_DRAINING;
-        }
         mpctx->delay = 0;
         mpctx->last_av_difference = 0;
+
+        if (mpctx->video_status <= STATUS_PLAYING) {
+            mpctx->video_status = STATUS_DRAINING;
+            get_relative_time(mpctx);
+            if (mpctx->num_past_frames == 1 && mpctx->past_frames[0].pts == 0 &&
+                !mpctx->ao_chain)
+            {
+                MP_VERBOSE(mpctx, "assuming this is an image\n");
+                mpctx->time_frame += opts->image_display_duration;
+            } else {
+                mpctx->time_frame = 0;
+            }
+        }
+
+        if (mpctx->video_status == STATUS_DRAINING) {
+            mpctx->time_frame -= get_relative_time(mpctx);
+            mpctx->sleeptime = MPMIN(mpctx->sleeptime, mpctx->time_frame);
+            if (mpctx->time_frame <= 0) {
+                MP_VERBOSE(mpctx, "video EOF reached\n");
+                mpctx->video_status = STATUS_EOF;
+            }
+        }
+
         MP_DBG(mpctx, "video EOF (status=%d)\n", mpctx->video_status);
-        if (prev_state != mpctx->video_status)
-            mpctx->sleeptime = 0;
         return;
     }
 

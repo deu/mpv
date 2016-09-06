@@ -24,6 +24,7 @@
 #include "common/global.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
+#include "common/global.h"
 #include "input/input.h"
 #include "input/cmd_list.h"
 #include "misc/ctype.h"
@@ -62,9 +63,13 @@ struct mp_client_api {
     pthread_mutex_t lock;
 
     // -- protected by lock
+
     struct mpv_handle **clients;
     int num_clients;
     uint64_t event_masks;   // combined events of all clients, or 0 if unknown
+
+    struct mp_custom_protocol *custom_protocols;
+    int num_custom_protocols;
 };
 
 struct observe_property {
@@ -325,8 +330,11 @@ void mpv_suspend(mpv_handle *ctx)
     }
     pthread_mutex_unlock(&ctx->lock);
 
-    if (do_suspend)
-        mp_dispatch_suspend(ctx->mpctx->dispatch);
+    if (do_suspend) {
+        mp_dispatch_lock(ctx->mpctx->dispatch);
+        ctx->mpctx->suspend_count++;
+        mp_dispatch_unlock(ctx->mpctx->dispatch);
+    }
 }
 
 void mpv_resume(mpv_handle *ctx)
@@ -342,8 +350,11 @@ void mpv_resume(mpv_handle *ctx)
     }
     pthread_mutex_unlock(&ctx->lock);
 
-    if (do_resume)
-        mp_dispatch_resume(ctx->mpctx->dispatch);
+    if (do_resume) {
+        mp_dispatch_lock(ctx->mpctx->dispatch);
+        ctx->mpctx->suspend_count--;
+        mp_dispatch_unlock(ctx->mpctx->dispatch);
+    }
 }
 
 void mp_resume_all(mpv_handle *ctx)
@@ -353,20 +364,21 @@ void mp_resume_all(mpv_handle *ctx)
     ctx->suspend_count = 0;
     pthread_mutex_unlock(&ctx->lock);
 
-    if (do_resume)
-        mp_dispatch_resume(ctx->mpctx->dispatch);
+    if (do_resume) {
+        mp_dispatch_lock(ctx->mpctx->dispatch);
+        ctx->mpctx->suspend_count--;
+        mp_dispatch_unlock(ctx->mpctx->dispatch);
+    }
 }
 
 static void lock_core(mpv_handle *ctx)
 {
-    if (ctx->mpctx->initialized)
-        mp_dispatch_lock(ctx->mpctx->dispatch);
+    mp_dispatch_lock(ctx->mpctx->dispatch);
 }
 
 static void unlock_core(mpv_handle *ctx)
 {
-    if (ctx->mpctx->initialized)
-        mp_dispatch_unlock(ctx->mpctx->dispatch);
+    mp_dispatch_unlock(ctx->mpctx->dispatch);
 }
 
 void mpv_wait_async_requests(mpv_handle *ctx)
@@ -433,7 +445,7 @@ void mpv_terminate_destroy(mpv_handle *ctx)
 
     mpv_command(ctx, (const char*[]){"quit", NULL});
 
-    if (!ctx->owner || !ctx->mpctx->initialized) {
+    if (!ctx->owner) {
         mpv_detach_destroy(ctx);
         return;
     }
@@ -451,6 +463,26 @@ void mpv_terminate_destroy(mpv_handle *ctx)
     // And this is also the reason why we only allow 1 thread (the owner) to
     // call this function.
     pthread_join(playthread, NULL);
+}
+
+static void *playback_thread(void *p)
+{
+    struct MPContext *mpctx = p;
+    mpctx->autodetach = true;
+
+    mpthread_set_name("mpv core");
+
+    while (!mpctx->initialized && mpctx->stop_play != PT_QUIT)
+        mp_idle(mpctx);
+
+    if (mpctx->initialized)
+        mp_play_files(mpctx);
+
+    // This actually waits until all clients are gone before actually
+    // destroying mpctx.
+    mp_destroy(mpctx);
+
+    return NULL;
 }
 
 // We mostly care about LC_NUMERIC, and how "." vs. "," is treated,
@@ -479,6 +511,13 @@ mpv_handle *mpv_create(void)
     } else {
         mp_destroy(mpctx);
     }
+
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, playback_thread, ctx->mpctx) != 0) {
+        mpv_terminate_destroy(ctx);
+        return NULL;
+    }
+
     return ctx;
 }
 
@@ -486,40 +525,25 @@ mpv_handle *mpv_create_client(mpv_handle *ctx, const char *name)
 {
     if (!ctx)
         return mpv_create();
-    if (!ctx->mpctx->initialized)
-        return NULL;
     mpv_handle *new = mp_new_client(ctx->mpctx->clients, name);
     if (new)
         mpv_wait_event(new, 0); // set fuzzy_initialized
     return new;
 }
 
-static void *playback_thread(void *p)
+static void doinit(void *ctx)
 {
-    struct MPContext *mpctx = p;
-    mpctx->autodetach = true;
+    void **args = ctx;
 
-    mpthread_set_name("playback core");
-
-    mp_play_files(mpctx);
-
-    // This actually waits until all clients are gone before actually
-    // destroying mpctx.
-    mp_destroy(mpctx);
-
-    return NULL;
+    *(int *)args[1] = mp_initialize(args[0], NULL);
 }
 
 int mpv_initialize(mpv_handle *ctx)
 {
-    if (mp_initialize(ctx->mpctx, NULL) < 0)
-        return MPV_ERROR_INVALID_PARAMETER;
-
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, playback_thread, ctx->mpctx) != 0)
-        return MPV_ERROR_NOMEM;
-
-    return 0;
+    int res = 0;
+    void *args[2] = {ctx->mpctx, &res};
+    mp_dispatch_run(ctx->mpctx->dispatch, doinit, args);
+    return res < 0 ? MPV_ERROR_INVALID_PARAMETER : 0;
 }
 
 // set ev->data to a new copy of the original data
@@ -974,8 +998,6 @@ static void cmd_fn(void *data)
 
 static int run_client_command(mpv_handle *ctx, struct mp_cmd *cmd, mpv_node *res)
 {
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!cmd)
         return MPV_ERROR_INVALID_PARAMETER;
 
@@ -1015,8 +1037,6 @@ int mpv_command_string(mpv_handle *ctx, const char *args)
 
 static int run_cmd_async(mpv_handle *ctx, uint64_t ud, struct mp_cmd *cmd)
 {
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!cmd)
         return MPV_ERROR_INVALID_PARAMETER;
 
@@ -1094,8 +1114,6 @@ static void setproperty_fn(void *arg)
 int mpv_set_property(mpv_handle *ctx, const char *name, mpv_format format,
                      void *data)
 {
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!get_mp_type(format))
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1125,8 +1143,6 @@ int mpv_set_property_async(mpv_handle *ctx, uint64_t ud, const char *name,
                            mpv_format format, void *data)
 {
     const struct m_option *type = get_mp_type(format);
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!type)
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1239,8 +1255,6 @@ static void getproperty_fn(void *arg)
 int mpv_get_property(mpv_handle *ctx, const char *name, mpv_format format,
                      void *data)
 {
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!data)
         return MPV_ERROR_INVALID_PARAMETER;
     if (!get_mp_type_get(format))
@@ -1273,8 +1287,6 @@ char *mpv_get_property_osd_string(mpv_handle *ctx, const char *name)
 int mpv_get_property_async(mpv_handle *ctx, uint64_t ud, const char *name,
                            mpv_format format)
 {
-    if (!ctx->mpctx->initialized)
-        return MPV_ERROR_UNINITIALIZED;
     if (!get_mp_type_get(format))
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1314,7 +1326,7 @@ int mpv_observe_property(mpv_handle *ctx, uint64_t userdata,
     *prop = (struct observe_property){
         .client = ctx,
         .name = talloc_strdup(prop, name),
-        .id = mp_get_property_id(name),
+        .id = mp_get_property_id(ctx->mpctx, name),
         .event_mask = mp_get_property_event_mask(name),
         .reply_id = userdata,
         .format = format,
@@ -1372,7 +1384,7 @@ static void mark_property_changed(struct mpv_handle *client, int index)
 void mp_client_property_change(struct MPContext *mpctx, const char *name)
 {
     struct mp_client_api *clients = mpctx->clients;
-    int id = mp_get_property_id(name);
+    int id = mp_get_property_id(mpctx, name);
 
     pthread_mutex_lock(&clients->lock);
 
@@ -1443,8 +1455,6 @@ static void update_prop(void *p)
 // outstanding property.
 static bool gen_property_change_event(struct mpv_handle *ctx)
 {
-    if (!ctx->mpctx->initialized)
-        return false;
     int start = ctx->lowest_changed;
     ctx->lowest_changed = ctx->num_properties;
     for (int n = start; n < ctx->num_properties; n++) {
@@ -1592,6 +1602,7 @@ static const char *const err_table[] = {
     [-MPV_ERROR_UNKNOWN_FORMAT] = "unrecognized file format",
     [-MPV_ERROR_UNSUPPORTED] = "not supported",
     [-MPV_ERROR_NOT_IMPLEMENTED] = "operation not implemented",
+    [-MPV_ERROR_GENERIC] = "something happened",
 };
 
 const char *mpv_error_string(int error)
@@ -1709,8 +1720,6 @@ int mpv_opengl_cb_render(mpv_opengl_cb_context *ctx, int fbo, int vp[4])
 
 void *mpv_get_sub_api(mpv_handle *ctx, mpv_sub_api sub_api)
 {
-    if (!ctx->mpctx->initialized)
-        return NULL;
     void *res = NULL;
     lock_core(ctx);
     switch (sub_api) {
@@ -1721,4 +1730,60 @@ void *mpv_get_sub_api(mpv_handle *ctx, mpv_sub_api sub_api)
     }
     unlock_core(ctx);
     return res;
+}
+
+struct mp_custom_protocol {
+    char *protocol;
+    void *user_data;
+    mpv_stream_cb_open_ro_fn open_fn;
+};
+
+int mpv_stream_cb_add_ro(mpv_handle *ctx, const char *protocol, void *user_data,
+                         mpv_stream_cb_open_ro_fn open_fn)
+{
+    if (!open_fn)
+        return MPV_ERROR_INVALID_PARAMETER;
+
+    struct mp_client_api *clients = ctx->clients;
+    int r = 0;
+    pthread_mutex_lock(&clients->lock);
+    for (int n = 0; n < clients->num_custom_protocols; n++) {
+        struct mp_custom_protocol *proto = &clients->custom_protocols[n];
+        if (strcmp(proto->protocol, protocol) == 0) {
+            r = MPV_ERROR_INVALID_PARAMETER;
+            break;
+        }
+    }
+    if (stream_has_proto(protocol))
+        r = MPV_ERROR_INVALID_PARAMETER;
+    if (r >= 0) {
+        struct mp_custom_protocol proto = {
+            .protocol = talloc_strdup(clients, protocol),
+            .user_data = user_data,
+            .open_fn = open_fn,
+        };
+        MP_TARRAY_APPEND(clients, clients->custom_protocols,
+                         clients->num_custom_protocols, proto);
+    }
+    pthread_mutex_unlock(&clients->lock);
+    return r;
+}
+
+bool mp_streamcb_lookup(struct mpv_global *g, const char *protocol,
+                        void **out_user_data, mpv_stream_cb_open_ro_fn *out_fn)
+{
+    struct mp_client_api *clients = g->client_api;
+    bool found = false;
+    pthread_mutex_lock(&clients->lock);
+    for (int n = 0; n < clients->num_custom_protocols; n++) {
+        struct mp_custom_protocol *proto = &clients->custom_protocols[n];
+        if (strcmp(proto->protocol, protocol) == 0) {
+            *out_user_data = proto->user_data;
+            *out_fn = proto->open_fn;
+            found = true;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&clients->lock);
+    return found;
 }

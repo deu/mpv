@@ -31,7 +31,6 @@
 #include "af.h"
 
 // Static list of filters
-extern const struct af_info af_info_delay;
 extern const struct af_info af_info_channels;
 extern const struct af_info af_info_format;
 extern const struct af_info af_info_volume;
@@ -46,7 +45,6 @@ extern const struct af_info af_info_lavfi;
 extern const struct af_info af_info_rubberband;
 
 static const struct af_info *const filter_list[] = {
-    &af_info_delay,
     &af_info_channels,
     &af_info_format,
     &af_info_volume,
@@ -168,10 +166,10 @@ static struct af_instance *af_create(struct af_stream *s, char *name,
         .replaygain_data = s->replaygain_data,
         .out_pool = mp_audio_pool_create(af),
     };
-    struct m_config *config = m_config_from_obj_desc(af, s->log, &desc);
-    if (m_config_apply_defaults(config, name, s->opts->af_defs) < 0)
-        goto error;
-    if (m_config_set_obj_params(config, args) < 0)
+    struct m_config *config =
+        m_config_from_obj_desc_and_args(af, s->log, NULL, &desc,
+                                        name, s->opts->af_defs, args);
+    if (!config)
         goto error;
     af->priv = config->optstruct;
 
@@ -779,6 +777,12 @@ struct mp_audio *af_read_output_frame(struct af_stream *s)
     if (!s->last->num_out_queued)
         af_output_frame(s, false);
     return af_dequeue_output_frame(s->last);
+}
+
+void af_unread_output_frame(struct af_stream *s, struct mp_audio *frame)
+{
+    struct af_instance *af = s->last;
+    MP_TARRAY_INSERT_AT(af, af->out_queued, af->num_out_queued, 0, frame);
 }
 
 // Make sure the caller can change data referenced by the frame.

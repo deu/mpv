@@ -64,6 +64,7 @@ struct mp_cache_opts {
 };
 
 typedef struct MPOpts {
+    int property_print_help;
     int use_terminal;
     char *dump_stats;
     int verbose;
@@ -85,8 +86,11 @@ typedef struct MPOpts {
 
     struct m_obj_settings *audio_driver_list, *ao_defs;
     char *audio_device;
+    int audio_exclusive;
     char *audio_client_name;
     int ao_null_fallback;
+    int audio_stream_silence;
+    float audio_wait_open;
     int force_vo;
     int softvol;
     float softvol_volume;
@@ -96,7 +100,7 @@ typedef struct MPOpts {
     int gapless_audio;
     double audio_buffer;
 
-    mp_vo_opts vo;
+    mp_vo_opts *vo;
     int allow_win_drag;
 
     char *wintitle;
@@ -125,6 +129,8 @@ typedef struct MPOpts {
     int osd_level;
     int osd_duration;
     int osd_fractions;
+    int video_osd;
+
     int untimed;
     char *stream_capture;
     char *stream_dump;
@@ -188,6 +194,7 @@ typedef struct MPOpts {
     int ignore_path_in_watch_later_config;
     int pause;
     int keep_open;
+    double image_display_duration;
     char *lavfi_complex;
     int stream_id[2][STREAM_TYPE_COUNT];
     int stream_id_ff[STREAM_TYPE_COUNT];
@@ -227,7 +234,7 @@ typedef struct MPOpts {
     double force_fps;
     int index_mode;
 
-    struct mp_chmap audio_output_channels;
+    struct m_channels audio_output_channels;
     int audio_output_format;
     int audio_normalize;
     int force_srate;
@@ -244,6 +251,7 @@ typedef struct MPOpts {
     char **sub_paths;
     char **audiofile_paths;
     char **external_files;
+    int autoload_files;
     int sub_auto;
     int audiofile_auto;
     int osd_bar_visible;
@@ -275,6 +283,7 @@ typedef struct MPOpts {
     int ass_hinting;
     int ass_shaper;
     int sub_clear_on_seek;
+    int teletext_page;
 
     int hwdec_api;
     char *hwdec_codecs;
@@ -325,9 +334,12 @@ typedef struct MPOpts {
 
     char *ipc_path;
     char *input_file;
+
+    struct gl_video_opts *gl_video_opts;
 } MPOpts;
 
 extern const m_option_t mp_opts[];
 extern const struct MPOpts mp_default_opts;
+extern const struct m_sub_options vo_sub_opts;
 
 #endif

@@ -84,7 +84,7 @@ static void reselect_streams(struct demuxer *demuxer)
             // This stops demuxer readahead for inactive segments.
             if (!p->current || seg->d != p->current->d)
                 selected = false;
-            demuxer_select_track(seg->d, sh, selected);
+            demuxer_select_track(seg->d, sh, MP_NOPTS_VALUE, selected);
         }
     }
 }
@@ -196,6 +196,11 @@ static int d_fill_buffer(struct demuxer *demuxer)
     pkt->stream = seg->stream_map[pkt->stream];
     if (pkt->stream < 0)
         goto drop;
+
+    // for refresh seeks, demux.c prefers monotonically increasing packet pos
+    // since the packet pos is meaningless anyway for timeline, use it
+    if (pkt->pos >= 0)
+        pkt->pos |= (seg->index & 0x7FFFULL) << 48;
 
     struct virtual_stream *vs = &p->streams[pkt->stream];
 

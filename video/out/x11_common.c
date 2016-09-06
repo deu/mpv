@@ -26,6 +26,7 @@
 #include "config.h"
 #include "misc/bstr.h"
 #include "options/options.h"
+#include "options/m_config.h"
 #include "common/common.h"
 #include "common/msg.h"
 #include "input/input.h"
@@ -977,6 +978,17 @@ static void vo_x11_update_composition_hint(struct vo *vo)
                     XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&hint, 1);
 }
 
+// Maximally awful hack to get MPOpts.vo.fullscreen set. The awful part is that
+// this sets a variable which is accessed by command.c without synchronization
+// (and which isn't supposed to need any). The need for this is that there's no
+// way to update this flag in any other way at all.
+static void set_global_fs_flag(struct vo *vo, int fs)
+{
+    struct m_config *rootconfig = mp_get_root_config(vo->global);
+    struct MPOpts *opts = rootconfig->optstruct;
+    opts->vo->fullscreen = fs;
+}
+
 static void vo_x11_check_net_wm_state_fullscreen_change(struct vo *vo)
 {
     struct vo_x11_state *x11 = vo->x11;
@@ -1002,6 +1014,7 @@ static void vo_x11_check_net_wm_state_fullscreen_change(struct vo *vo)
         {
             vo->opts->fullscreen = is_fullscreen;
             x11->fs = is_fullscreen;
+            set_global_fs_flag(vo, is_fullscreen);
 
             if (!is_fullscreen && (x11->pos_changed_during_fs ||
                                    x11->size_changed_during_fs))
@@ -1019,7 +1032,7 @@ static void vo_x11_check_net_wm_state_fullscreen_change(struct vo *vo)
     }
 }
 
-int vo_x11_check_events(struct vo *vo)
+void vo_x11_check_events(struct vo *vo)
 {
     struct vo_x11_state *x11 = vo->x11;
     Display *display = vo->x11->display;
@@ -1178,9 +1191,6 @@ int vo_x11_check_events(struct vo *vo)
     }
 
     update_vo_size(vo);
-    int ret = x11->pending_vo_events;
-    x11->pending_vo_events = 0;
-    return ret;
 }
 
 static void vo_x11_sizehint(struct vo *vo, struct mp_rect rc, bool override_pos)
@@ -1751,17 +1761,25 @@ static void vo_x11_fullscreen(struct vo *vo)
         x11->nofsrc = x11->winrc;
     }
 
+    struct mp_rect rc = x11->nofsrc;
+
     if (x11->wm_type & vo_wm_FULLSCREEN) {
         x11_set_ewmh_state(x11, "_NET_WM_STATE_FULLSCREEN", x11->fs);
         if (!x11->fs && (x11->pos_changed_during_fs ||
                          x11->size_changed_during_fs))
         {
+            if (x11->screenrc.x0 == rc.x0 && x11->screenrc.x1 == rc.x1 &&
+                x11->screenrc.y0 == rc.y0 && x11->screenrc.y1 == rc.y1)
+            {
+                // Workaround for some WMs switching back to FS in this case.
+                MP_VERBOSE(x11, "avoiding triggering old-style fullscreen\n");
+                rc.x1 -= 1;
+                rc.y1 -= 1;
+            }
             vo_x11_move_resize(vo, x11->pos_changed_during_fs,
-                                   x11->size_changed_during_fs,
-                                   x11->nofsrc);
+                                   x11->size_changed_during_fs, rc);
         }
     } else {
-        struct mp_rect rc = x11->nofsrc;
         if (x11->fs) {
             vo_x11_update_screeninfo(vo);
             rc = x11->screenrc;
@@ -1791,22 +1809,20 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
     struct vo_x11_state *x11 = vo->x11;
     switch (request) {
     case VOCTRL_CHECK_EVENTS:
-        *events |= vo_x11_check_events(vo);
+        vo_x11_check_events(vo);
+        *events |= x11->pending_vo_events;
+        x11->pending_vo_events = 0;
         return VO_TRUE;
     case VOCTRL_FULLSCREEN:
-        opts->fullscreen = !opts->fullscreen;
         vo_x11_fullscreen(vo);
         return VO_TRUE;
     case VOCTRL_ONTOP:
-        opts->ontop = !opts->ontop;
         vo_x11_setlayer(vo, opts->ontop);
         return VO_TRUE;
     case VOCTRL_BORDER:
-        opts->border = !opts->border;
         vo_x11_decoration(vo, vo->opts->border);
         return VO_TRUE;
     case VOCTRL_ALL_WORKSPACES: {
-        opts->all_workspaces = !opts->all_workspaces;
         long params[5] = {0xFFFFFFFF, 1};
         if (!opts->all_workspaces) {
             x11_get_property_copy(x11, x11->rootwin, XA(x11, _NET_CURRENT_DESKTOP),
@@ -1931,14 +1947,12 @@ void vo_x11_wait_events(struct vo *vo, int64_t until_time_us)
         { .fd = x11->wakeup_pipe[0], .events = POLLIN },
     };
     int64_t wait_us = until_time_us - mp_time_us();
-    int timeout_ms = MPCLAMP((wait_us + 500) / 1000, 0, 10000);
+    int timeout_ms = MPCLAMP((wait_us + 999) / 1000, 0, 10000);
 
     poll(fds, 2, timeout_ms);
 
-    if (fds[1].revents & POLLIN) {
-        char buf[100];
-        (void)read(x11->wakeup_pipe[0], buf, sizeof(buf)); // flush
-    }
+    if (fds[1].revents & POLLIN)
+        mp_flush_wakeup_pipe(x11->wakeup_pipe[0]);
 }
 
 static void xscreensaver_heartbeat(struct vo_x11_state *x11)

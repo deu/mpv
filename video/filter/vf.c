@@ -255,10 +255,10 @@ static struct vf_instance *vf_open(struct vf_chain *c, const char *name,
         .out_pool = talloc_steal(vf, mp_image_pool_new(16)),
         .chain = c,
     };
-    struct m_config *config = m_config_from_obj_desc(vf, vf->log, &desc);
-    if (m_config_apply_defaults(config, name, c->opts->vf_defs) < 0)
-        goto error;
-    if (m_config_set_obj_params(config, args) < 0)
+    struct m_config *config =
+        m_config_from_obj_desc_and_args(vf, vf->log, c->global, &desc,
+                                        name, c->opts->vf_defs, args);
+    if (!config)
         goto error;
     vf->priv = config->optstruct;
     int retcode = vf->info->open(vf);
@@ -456,6 +456,13 @@ struct mp_image *vf_read_output_frame(struct vf_chain *c)
     if (!c->last->num_out_queued)
         vf_output_frame(c, false);
     return vf_dequeue_output_frame(c->last);
+}
+
+// Undo the previous vf_read_output_frame().
+void vf_unread_output_frame(struct vf_chain *c, struct mp_image *img)
+{
+    struct vf_instance *vf = c->last;
+    MP_TARRAY_INSERT_AT(vf, vf->out_queued, vf->num_out_queued, 0, img);
 }
 
 // Some filters (vf_vapoursynth) filter on separate threads, and may need new

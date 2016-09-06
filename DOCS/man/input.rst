@@ -526,7 +526,7 @@ Input Commands that are Possibly Subject to Change
 ``disable-section "<section>"``
     Disable the named input section. Undoes ``enable-section``.
 
-``define-section "<section>" "<contents>" [default|forced]``
+``define-section "<section>" "<contents>" [default|force]``
     Create a named input section, or replace the contents of an already existing
     input section. The ``contents`` parameter uses the same syntax as the
     ``input.conf`` file (except that using the section syntax in it is not
@@ -544,7 +544,7 @@ Input Commands that are Possibly Subject to Change
     <default> (also used if parameter omitted)
         Use a key binding defined by this section only if the user hasn't
         already bound this key to a command.
-    <forced>
+    <force>
         Always bind a key. (The input section that was made active most recently
         wins if there are ambiguities.)
 
@@ -664,13 +664,6 @@ Input Commands that are Possibly Subject to Change
     Cycle through A-B loop states. The first command will set the ``A`` point
     (the ``ab-loop-a`` property); the second the ``B`` point, and the third
     will clear both points.
-
-``vo-cmdline "<args>"``
-    Reset the sub-option of the current VO. Currently works with ``opengl``
-    (including ``opengl-hq``). The argument is the sub-option string usually
-    passed to the VO on the command line. Not all sub-options can be set, but
-    those which can will be reset even if they don't appear in the argument.
-    This command might be changed or removed in the future.
 
 ``drop-buffers``
     Drop audio/video/demuxer buffers, and restart from fresh. Might help with
@@ -838,20 +831,12 @@ an option at runtime.
 Property list
 -------------
 
-``osd-level`` (RW)
-    See ``--osd-level``.
+.. note::
 
-``osd-scale`` (RW)
-    OSD font size multiplier, see ``--osd-scale``.
-
-``loop`` (RW)
-    See ``--loop``.
-
-``loop-file`` (RW)
-    See ``--loop-file`` (uses ``yes``/``no``).
-
-``speed`` (RW)
-    See ``--speed``.
+    Most options can be set as runtime via properties as well. Just remove the
+    leading ``--`` from the option name. These are not documented. Only
+    properties which do not exist as option with the same name, or which have
+    very different behavior from the options are documented below.
 
 ``audio-speed-correction``, ``video-speed-correction``
     Factor multiplied with ``speed`` at which the player attempts to play the
@@ -868,6 +853,12 @@ Property list
     percent encoding as well. (The result is not necessarily correct, but
     looks better for display purposes. Use the ``path`` property to get an
     unmodified filename.)
+
+    This has a sub-property:
+
+    ``filename/no-ext``
+        Like the ``filename`` property, but if the text contains a ``.``, strip
+        all text after the last ``.``. Usually this removes the file extension.
 
 ``file-size``
     Length in bytes of the source file/stream. (This is the same as
@@ -905,8 +896,10 @@ Property list
     list of format names, e.g. mp4 is ``mov,mp4,m4a,3gp,3g2,mj2`` (the list
     may grow in the future for any format).
 
-``demuxer``
+``current-demuxer``
     Name of the current demuxer. (This is useless.)
+
+    (Renamed from ``demuxer``.)
 
 ``stream-path``
     Filename (full path) of the stream layer filename. (This is probably
@@ -1072,10 +1065,6 @@ Property list
                 "title"             MPV_FORMAT_STRING
                 "default"           MPV_FORMAT_FLAG
 
-``ab-loop-a``, ``ab-loop-b`` (RW)
-    Set/get A-B loop points. See corresponding options and ``ab-loop`` command
-    for details.
-
 ``angle`` (RW)
     Current DVD angle.
 
@@ -1148,12 +1137,11 @@ Property list
 ``af-metadata/<filter-label>``
     Equivalent to ``vf-metadata/<filter-label>``, but for audio filters.
 
-``pause`` (RW)
-    Pause status. This is usually ``yes`` or ``no``. See ``--pause``.
-
-``idle``
+``idle-active``
     Return ``yes`` if no file is loaded, but the player is staying around
     because of the ``--idle`` option.
+
+    (Renamed from ``idle``.)
 
 ``core-idle``
     Return ``yes`` if the playback core is paused, otherwise ``no``. This can
@@ -1230,24 +1218,11 @@ Property list
     is loaded, or when switching ordered chapter segments. This is because
     the same underlying code is used for seeking and resyncing.)
 
-``hr-seek`` (RW)
-    See ``--hr-seek``.
-
 ``mixer-active``
     Return ``yes`` if the audio mixer is active, ``no`` otherwise.
 
     This option is relatively useless. Before mpv 0.18.1, it could be used to
     infer behavior of the ``volume`` property.
-
-``volume`` (RW)
-    Current volume (see ``--volume`` for details).
-
-``volume-max`` (RW)
-    Current maximum value the volume property can be set to. (Equivalent to the
-    ``--volume-max`` option.)
-
-``mute`` (RW)
-    Current mute status (``yes``/``no``).
 
 ``ao-volume`` (RW)
     System volume. This property is available only if mpv audio output is
@@ -1259,9 +1234,6 @@ Property list
 ``ao-mute`` (RW)
     Similar to ``ao-volume``, but controls the mute state. May be unimplemented
     even if ``ao-volume`` works.
-
-``audio-delay`` (RW)
-    See ``--audio-delay``.
 
 ``audio-codec``
     Audio codec selected for decoding.
@@ -1310,28 +1282,6 @@ Property list
     Same as ``audio-params``, but the format of the data written to the audio
     API.
 
-``aid`` (RW)
-    Current audio track (similar to ``--aid``).
-
-``audio`` (RW)
-    Alias for ``aid``.
-
-``balance`` (RW)
-    Audio channel balance. (The implementation of this feature is rather odd.
-    It doesn't change the volumes of each channel, but instead sets up a pan
-    matrix to mix the left and right channels.)
-
-    Deprecated.
-
-``fullscreen`` (RW)
-    See ``--fullscreen``.
-
-``deinterlace`` (RW)
-    See ``--deinterlace``.
-
-``field-dominance`` (RW)
-    See ``--field-dominance``
-
 ``colormatrix`` (R)
     Redirects to ``video-params/colormatrix``. This parameter (as well as
     similar ones) can be overridden with the ``format`` video filter.
@@ -1339,41 +1289,8 @@ Property list
 ``colormatrix-input-range`` (R)
     See ``colormatrix``.
 
-``video-output-levels`` (RW)
-    See ``--video-output-levels``,
-
 ``colormatrix-primaries`` (R)
     See ``colormatrix``.
-
-``taskbar-progress`` (RW)
-    See ``--taskbar-progress``.
-
-``ontop`` (RW)
-    See ``--ontop``.
-
-``border`` (RW)
-    See ``--border``.
-
-``on-all-workspaces`` (RW)
-    See ``--on-all-workspaces``. Unsetting may not work on all WMs.
-
-``framedrop`` (RW)
-    See ``--framedrop``.
-
-``gamma`` (RW)
-    See ``--gamma``.
-
-``brightness`` (RW)
-    See ``--brightness``.
-
-``contrast`` (RW)
-    See ``--contrast``.
-
-``saturation`` (RW)
-    See ``--saturation``.
-
-``hue`` (RW)
-    See ``--hue``.
 
 ``hwdec`` (RW)
     Reflects the ``--hwdec`` option.
@@ -1406,27 +1323,6 @@ Property list
     This does not necessarily use the same values as ``hwdec``. There can be
     multiple interop drivers for the same hardware decoder, depending on
     platform and VO.
-
-``hwdec-active``
-    Deprecated. To be removed in mpv 0.20.0. Use ``hwdec-current`` instead.
-
-    Return ``yes`` or ``no``, depending on whether any type of hardware decoding
-    is actually in use.
-
-``hwdec-detected``
-    Deprecated. To be removed in mpv 0.20.0.
-
-    If hardware decoding is active, this returns the hardware decoder in use.
-    Otherwise, it returns either ``no``, or if applicable, the currently loaded
-    hardware decoding API. This is known only once the VO has opened (and
-    possibly later). With some VOs (like ``opengl``), this is never known in
-    advance, but only when the decoder attempted to create the hw decoder
-    successfully. Also, hw decoders with ``-copy`` suffix will return ``no``
-    while no video is being decoded. All this reflects how detecting hw decoders
-    are detected and used internally in mpv.
-
-``panscan`` (RW)
-    See ``--panscan``.
 
 ``video-format``
     Video format as string.
@@ -1550,9 +1446,11 @@ Property list
     ``video-frame-info/tff``
     ``video-frame-info/repeat``
 
-``fps``
+``container-fps``
     Container FPS. This can easily contain bogus values. For videos that use
     modern container formats or video codecs, this will often be incorrect.
+
+    (Renamed from ``fps``.)
 
 ``estimated-vf-fps``
     Estimated/measured FPS of the video filter chain output. (If no filters
@@ -1594,6 +1492,9 @@ Property list
 ``video-aspect`` (RW)
     Video aspect, see ``--video-aspect``.
 
+    If video is active, this reports the effective aspect value, instead of
+    the value of the ``--video-aspect`` option.
+
 ``osd-width``, ``osd-height``
     Last known OSD width (can be 0). This is needed if you want to use the
     ``overlay-add`` command. It gives you the actual OSD size, which can be
@@ -1601,24 +1502,6 @@ Property list
 
 ``osd-par``
     Last known OSD display pixel aspect (can be 0).
-
-``vid`` (RW)
-    Current video track (similar to ``--vid``).
-
-``video`` (RW)
-    Alias for ``vid``.
-
-``video-align-x``, ``video-align-y`` (RW)
-    See ``--video-align-x`` and ``--video-align-y``.
-
-``video-pan-x``, ``video-pan-y`` (RW)
-    See ``--video-pan-x`` and ``--video-pan-y``.
-
-``video-zoom`` (RW)
-    See ``--video-zoom``.
-
-``video-unscaled`` (W)
-    See ``--video-unscaled``.
 
 ``program`` (W)
     Switch TS program (write-only).
@@ -1632,41 +1515,12 @@ Property list
     On write, a channel-switch to the named channel on the same
     card is performed. Can also be used for channel switching. 
 
-``sid`` (RW)
-    Current subtitle track (similar to ``--sid``).
+``sub-text``
+    Return the current subtitle text. Formatting is stripped. If a subtitle
+    is selected, but no text is currently visible, or the subtitle is not
+    text-based (i.e. DVD/BD subtitles), an empty string is returned.
 
-``secondary-sid`` (RW)
-    Secondary subtitle track (see ``--secondary-sid``).
-
-``sub`` (RW)
-    Alias for ``sid``.
-
-``sub-delay`` (RW)
-    See ``--sub-delay``.
-
-``sub-pos`` (RW)
-    See ``--sub-pos``.
-
-``sub-visibility`` (RW)
-    See ``--sub-visibility``.
-
-``sub-forced-only`` (RW)
-    See ``--sub-forced-only``.
-
-``sub-scale`` (RW)
-    Subtitle font size multiplier.
-
-``ass-force-margins`` (RW)
-    See ``--ass-force-margins``.
-
-``sub-use-margins`` (RW)
-    See ``--sub-use-margins``.
-
-``ass-vsfilter-aspect-compat`` (RW)
-    See ``--ass-vsfilter-aspect-compat``.
-
-``ass-style-override`` (RW)
-    See ``--ass-style-override``.
+    This property is experimental and might be removed in the future.
 
 ``stream-capture`` (RW)
     A filename, see ``--stream-capture``. Setting this will start capture using
@@ -1807,6 +1661,16 @@ Property list
     ``track-list/N/audio-channels`` (deprecated)
         Deprecated alias for ``track-list/N/demux-channel-count``.
 
+    ``track-list/N/replaygain-track-peak``, ``track-list/N/replaygain-track-gain``
+        Per-track replaygain values. Only available for audio tracks with
+        corresponding information stored in the source file.
+
+    ``track-list/N/replaygain-album-peak``, ``track-list/N/replaygain-album-gain``
+        Per-album replaygain values. If the file has per-track but no per-album
+        information, the per-album values will be copied from the per-track
+        values currently. It's possible that future mpv versions will make
+        these properties unavailable instead in this case.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1836,6 +1700,10 @@ Property list
                 "demux-samplerate"  MPV_FORMAT_INT64
                 "demux-fps"         MPV_FORMAT_DOUBLE
                 "audio-channels"    MPV_FORMAT_INT64
+                "replaygain-track-peak" MPV_FORMAT_DOUBLE
+                "replaygain-track-gain" MPV_FORMAT_DOUBLE
+                "replaygain-album-peak" MPV_FORMAT_DOUBLE
+                "replaygain-album-gain" MPV_FORMAT_DOUBLE
 
 ``chapter-list``
     List of chapters, current entry marked. Currently, the raw property value
@@ -1864,11 +1732,8 @@ Property list
                 "title" MPV_FORMAT_STRING
                 "time"  MPV_FORMAT_DOUBLE
 
-``af`` (RW)
-    See ``--af`` and the ``af`` command.
-
-``vf`` (RW)
-    See ``--vf`` and the ``vf`` command.
+``af``, ``vf`` (RW)
+    See ``--vf``/``--af`` and the ``vf``/``af`` command.
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -1885,12 +1750,6 @@ Property list
                     "value" MPV_FORMAT_STRING
 
     It's also possible to write the property using this format.
-
-``video-rotate`` (RW)
-    See ``--video-rotate`` option.
-
-``video-stereo-mode`` (RW)
-    See ``--video-stereo-mode`` option.
 
 ``seekable``
     Return whether it's generally possible to seek in the current file.
@@ -2131,6 +1990,10 @@ Property list
     require reloading the file for changes to take effect. If there is an
     equivalent property, prefer setting the property instead.
 
+    There shouldn't be any reason to access ``options/<name>`` instead of
+    ``<name>``, except in situations in which the properties have different
+    behavior or conflicting semantics.
+
 ``file-local-options/<name>``
     Similar to ``options/<name>``, but when setting an option through this
     property, the option is reset to its old value once the current file has
@@ -2183,6 +2046,59 @@ Property list
 
 ``property-list``
     Return the list of top-level properties.
+
+``profile-list``
+    Return the list of profiles and their contents. This is highly
+    implementation-specific, and may change any time. Currently, it returns
+    an array of options for each profile. Each option has a name and a value,
+    with the value currently always being a string. Note that the options array
+    is not a map, as order matters and duplicate entries are possible. Recursive
+    profiles are not expanded, and show up as special ``profile`` options.
+
+Inconsistencies between options and properties
+----------------------------------------------
+
+You can access (almost) all options as properties, though there are some
+caveats with some properties (due to historical reasons):
+
+``vid``, ``aid``, ``sid``
+    While playback is active, you can set existing tracks only. (The option
+    allows setting any track ID, and which tracks to enable is chosen at
+    loading time.)
+
+``deinterlace``
+    While video is active, this behaves differently from the option. It will
+    never return the ``auto`` value (but the state as observed by the video
+    chain). You cannot set ``auto`` either.
+
+``video-aspect``
+    While video is active, always returns the effective aspect ratio.
+
+``brightness`` (and other color options)
+    If ``--vo=xv`` is used, these properties may return the adapter's current
+    values instead of the option values.
+
+``display-fps``
+    If a VO is created, this will return either the actual display FPS, or
+    an invalid value, instead of the option value.
+
+``audio-file``, ``sub-file``, ``external-file``
+    These options/properties are actually lists of filenames. To make the
+    command-line interface easier, each ``--audio-file=...`` option appends
+    the full string to the internal list. However, when used as properties,
+    every time you set the property as a string the internal list will be
+    replaced with a single entry containing the string you set. ``,`` or other
+    separators are never used. You have to use ``MPV_FORMAT_NODE_ARRAY`` (or
+    corresponding API, e.g. ``mp.set_property_native()`` with a table in Lua)
+    to set multiple entries.
+
+    Strictly speaking, option access via API (e.g. ``mpv_set_option_string()``)
+    has the same problem, and it's only a difference between CLI/API.
+
+``demuxer``, ``idle``, ``length``, ``audio-samplerate``, ``audio-channels``, ``audio-format``, ``fps``, ``cache``
+    These behave completely different as property, but are deprecated (newer
+    aliases which don't conflict have been added). After the deprecation period
+    they will be changed to the proper option behavior.
 
 Property Expansion
 ------------------

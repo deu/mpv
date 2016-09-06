@@ -35,6 +35,7 @@
 
 #include "config.h"
 #include "options/options.h"
+#include "options/m_config.h"
 #include "options/m_option.h"
 #include "common/msg.h"
 #include "osdep/endian.h"
@@ -48,11 +49,43 @@
 #include "internal.h"
 #include "audio/format.h"
 
+struct ao_alsa_opts {
+    char *device;
+    char *mixer_device;
+    char *mixer_name;
+    int mixer_index;
+    int resample;
+    int ni;
+    int ignore_chmap;
+};
+
+#define OPT_BASE_STRUCT struct ao_alsa_opts
+static const struct m_sub_options ao_alsa_conf = {
+    .opts = (const struct m_option[]) {
+        OPT_STRING("alsa-device", device, 0, DEVICE_OPT_DEPRECATION),
+        OPT_FLAG("alsa-resample", resample, 0),
+        OPT_STRING("alsa-mixer-device", mixer_device, 0),
+        OPT_STRING("alsa-mixer-name", mixer_name, 0),
+        OPT_INTRANGE("alsa-mixer-index", mixer_index, 0, 0, 99),
+        OPT_FLAG("alsa-non-interleaved", ni, 0),
+        OPT_FLAG("alsa-ignore-chmap", ignore_chmap, 0),
+        {0}
+    },
+    .defaults = &(const struct ao_alsa_opts) {
+        .mixer_device = "default",
+        .mixer_name = "Master",
+        .mixer_index = 0,
+        .ni = 0,
+    },
+    .size = sizeof(struct ao_alsa_opts),
+};
+
 struct priv {
     snd_pcm_t *alsa;
     bool device_lost;
     snd_pcm_format_t alsa_fmt;
     bool can_pause;
+    bool paused;
     snd_pcm_sframes_t prepause_frames;
     double delay_before_pause;
     snd_pcm_uframes_t buffersize;
@@ -60,13 +93,7 @@ struct priv {
 
     snd_output_t *output;
 
-    char *cfg_device;
-    char *cfg_mixer_device;
-    char *cfg_mixer_name;
-    int cfg_mixer_index;
-    int cfg_resample;
-    int cfg_ni;
-    int cfg_ignore_chmap;
+    struct ao_alsa_opts *opts;
 };
 
 #define BUFFER_TIME 250000  // 250ms
@@ -124,13 +151,13 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
 
         snd_mixer_selem_id_alloca(&sid);
 
-        snd_mixer_selem_id_set_index(sid, p->cfg_mixer_index);
-        snd_mixer_selem_id_set_name(sid, p->cfg_mixer_name);
+        snd_mixer_selem_id_set_index(sid, p->opts->mixer_index);
+        snd_mixer_selem_id_set_name(sid, p->opts->mixer_name);
 
         err = snd_mixer_open(&handle, 0);
         CHECK_ALSA_ERROR("Mixer open error");
 
-        err = snd_mixer_attach(handle, p->cfg_mixer_device);
+        err = snd_mixer_attach(handle, p->opts->mixer_device);
         CHECK_ALSA_ERROR("Mixer attach error");
 
         err = snd_mixer_selem_register(handle, NULL, NULL);
@@ -336,8 +363,10 @@ static bool query_chmaps(struct ao *ao, struct mp_chmap *chmap)
     struct mp_chmap_sel chmap_sel = {.tmp = p};
 
     snd_pcm_chmap_query_t **maps = snd_pcm_query_chmaps(p->alsa);
-    if (!maps)
+    if (!maps) {
+        MP_VERBOSE(ao, "snd_pcm_query_chmaps() returned NULL\n");
         return false;
+    }
 
     for (int i = 0; maps[i] != NULL; i++) {
         char aname[128];
@@ -360,7 +389,7 @@ static bool query_chmaps(struct ao *ao, struct mp_chmap *chmap)
 
     snd_pcm_free_chmaps(maps);
 
-    return ao_chmap_sel_adjust(ao, &chmap_sel, chmap);
+    return ao_chmap_sel_adjust2(ao, &chmap_sel, chmap, false);
 }
 
 // Map back our selected channel layout to an ALSA one. This is done this way so
@@ -444,7 +473,7 @@ static int set_chmap(struct ao *ao, struct mp_chmap *dev_chmap, int num_channels
 
         MP_VERBOSE(ao, "which we understand as: %s\n", mp_chmap_to_str(&chmap));
 
-        if (p->cfg_ignore_chmap) {
+        if (p->opts->ignore_chmap) {
             MP_VERBOSE(ao, "user set ignore-chmap; ignoring the channel map.\n");
         } else if (af_fmt_is_spdif(ao->format)) {
             MP_VERBOSE(ao, "using spdif passthrough; ignoring the channel map.\n");
@@ -612,8 +641,8 @@ static int init_device(struct ao *ao, int mode)
     const char *device = "default";
     if (ao->device)
         device = ao->device;
-    if (p->cfg_device && p->cfg_device[0])
-        device = p->cfg_device;
+    if (p->opts->device && p->opts->device[0])
+        device = p->opts->device;
 
     err = try_open_device(ao, device, mode);
     CHECK_ALSA_ERROR("Playback open error");
@@ -638,7 +667,7 @@ static int init_device(struct ao *ao, int mode)
 
     // Some ALSA drivers have broken delay reporting, so disable the ALSA
     // resampling plugin by default.
-    if (!p->cfg_resample) {
+    if (!p->opts->resample) {
         err = snd_pcm_hw_params_set_rate_resample(p->alsa, alsa_hwparams, 0);
         CHECK_ALSA_ERROR("Unable to disable resampling");
     }
@@ -681,7 +710,7 @@ static int init_device(struct ao *ao, int mode)
     dump_hw_params(ao, MSGL_DEBUG, "HW params after format:\n", alsa_hwparams);
 
     struct mp_chmap dev_chmap = ao->channels;
-    if (af_fmt_is_spdif(ao->format) || p->cfg_ignore_chmap) {
+    if (af_fmt_is_spdif(ao->format) || p->opts->ignore_chmap) {
         dev_chmap.num = 0; // disable chmap API
     } else if (dev_chmap.num == 1 && dev_chmap.speaker[0] == MP_SPEAKER_ID_FC) {
         // As yet another ALSA API inconsistency, mono is not reported correctly.
@@ -785,6 +814,14 @@ static int init_device(struct ao *ao, int mode)
     MP_VERBOSE(ao, "buffersize: %d samples\n", (int)p->buffersize);
     MP_VERBOSE(ao, "period size: %d samples\n", (int)p->outburst);
 
+    ao->device_buffer = p->buffersize;
+
+    // ao_alsa implements this by relying on underrun behavior (no data means
+    // underrun, during which silence is played). Trigger by playing some
+    // initial silence.
+    if (ao->stream_silence)
+        ao_play_silence(ao, p->outburst);
+
     return 0;
 
 alsa_error:
@@ -795,7 +832,9 @@ alsa_error:
 static int init(struct ao *ao)
 {
     struct priv *p = ao->priv;
-    if (!p->cfg_ni)
+    p->opts = mp_get_config_group(ao, ao->global, &ao_alsa_conf);
+
+    if (!p->opts->ni)
         ao->format = af_fmt_from_planar(ao->format);
 
     MP_VERBOSE(ao, "using ALSA version: %s\n", snd_asoundlib_version());
@@ -874,7 +913,7 @@ static double get_delay(struct ao *ao)
     struct priv *p = ao->priv;
     snd_pcm_sframes_t delay;
 
-    if (snd_pcm_state(p->alsa) == SND_PCM_STATE_PAUSED)
+    if (p->paused)
         return p->delay_before_pause;
 
     if (snd_pcm_delay(p->alsa, &delay) < 0)
@@ -888,26 +927,46 @@ static double get_delay(struct ao *ao)
     return delay / (double)ao->samplerate;
 }
 
+// For stream-silence mode: replace remaining buffer with silence.
+// Tries to cause an instant buffer underrun.
+static void soft_reset(struct ao *ao)
+{
+    struct priv *p = ao->priv;
+    snd_pcm_sframes_t frames = snd_pcm_rewindable(p->alsa);
+    if (frames > 0 && snd_pcm_state(p->alsa) == SND_PCM_STATE_RUNNING) {
+        frames = snd_pcm_rewind(p->alsa, frames);
+        if (frames < 0) {
+            int err = frames;
+            CHECK_ALSA_WARN("pcm rewind error");
+        }
+    }
+}
+
 static void audio_pause(struct ao *ao)
 {
     struct priv *p = ao->priv;
     int err;
 
-    if (p->can_pause) {
+    if (p->paused)
+        return;
+
+    p->delay_before_pause = get_delay(ao);
+    p->prepause_frames = p->delay_before_pause * ao->samplerate;
+
+    if (ao->stream_silence) {
+        soft_reset(ao);
+    } else if (p->can_pause) {
         if (snd_pcm_state(p->alsa) == SND_PCM_STATE_RUNNING) {
-            p->delay_before_pause = get_delay(ao);
             err = snd_pcm_pause(p->alsa, 1);
             CHECK_ALSA_ERROR("pcm pause error");
+            p->prepause_frames = 0;
         }
     } else {
-        if (snd_pcm_delay(p->alsa, &p->prepause_frames) < 0
-            || p->prepause_frames < 0)
-            p->prepause_frames = 0;
-        p->delay_before_pause = p->prepause_frames / (double)ao->samplerate;
-
         err = snd_pcm_drop(p->alsa);
         CHECK_ALSA_ERROR("pcm drop error");
     }
+
+    p->paused = true;
 
 alsa_error: ;
 }
@@ -930,9 +989,15 @@ static void audio_resume(struct ao *ao)
     struct priv *p = ao->priv;
     int err;
 
+    if (!p->paused)
+        return;
+
     resume_device(ao);
 
-    if (p->can_pause) {
+    if (ao->stream_silence) {
+        p->paused = false;
+        get_delay(ao); // recovers from underrun (as a side-effect)
+    } else if (p->can_pause) {
         if (snd_pcm_state(p->alsa) == SND_PCM_STATE_PAUSED) {
             err = snd_pcm_pause(p->alsa, 0);
             CHECK_ALSA_ERROR("pcm resume error");
@@ -941,11 +1006,13 @@ static void audio_resume(struct ao *ao)
         MP_VERBOSE(ao, "resume not supported by hardware\n");
         err = snd_pcm_prepare(p->alsa);
         CHECK_ALSA_ERROR("pcm prepare error");
-        if (p->prepause_frames)
-            ao_play_silence(ao, p->prepause_frames);
     }
 
+    if (p->prepause_frames)
+        ao_play_silence(ao, p->prepause_frames);
+
 alsa_error: ;
+    p->paused = false;
 }
 
 static void reset(struct ao *ao)
@@ -953,12 +1020,18 @@ static void reset(struct ao *ao)
     struct priv *p = ao->priv;
     int err;
 
+    p->paused = false;
     p->prepause_frames = 0;
     p->delay_before_pause = 0;
-    err = snd_pcm_drop(p->alsa);
-    CHECK_ALSA_ERROR("pcm prepare error");
-    err = snd_pcm_prepare(p->alsa);
-    CHECK_ALSA_ERROR("pcm prepare error");
+
+    if (ao->stream_silence) {
+        soft_reset(ao);
+    } else {
+        err = snd_pcm_drop(p->alsa);
+        CHECK_ALSA_ERROR("pcm prepare error");
+        err = snd_pcm_prepare(p->alsa);
+        CHECK_ALSA_ERROR("pcm prepare error");
+    }
 
 alsa_error: ;
 }
@@ -996,6 +1069,8 @@ static int play(struct ao *ao, void **data, int samples, int flags)
             res = 0;
         }
     } while (res == 0);
+
+    p->paused = false;
 
     return res < 0 ? -1 : res;
 
@@ -1078,8 +1153,6 @@ static void list_devs(struct ao *ao, struct ao_device_list *list)
     snd_device_name_free_hint(hints);
 }
 
-#define OPT_BASE_STRUCT struct priv
-
 const struct ao_driver audio_out_alsa = {
     .description = "ALSA audio output",
     .name      = "alsa",
@@ -1097,20 +1170,15 @@ const struct ao_driver audio_out_alsa = {
     .wakeup    = ao_wakeup_poll,
     .list_devs = list_devs,
     .priv_size = sizeof(struct priv),
-    .priv_defaults = &(const struct priv) {
-        .cfg_mixer_device = "default",
-        .cfg_mixer_name = "Master",
-        .cfg_mixer_index = 0,
-        .cfg_ni = 0,
-    },
     .options = (const struct m_option[]) {
-        OPT_STRING("device", cfg_device, 0),
-        OPT_FLAG("resample", cfg_resample, 0),
-        OPT_STRING("mixer-device", cfg_mixer_device, 0),
-        OPT_STRING("mixer-name", cfg_mixer_name, 0),
-        OPT_INTRANGE("mixer-index", cfg_mixer_index, 0, 0, 99),
-        OPT_FLAG("non-interleaved", cfg_ni, 0),
-        OPT_FLAG("ignore-chmap", cfg_ignore_chmap, 0),
+        OPT_SUBOPT_LEGACY("device", "alsa-device"),
+        OPT_SUBOPT_LEGACY("resample", "alsa-resample"),
+        OPT_SUBOPT_LEGACY("mixer-device", "alsa-mixer-device"),
+        OPT_SUBOPT_LEGACY("mixer-name", "alsa-mixer-name"),
+        OPT_SUBOPT_LEGACY("mixer-index", "alsa-mixer-index"),
+        OPT_SUBOPT_LEGACY("non-interleaved", "alsa-non-interleaved"),
+        OPT_SUBOPT_LEGACY("ignore-chmap", "alsa-ignore-chmap"),
         {0}
     },
+    .global_opts = &ao_alsa_conf,
 };

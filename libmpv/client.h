@@ -215,7 +215,7 @@ extern "C" {
  * relational operators (<, >, <=, >=).
  */
 #define MPV_MAKE_VERSION(major, minor) (((major) << 16) | (minor) | 0UL)
-#define MPV_CLIENT_API_VERSION MPV_MAKE_VERSION(1, 21)
+#define MPV_CLIENT_API_VERSION MPV_MAKE_VERSION(1, 23)
 
 /**
  * Return the MPV_CLIENT_API_VERSION the mpv source has been compiled with.
@@ -248,7 +248,7 @@ typedef enum mpv_error {
      * making asynchronous requests. (Bugs in the client API implementation
      * could also trigger this, e.g. if events become "lost".)
      */
-    MPV_ERROR_EVENT_QUEUE_FULL = -1,
+    MPV_ERROR_EVENT_QUEUE_FULL  = -1,
     /**
      * Memory allocation failed.
      */
@@ -299,7 +299,7 @@ typedef enum mpv_error {
      */
     MPV_ERROR_COMMAND           = -12,
     /**
-     * Generic error on loading (used with mpv_event_end_file.error).
+     * Generic error on loading (usually used with mpv_event_end_file.error).
      */
     MPV_ERROR_LOADING_FAILED    = -13,
     /**
@@ -329,7 +329,11 @@ typedef enum mpv_error {
     /**
      * The API function which was called is a stub only.
      */
-    MPV_ERROR_NOT_IMPLEMENTED   = -19
+    MPV_ERROR_NOT_IMPLEMENTED   = -19,
+    /**
+     * Unspecified error.
+     */
+    MPV_ERROR_GENERIC           = -20
 } mpv_error;
 
 /**
@@ -366,10 +370,11 @@ const char *mpv_client_name(mpv_handle *ctx);
  * and needs to be initialized to be actually used with most other API
  * functions.
  *
- * Most API functions will return MPV_ERROR_UNINITIALIZED in the uninitialized
+ * Some API functions will return MPV_ERROR_UNINITIALIZED in the uninitialized
  * state. You can call mpv_set_option() (or mpv_set_option_string() and other
- * variants) to set initial options. After this, call mpv_initialize() to start
- * the player, and then use e.g. mpv_command() to start playback of a file.
+ * variants, and in mpv 0.21.0 or later mpv_set_property() etc.) to set initial
+ * options. After this, call mpv_initialize() to start the player, and then use
+ * e.g. mpv_command() to start playback of a file.
  *
  * The point of separating handle creation and actual initialization is that
  * you can configure things which can't be changed during runtime.
@@ -783,6 +788,14 @@ void mpv_free_node_contents(mpv_node *node);
  * Using a format other than MPV_FORMAT_NODE is equivalent to constructing a
  * mpv_node with the given format and data, and passing the mpv_node to this
  * function.
+ *
+ * Note: for most purposes, this is not needed anymore. Starting with mpv
+ *       version 0.21.0 (version 1.23) most options can be set with
+ *       mpv_set_property() (and related functions), and even before
+ *       mpv_initialize(). In some obscure corner cases, using this function
+ *       to set options might still be required (see section "Inconsistencies
+ *       between options and properties" on the manpage). Once these are
+ *       resolved, the option setting functions might be deprecated.
  *
  * @param name Option name. This is the same as on the mpv command line, but
  *             without the leading "--".

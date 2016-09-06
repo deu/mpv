@@ -19,7 +19,51 @@ Interface changes
 
 ::
 
- --- mpv 0.18.2 ---
+ --- mpv 0.21.0 ---
+    - deprecate _all_ --vo and --ao suboptions. Generally, all suboptions are
+      replaced by global options, which do exactly the same. For example,
+      "--vo=opengl:scale=nearest" turns into "--scale=nearest". In some cases,
+      the global option is prefixed.
+    - deprecate the device/sink options on all AOs. Use --audio-device instead.
+    - deprecate "--ao=wasapi:exclusive" and "--ao=coreaudio:exclusive",
+      use --audio-exclusive instead.
+    - subtle changes in how "--no-..." options are treated mean that they are
+      not accessible under "options/..." anymore (instead, these are resolved
+      at parsing time). This does not affect options which start with "--no-",
+      but do not use the mechanism for negation options.
+      (Also see client API change for API version 1.23.)
+    - add almost all options to the property list, meaning you can change
+      options without adding "options/" to the property name (a new section
+      has been added to the manpage describing some conflicting behavior
+      between options and properties)
+    - rename the following properties
+        - "demuxer" -> "current-demuxer"
+        - "fps" -> "container-fps"
+        - "idle" -> "idle-active"
+        - "cache" -> "cache-percent"
+      the old names are deprecated
+    - remove deprecated "hwdec-active" and "hwdec-detected" properties
+    - remove "pre-shaders", "post-shaders" and "scale-shader": deprecated
+      in favor of "user-shaders"
+    - remove all vo_opengl suboptions. Use global options with the same name
+      instead, e.g.: --vo=opengl:scale=nearest => --scale=nearest
+      Some options are prefixed with "opengl-", e.g. --opengl-pbo.
+      The same change is applied to ao_alsa.
+    - remove --vo=opengl-hq. Set --profile=opengl-hq instead. Note that this
+      profile does not force the VO. This means if you use the --vo option to
+      set another VO, it won't work. But this also means it can be used with
+      opengl-cb.
+    - deprecate --vo-defaults (no replacement)
+    - remove the vo-cmdline command. You can set OpenGL renderer options
+      directly via properties instead.
+    - deprecate the ao and vo auto-profiles (they never made any sense)
+    - deprecate "--vo=direct3d_shaders" - use "--vo=direct3d" instead.
+      Change "--vo=direct3d" to always use shaders by default.
+ --- mpv 0.20.0 ---
+    - add --image-display-duration option - this also means that image duration
+      is not influenced by --mf-fps anymore in the general case (this is an
+      incompatible change)
+ --- mpv 0.19.0 ---
     - deprecate "balance" option/property (no replacement)
  --- mpv 0.18.1 ---
     - deprecate --heartbeat-cmd
