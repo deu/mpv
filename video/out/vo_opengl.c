@@ -279,8 +279,6 @@ static int control(struct vo *vo, uint32_t request, void *data)
     struct gl_priv *p = vo->priv;
 
     switch (request) {
-    case VOCTRL_GET_PANSCAN:
-        return VO_TRUE;
     case VOCTRL_SET_PANSCAN:
         resize(p);
         return VO_TRUE;
@@ -302,12 +300,12 @@ static int control(struct vo *vo, uint32_t request, void *data)
     }
     case VOCTRL_SCREENSHOT_WIN: {
         struct mp_image *screen = gl_read_window_contents(p->gl);
+        if (!screen)
+            break; // redirect to backend
         // set image parameters according to the display, if possible
-        if (screen) {
-            screen->params.color = gl_video_get_output_colorspace(p->renderer);
-            if (p->glctx->flip_v)
-                mp_image_vflip(screen);
-        }
+        screen->params.color = gl_video_get_output_colorspace(p->renderer);
+        if (p->glctx->flip_v)
+            mp_image_vflip(screen);
         *(struct mp_image **)data = screen;
         return true;
     }

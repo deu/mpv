@@ -4,14 +4,11 @@ VIDEO OUTPUT DRIVERS
 Video output drivers are interfaces to different video output facilities. The
 syntax is:
 
-``--vo=<driver1[:suboption1[=value]:...],driver2,...[,]>``
+``--vo=<driver1,driver2,...[,]>``
     Specify a priority list of video output drivers to be used.
 
-If the list has a trailing ',', mpv will fall back on drivers not contained
-in the list. Suboptions are optional and can mostly be omitted.
-
-You can also set defaults for each driver. The defaults are applied before the
-normal driver parameters.
+If the list has a trailing ``,``, mpv will fall back on drivers not contained
+in the list.
 
 ``--vo-defaults=<driver1[:parameter1:parameter2:...],driver2,...>``
     Set defaults for each driver.
@@ -22,10 +19,10 @@ normal driver parameters.
 
     See ``--vo=help`` for a list of compiled-in video output drivers.
 
-    The recommended output driver is ``--vo=opengl``. All other drivers are
-    for compatibility or special purposes. By default, ``--vo=opengl`` is used,
-    but if that appears not to work, it fallback to other drivers (in the same
-    order as listed by ``--vo=help``).
+    The recommended output driver is ``--vo=opengl``, which is the default. All
+    other drivers are for compatibility or special purposes. If the default
+    does not work, it will fallback to other drivers (in the same order as
+    listed by ``--vo=help``).
 
 Available video output drivers are:
 
@@ -163,11 +160,11 @@ Available video output drivers are:
         with the composited mode behavior of the NVIDIA driver, there is no
         hard playback speed limit even without the disabled logic. Enabled by
         default, use ``no-composite-detect`` to disable.
-    ``--vo-vdpau-queuetime_windowed=<number>`` and ``queuetime_fs=<number>``
+    ``--vo-vdpau-queuetime-windowed=<number>`` and ``queuetime-fs=<number>``
         Use VDPAU's presentation queue functionality to queue future video
         frame changes at most this many milliseconds in advance (default: 50).
         See below for additional information.
-    ``--vo-vdpau-output_surfaces=<2-15>``
+    ``--vo-vdpau-output-surfaces=<2-15>``
         Allocate this many output surfaces to display video frames (default:
         3). See below for additional information.
     ``--vo-vdpau-colorkey=<#RRGGBB|#AARRGGBB>``
@@ -462,7 +459,14 @@ Available video output drivers are:
 ``rpi`` (Raspberry Pi)
     Native video output on the Raspberry Pi using the MMAL API.
 
-    The following global options are supported by this video output:
+    This is deprecated. Use ``--vo=opengl`` instead, which is the default and
+    provides the same functionality. The ``rpi`` VO will be removed in
+    mpv 0.22.0. Its functionality was folded into --vo=opengl, which now uses
+    RPI hardware decoding by treating it as a hardware overlay (without applying
+    GL filtering). Also to be changed in 0.22.0: the --fs flag will be reset to
+    "no" by default (like on the other platforms).
+
+    The following deprecated global options are supported by this video output:
 
     ``--rpi-display=<number>``
         Select the display number on which the video overlay should be shown

@@ -45,6 +45,7 @@ extern const struct mpgl_driver mpgl_driver_angle;
 extern const struct mpgl_driver mpgl_driver_angle_es2;
 extern const struct mpgl_driver mpgl_driver_dxinterop;
 extern const struct mpgl_driver mpgl_driver_rpi;
+extern const struct mpgl_driver mpgl_driver_mali;
 
 static const struct mpgl_driver *const backends[] = {
 #if HAVE_RPI
@@ -78,6 +79,9 @@ static const struct mpgl_driver *const backends[] = {
 #if HAVE_EGL_DRM
     &mpgl_driver_drm_egl,
 #endif
+#if HAVE_MALI_FBDEV
+    &mpgl_driver_mali,
+#endif
 };
 
 // 0-terminated list of desktop GL versions a backend should try to
@@ -110,7 +114,7 @@ int mpgl_validate_backend_opt(struct mp_log *log, const struct m_option *opt,
         mp_info(log, "    auto (autodetect)\n");
         for (int n = 0; n < MP_ARRAY_SIZE(backends); n++)
             mp_info(log, "    %s\n", backends[n]->name);
-        return M_OPT_EXIT - 1;
+        return M_OPT_EXIT;
     }
     char s[20];
     snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
@@ -119,7 +123,7 @@ int mpgl_validate_backend_opt(struct mp_log *log, const struct m_option *opt,
 
 #if HAVE_C11_TLS
 #define MP_TLS _Thread_local
-#elif defined(__GNU__)
+#elif defined(__GNUC__)
 #define MP_TLS __thread
 #endif
 
@@ -155,6 +159,8 @@ static MPGLContext *init_backend(struct vo *vo, const struct mpgl_driver *driver
         .vo = vo,
         .driver = driver,
     };
+    if (probing)
+        vo_flags |= VOFLAG_PROBING;
     bool old_probing = vo->probing;
     vo->probing = probing; // hack; kill it once backends are separate
     MP_VERBOSE(vo, "Initializing OpenGL backend '%s'\n", ctx->driver->name);

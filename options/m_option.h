@@ -191,6 +191,9 @@ struct m_sub_options {
     const struct m_option *opts;
     size_t size;
     const void *defaults;
+    // Change flags passed to mp_option_change_callback() if any option that is
+    // directly or indirectly part of this group is changed.
+    int change_flags;
 };
 
 #define CONF_TYPE_FLAG          (&m_option_type_flag)
@@ -360,33 +363,43 @@ struct m_option {
 // The option is forbidden in config files.
 #define M_OPT_NOCFG             (1 << 2)
 
-// This option can't be set per-file when used with struct m_config.
-#define M_OPT_GLOBAL            (1 << 4)
-
 // Can not be freely changed at runtime (normally, all options can be changed,
 // even if the settings don't get effective immediately). Note that an option
 // might still change even if this is set, e.g. via properties or per-file
 // options.
-#define M_OPT_FIXED             (1 << 5)
+#define M_OPT_FIXED             (1 << 3)
 
 // The option should be set during command line pre-parsing
-#define M_OPT_PRE_PARSE         (1 << 6)
+#define M_OPT_PRE_PARSE         (1 << 4)
 
 // The option expects a file name (or a list of file names)
-#define M_OPT_FILE              (1 << 11)
-
-// Logging-related option - used to update log/terminal settings eagerly
-#define M_OPT_TERM              (1 << 12)
+#define M_OPT_FILE              (1 << 5)
 
 // Do not add as property.
-#define M_OPT_NOPROP            (1 << 13)
+#define M_OPT_NOPROP            (1 << 6)
+
+// The following are also part of the M_OPT_* flags, and are used to update
+// certain groups of options.
+#define UPDATE_OPT_FIRST        (1 << 7)
+#define UPDATE_TERM             (1 << 7) // terminal options
+#define UPDATE_RENDERER         (1 << 8) // mainly vo_opengl options
+#define UPDATE_VIDEOPOS         (1 << 9) // video position (panscan etc.)
+#define UPDATE_OSD              (1 << 10) // related to OSD rendering
+#define UPDATE_BUILTIN_SCRIPTS  (1 << 11) // osc/ytdl
+#define UPDATE_IMGPAR           (1 << 12) // video image params overrides
+#define UPDATE_INPUT            (1 << 13) // mostly --input-* options
+#define UPDATE_AUDIO            (1 << 14) // --audio-channels etc.
+#define UPDATE_OPT_LAST         (1 << 14)
+
+// All bits between _FIRST and _LAST (inclusive)
+#define UPDATE_OPTS_MASK \
+    (((UPDATE_OPT_LAST << 1) - 1) & ~(unsigned)(UPDATE_OPT_FIRST - 1))
 
 // These are kept for compatibility with older code.
 #define CONF_MIN                M_OPT_MIN
 #define CONF_MAX                M_OPT_MAX
 #define CONF_RANGE              M_OPT_RANGE
 #define CONF_NOCFG              M_OPT_NOCFG
-#define CONF_GLOBAL             (M_OPT_GLOBAL | M_OPT_FIXED)
 #define CONF_PRE_PARSE          M_OPT_PRE_PARSE
 
 // These flags are used to describe special parser capabilities or behavior.
@@ -420,8 +433,7 @@ struct m_option {
 // On success parsers return a number >= 0.
 //
 // To indicate that MPlayer should exit without playing anything,
-// parsers return M_OPT_EXIT minus the number of parameters they
-// consumed: \ref M_OPT_EXIT or \ref M_OPT_EXIT-1.
+// parsers return M_OPT_EXIT.
 //
 // On error one of the following (negative) error codes is returned:
 
@@ -445,8 +457,6 @@ struct m_option {
 #define M_OPT_PARSER_ERR        -6
 
 // Returned when MPlayer should exit. Used by various help stuff.
-/** M_OPT_EXIT must be the lowest number on this list.
- */
 #define M_OPT_EXIT              -7
 
 char *m_option_strerror(int code);
@@ -686,7 +696,7 @@ extern const char m_option_path_separator;
 
 #define OPT_PRINT(optname, fn)                                              \
     {.name = optname,                                                       \
-     .flags = M_OPT_FIXED | M_OPT_GLOBAL | M_OPT_NOCFG | M_OPT_PRE_PARSE,   \
+     .flags = M_OPT_FIXED | M_OPT_NOCFG | M_OPT_PRE_PARSE,   \
      .type = &m_option_type_print_fn,                                       \
      .priv = MP_EXPECT_TYPE(m_opt_print_fn, fn),                            \
      .offset = -1}

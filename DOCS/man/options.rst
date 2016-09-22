@@ -70,7 +70,7 @@ Track Selection
     ``--vid=no`` or ``--video=no`` or ``--no-video`` disables video playback.
     (The latter variant does not work with the client API.)
 
-    If vudeo is disabled, mpv will try to download the audio only if media is
+    If video is disabled, mpv will try to download the audio only if media is
     streamed with youtube-dl, because it saves bandwidth. This is done by
     setting the ytdl_format to "bestaudio/best" in the ytdl_hook.lua script.
 
@@ -169,16 +169,18 @@ Playback Control
 
     See also: ``--start``.
 
-``--playlist-pos=<no|index>``
+``--playlist-start=<auto|index>``
     Set which file on the internal playlist to start playback with. The index
-    is an integer, with 0 meaning the first file. The value ``no`` means that
+    is an integer, with 0 meaning the first file. The value ``auto`` means that
     the selection of the entry to play is left to the playback resume mechanism
     (default). If an entry with the given index doesn't exist, the behavior is
     unspecified and might change in future mpv versions. The same applies if
     the playlist contains further playlists (don't expect any reasonable
     behavior). Passing a playlist file to mpv should work with this option,
-    though. E.g. ``mpv playlist.m3u --playlist-pos=123`` will work as expected,
+    though. E.g. ``mpv playlist.m3u --playlist-start=123`` will work as expected,
     as long as ``playlist.m3u`` does not link to further playlists.
+
+    The value ``no`` is a deprecated alias for ``auto``.
 
 ``--playlist=<filename>``
     Play files according to a playlist file (Supports some common formats. If
@@ -337,8 +339,12 @@ Playback Control
 Program Behavior
 ----------------
 
-``--help``
+``--help``, ``--h``
     Show short summary of options.
+
+    You can also pass a shell pattern to this option, which will list all
+    matching top-level options, e.g. ``--h=*scale*`` for all options that
+    contain the word "scale".
 
 ``-v``
     Increment verbosity level, one level for each ``-v`` found on the command
@@ -392,6 +398,13 @@ Program Behavior
 
     This behavior is disabled by default, but is always available when quitting
     the player with Shift+Q.
+
+``--watch-later-directory=<path>``
+
+    The directory in which to store the "watch later" temporary files.
+
+    The default is a subdirectory named "watch_later" underneath the
+    config directory (usually ``~/.config/mpv/``).
 
 ``--dump-stats=<filename>``
     Write certain statistics to the given file. The file is truncated on
@@ -523,11 +536,9 @@ Program Behavior
 Video
 -----
 
-``--vo=<driver1[:suboption1[=value]:...],driver2,...[,]>``
-    Specify a priority list of video output drivers to be used. For
-    interactive use, one would normally specify a single one to use, but in
-    configuration files, specifying a list of fallbacks may make sense. See
-    `VIDEO OUTPUT DRIVERS`_ for details and descriptions of available drivers.
+``--vo=<driver>``
+    Specify the video output backend to be used. See `VIDEO OUTPUT DRIVERS`_ for
+    details and descriptions of available drivers.
 
 ``--vd=<[+|-]family1:(*|decoder1),[+|-]family2:(*|decoder2),...[-]>``
     Specify a priority list of video decoders to be used, according to their
@@ -601,21 +612,24 @@ Video
     ``<api>`` can be one of the following:
 
     :no:        always use software decoding (default)
-    :auto:      see below
-    :auto-copy: see below
+    :auto:      enable best hw decoder (see below)
+    :yes:       exactly the same as ``auto``
+    :auto-copy: enable best hw decoder with copy-back (see below)
     :vdpau:     requires ``--vo=vdpau`` or ``--vo=opengl`` (Linux only)
     :vaapi:     requires ``--vo=opengl`` or ``--vo=vaapi`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with Intel GPUs only)
     :videotoolbox: requires ``--vo=opengl`` (OS X 10.8 and up only)
     :videotoolbox-copy: copies video back into system RAM (OS X 10.8 and up only)
-    :dxva2: requires ``--vo=opengl:backend=angle`` or
-
-        ``--vo=opengl:backend=dxinterop`` (Windows only)
+    :dxva2:     requires ``--vo=opengl`` with ``--opengl-backend=angle`` or
+                ``--opengl-backend=dxinterop`` (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
-    :d3d11va: requires ``--vo=opengl:backend=angle`` (Windows only)
+    :d3d11va:   requires ``--vo=opengl`` with ``--opengl-backend=angle``
+                (Windows only)
     :d3d11va-copy: copies video back to system RAM (Windows only)
     :mediacodec: copies video back to system RAM (Android only)
-    :rpi:       requires ``--vo=rpi`` (Raspberry Pi only - default if available)
+    :rpi:       requires ``--vo=opengl`` (Raspberry Pi only - default if available)
+    :cuda:      requires ``--vo=opengl`` (Any platform CUDA is available)
+    :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
 
     ``auto`` tries to automatically enable hardware decoding using the first
     available method. This still depends what VO you are using. For example,
@@ -634,7 +648,7 @@ Video
     The ``vaapi`` mode, if used with ``--vo=opengl``, requires Mesa 11 and most
     likely works with Intel GPUs only. It also requires the opengl EGL backend
     (automatically used if available). You can also try the old GLX backend by
-    forcing it with ``--vo=opengl:backend=x11``, but the vaapi/GLX interop is
+    forcing it with ``--opengl-backend=x11``, but the vaapi/GLX interop is
     said to be slower than ``vaapi-copy``.
 
     Most video filters will not work with hardware decoding as they are
@@ -687,9 +701,23 @@ Video
         affect this additionally. This can give incorrect results even with
         completely ordinary video sources.
 
+        ``cuda`` is usually safe. Interlaced content can be deinterlaced by
+        the decoder, which is useful as there is no other deinterlacing
+        mechanism in the opengl output path. To use this deinterlacing you
+        must pass the option: ``vd-lavc-o=deint=[weave|bob|adaptive]``. Pass
+        ``weave`` to not attempt any deinterlacing.
+        10bit HEVC is currently not supported but maybe we can add support
+        after CUDA 8 is released (and it will be rounded down to 8 bits).
+
+        ``cuda-copy`` has the same behaviour as ``cuda`` - including the ability
+        to deinterlace inside the decoder. However, traditional deinterlacing
+        filters can be used in this case.
+
         All other methods, in particular the copy-back methods (like
         ``dxva2-copy`` etc.) are either fully safe, or not worse than software
-        decoding. In particular, ``auto-copy`` will only select safe modes
+        decoding.
+
+        In particular, ``auto-copy`` will only select safe modes
         (although potentially slower than other methods).
 
 ``--hwdec-preload=<api>``
@@ -859,8 +887,7 @@ Video
     disable deinterlacing just because the ``--deinterlace`` was not set.
 
 ``--field-dominance=<auto|top|bottom>``
-    Set first field for interlaced content. Useful for deinterlacers that
-    double the framerate: ``--vf=yadif=field`` and ``--vo=vdpau:deint``.
+    Set first field for interlaced content.
 
     :auto:    (default) If the decoder does not export the appropriate
               information, it falls back on ``top`` (top field first).
@@ -1020,6 +1047,19 @@ Audio
     manually. For example ``name/foobar`` forces the AO ``name`` to use the
     device ``foobar``.
 
+    .. admonition:: Example for ALSA
+
+        MPlayer and mplayer2 required you to replace any ',' with '.' and
+        any ':' with '=' in the ALSA device name. For example, to use the
+        device named ``dmix:default``, you had to do:
+
+            ``-ao alsa:device=dmix=default``
+
+        In mpv you could instead use:
+
+            ``--audio-device=alsa/dmix:default``
+
+
 ``--audio-exclusive=<yes|no>``
     Enable exclusive output mode. In this mode, the system is usually locked
     out, and only mpv will be able to output audio.
@@ -1037,11 +1077,9 @@ Audio
     ``current-ao`` and ``audio-device-list`` properties to make high-level
     decisions about how to continue.
 
-``--ao=<driver1[:suboption1[=value]:...],driver2,...[,]>``
-    Specify a priority list of audio output drivers to be used. For
-    interactive use one would normally specify a single one to use, but in
-    configuration files specifying a list of fallbacks may make sense. See
-    `AUDIO OUTPUT DRIVERS`_ for details and descriptions of available drivers.
+``--ao=<driver>``
+    Specify the audio output drivers to be used. See `AUDIO OUTPUT DRIVERS`_ for
+    details and descriptions of available drivers.
 
 ``--af=<filter1[=parameter1:parameter2:...],filter2,...>``
     Specify a list of audio filters to apply to the audio stream. See
@@ -1120,9 +1158,10 @@ Audio
     Audio delay in seconds (positive or negative float value). Positive values
     delay the audio, and negative values delay the video.
 
-``--mute=<auto|yes|no>``
-    Set startup audio mute status. ``auto`` (default) will not change the mute
-    status.
+``--mute=<yes|no|auto>``
+    Set startup audio mute status (default: no).
+
+    ``auto`` is a deprecated possible value that is equivalent to ``no``.
 
     See also: ``--volume``.
 
@@ -1938,7 +1977,7 @@ Window
 ``--taskbar-progress``, ``--no-taskbar-progress``
     (Windows only)
     Enable/disable playback progress rendering in taskbar (Windows 7 and above).
-    
+
     Enabled by default.
 
 ``--ontop``
@@ -2276,10 +2315,6 @@ Disc Devices
     .. admonition:: Example
 
         ``mpv bd:// --bluray-device=/path/to/bd/``
-
-``--bluray-angle=<ID>``
-    Some Blu-ray discs contain scenes that can be viewed from multiple angles.
-    This option tells mpv which angle to use (default: 1).
 
 ``--cdda-...``
     These options can be used to tune the CD Audio reading feature of mpv.
@@ -3624,23 +3659,7 @@ ALSA audio output options
 
 
 ``--alsa-device=<device>``
-    Sets the device name. For ac3 output via S/PDIF, use an "iec958" or
-    "spdif" device, unless you really know how to set it correctly.
-
-    .. note::
-
-        MPlayer and mplayer2 required you to replace any ',' with '.' and
-        any ':' with '=' in the ALSA device name. mpv does not do this anymore.
-        Instead, quote the device name:
-
-            ``--ao=alsa:device=[plug:surround50]``
-
-        Note that the ``[`` and ``]`` simply quote the device name. With some
-        shells (like zsh), you have to quote the option string to prevent the
-        shell from interpreting the brackets instead of passing them to mpv.
-
-        Actually, you should use the ``--audio-device`` option, instead of
-        setting the device directly.
+    Deprecated, use ``--audio-device`` (requires ``alsa/`` prefix).
 
 ``--alsa-resample=yes``
     Enable ALSA resampling plugin. (This is disabled by default, because
@@ -3922,8 +3941,11 @@ The following video options are currently all specific to ``--vo=opengl`` and
 ``--interpolation-threshold=<0..1,-1>``
     Threshold below which frame ratio interpolation gets disabled (default:
     ``0.0001``). This is calculated as ``abs(disphz/vfps - 1) < threshold``,
-    where ``vfps`` is the speed-adjusted display FPS, and ``disphz`` the
-    display refresh rate.
+    where ``vfps`` is the speed-adjusted video FPS, and ``disphz`` the
+    display refresh rate. (The speed-adjusted video FPS is roughly equal to
+    the normal video FPS, but with slowdown and speedup applied. This matters
+    if you use ``--video-sync=display-resample`` to make video run synchronously
+    to the display FPS, or if you change the ``speed`` property.)
 
     The default is intended to almost always enable interpolation if the
     playback rate is even slightly different from the display refresh rate. But
@@ -4232,6 +4254,8 @@ The following video options are currently all specific to ``--vo=opengl`` and
         DRM/EGL
     x11egl
         X11/EGL
+    mali-fbdev
+        Direct fbdev/EGL support on some ARM/MALI devices.
 
 ``--opengl-es=<mode>``
     Select whether to use GLES:
@@ -4266,7 +4290,7 @@ The following video options are currently all specific to ``--vo=opengl`` and
         Pitch black room
 
     NOTE: Typical movie content (Blu-ray etc.) already contains a gamma drop of
-    about 0.8, so specifying it here as well will result in even even darker
+    about 0.8, so specifying it here as well will result in even darker
     image than intended!
 
 ``--gamma-auto``
@@ -4336,11 +4360,13 @@ The following video options are currently all specific to ``--vo=opengl`` and
     v-log
         Panasonic V-Log (VARICAM) curve
 
-    NOTE: When using HDR output formats, mpv will encode to the specified
-          curve but it will not set any HDMI flags or other signalling that
-          might be required for the target device to correctly display the
-          HDR signal. The user should independently guarantee this before
-          using these signal formats for display.
+    .. note::
+
+        When using HDR output formats, mpv will encode to the specified
+        curve but it will not set any HDMI flags or other signalling that might
+        be required for the target device to correctly display the HDR signal.
+        The user should independently guarantee this before using these signal
+        formats for display.
 
 ``--target-brightness=<1..100000>``
     Specifies the display's approximate brightness in cd/m^2. When playing HDR

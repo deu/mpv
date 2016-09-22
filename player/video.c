@@ -264,14 +264,16 @@ int get_deinterlacing(struct MPContext *mpctx)
     return enabled;
 }
 
-void set_deinterlacing(struct MPContext *mpctx, bool enable)
+void set_deinterlacing(struct MPContext *mpctx, int opt_val)
 {
-    if (enable == (get_deinterlacing(mpctx) > 0))
+    if ((opt_val < 0 && mpctx->opts->deinterlace == opt_val) ||
+        (opt_val == (get_deinterlacing(mpctx) > 0)))
         return;
 
-    mpctx->opts->deinterlace = enable;
+    mpctx->opts->deinterlace = opt_val;
     recreate_auto_filters(mpctx);
-    mpctx->opts->deinterlace = get_deinterlacing(mpctx) > 0;
+    if (opt_val >= 0)
+        mpctx->opts->deinterlace = get_deinterlacing(mpctx) > 0;
 }
 
 static void recreate_video_filters(struct MPContext *mpctx)
@@ -283,7 +285,7 @@ static void recreate_video_filters(struct MPContext *mpctx)
     vf_destroy(vo_c->vf);
     vo_c->vf = vf_new(mpctx->global);
     vo_c->vf->hwdec_devs = vo_c->hwdec_devs;
-    vo_c->vf->wakeup_callback = wakeup_playloop;
+    vo_c->vf->wakeup_callback = mp_wakeup_core_cb;
     vo_c->vf->wakeup_callback_ctx = mpctx;
     vo_c->vf->container_fps = vo_c->container_fps;
     vo_control(vo_c->vo, VOCTRL_GET_DISPLAY_FPS, &vo_c->vf->display_fps);
@@ -410,6 +412,10 @@ int init_video_decoder(struct MPContext *mpctx, struct track *track)
     d_video->header = track->stream;
     d_video->codec = track->stream->codec;
     d_video->fps = d_video->header->codec->fps;
+
+    // Note: at least mpv_opengl_cb_uninit_gl() relies on being able to get
+    //       rid of all references to the VO by destroying the VO chain. Thus,
+    //       decoders not linked to vo_chain must not use the hwdec context.
     if (mpctx->vo_chain)
         d_video->hwdec_devs = mpctx->vo_chain->hwdec_devs;
 
@@ -462,6 +468,8 @@ int reinit_video_chain_src(struct MPContext *mpctx, struct lavfi_pad *src)
             .osd = mpctx->osd,
             .encode_lavc_ctx = mpctx->encode_lavc_ctx,
             .opengl_cb_context = mpctx->gl_cb_ctx,
+            .wakeup_cb = mp_wakeup_core_cb,
+            .wakeup_ctx = mpctx,
         };
         mpctx->video_out = init_best_video_out(mpctx->global, &ex);
         if (!mpctx->video_out) {
@@ -700,7 +708,7 @@ static int video_feed_async_filter(struct MPContext *mpctx)
 
     if (vf_needs_input(vf) < 1)
         return 0;
-    mpctx->sleeptime = 0; // retry until done
+    mp_wakeup_core(mpctx); // retry until done
     return video_decode_and_filter(mpctx);
 }
 
@@ -982,7 +990,7 @@ double calc_average_frame_duration(struct MPContext *mpctx)
     double total = 0;
     int num = 0;
     for (int n = 0; n < mpctx->num_past_frames; n++) {
-        double dur = mpctx->past_frames[0].approx_duration;
+        double dur = mpctx->past_frames[n].approx_duration;
         if (dur <= 0)
             continue;
         total += dur;
@@ -1370,7 +1378,7 @@ void write_video(struct MPContext *mpctx)
 
         if (mpctx->video_status == STATUS_DRAINING) {
             mpctx->time_frame -= get_relative_time(mpctx);
-            mpctx->sleeptime = MPMIN(mpctx->sleeptime, mpctx->time_frame);
+            mp_set_timeout(mpctx, mpctx->time_frame);
             if (mpctx->time_frame <= 0) {
                 MP_VERBOSE(mpctx, "video EOF reached\n");
                 mpctx->video_status = STATUS_EOF;
@@ -1385,7 +1393,7 @@ void write_video(struct MPContext *mpctx)
         mpctx->video_status = STATUS_PLAYING;
 
     if (r != VD_NEW_FRAME) {
-        mpctx->sleeptime = 0; // Decode more in next iteration.
+        mp_wakeup_core(mpctx); // Decode more in next iteration.
         return;
     }
 
@@ -1513,7 +1521,7 @@ void write_video(struct MPContext *mpctx)
             mpctx->max_frames--;
     }
 
-    mpctx->sleeptime = 0;
+    mp_wakeup_core(mpctx);
     return;
 
 error:
@@ -1521,5 +1529,5 @@ error:
     uninit_video_chain(mpctx);
     error_on_track(mpctx, track);
     handle_force_window(mpctx, true);
-    mpctx->sleeptime = 0;
+    mp_wakeup_core(mpctx);
 }

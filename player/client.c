@@ -66,7 +66,8 @@ struct mp_client_api {
 
     struct mpv_handle **clients;
     int num_clients;
-    uint64_t event_masks;   // combined events of all clients, or 0 if unknown
+    uint64_t event_masks; // combined events of all clients, or 0 if unknown
+    bool shutting_down; // do not allow new clients
 
     struct mp_custom_protocol *custom_protocols;
     int num_custom_protocols;
@@ -206,8 +207,17 @@ bool mp_client_exists(struct MPContext *mpctx, const char *client_name)
     return r;
 }
 
+void mp_client_enter_shutdown(struct MPContext *mpctx)
+{
+    pthread_mutex_lock(&mpctx->clients->lock);
+    mpctx->clients->shutting_down = true;
+    pthread_mutex_unlock(&mpctx->clients->lock);
+}
+
 struct mpv_handle *mp_new_client(struct mp_client_api *clients, const char *name)
 {
+    pthread_mutex_lock(&clients->lock);
+
     char nname[MAX_CLIENT_NAME];
     for (int n = 1; n < 1000; n++) {
         if (!name)
@@ -222,10 +232,10 @@ struct mpv_handle *mp_new_client(struct mp_client_api *clients, const char *name
         nname[0] = '\0';
     }
 
-    if (!nname[0])
+    if (!nname[0] || clients->shutting_down) {
+        pthread_mutex_unlock(&clients->lock);
         return NULL;
-
-    pthread_mutex_lock(&clients->lock);
+    }
 
     int num_events = 1000;
 
@@ -321,6 +331,8 @@ void mpv_suspend(mpv_handle *ctx)
 {
     bool do_suspend = false;
 
+    MP_WARN(ctx, "warning: mpv_suspend() is deprecated.\n");
+
     pthread_mutex_lock(&ctx->lock);
     if (ctx->suspend_count == INT_MAX) {
         MP_ERR(ctx, "suspend counter overflow");
@@ -354,6 +366,7 @@ void mpv_resume(mpv_handle *ctx)
         mp_dispatch_lock(ctx->mpctx->dispatch);
         ctx->mpctx->suspend_count--;
         mp_dispatch_unlock(ctx->mpctx->dispatch);
+        mp_dispatch_interrupt(ctx->mpctx->dispatch);
     }
 }
 
@@ -413,6 +426,8 @@ void mpv_detach_destroy(mpv_handle *ctx)
                 ctx->num_events--;
             }
             mp_msg_log_buffer_destroy(ctx->messages);
+            osd_set_external(ctx->mpctx->osd, ctx, 0, 0, NULL);
+            mp_input_remove_sections_by_owner(ctx->mpctx->input, ctx->name);
             pthread_cond_destroy(&ctx->wakeup);
             pthread_mutex_destroy(&ctx->wakeup_lock);
             pthread_mutex_destroy(&ctx->lock);
@@ -424,8 +439,7 @@ void mpv_detach_destroy(mpv_handle *ctx)
             ctx = NULL;
             // shutdown_clients() sleeps to avoid wasting CPU.
             // mp_hook_test_completion() also relies on this a bit.
-            if (clients->mpctx->input)
-                mp_input_wakeup(clients->mpctx->input);
+            mp_wakeup_core(clients->mpctx);
             break;
         }
     }
@@ -759,8 +773,8 @@ mpv_event *mpv_wait_event(mpv_handle *ctx, double timeout)
 
     pthread_mutex_lock(&ctx->lock);
 
-    if (!ctx->fuzzy_initialized && ctx->clients->mpctx->input)
-        mp_input_wakeup(ctx->clients->mpctx->input);
+    if (!ctx->fuzzy_initialized)
+        mp_wakeup_core(ctx->clients->mpctx);
     ctx->fuzzy_initialized = true;
 
     if (timeout < 0)
@@ -998,6 +1012,8 @@ static void cmd_fn(void *data)
 
 static int run_client_command(mpv_handle *ctx, struct mp_cmd *cmd, mpv_node *res)
 {
+    if (!ctx->mpctx->initialized)
+        return MPV_ERROR_UNINITIALIZED;
     if (!cmd)
         return MPV_ERROR_INVALID_PARAMETER;
 
@@ -1037,6 +1053,8 @@ int mpv_command_string(mpv_handle *ctx, const char *args)
 
 static int run_cmd_async(mpv_handle *ctx, uint64_t ud, struct mp_cmd *cmd)
 {
+    if (!ctx->mpctx->initialized)
+        return MPV_ERROR_UNINITIALIZED;
     if (!cmd)
         return MPV_ERROR_INVALID_PARAMETER;
 
@@ -1114,6 +1132,17 @@ static void setproperty_fn(void *arg)
 int mpv_set_property(mpv_handle *ctx, const char *name, mpv_format format,
                      void *data)
 {
+    if (!ctx->mpctx->initialized) {
+        int r = mpv_set_option(ctx, name, format, data);
+        if (r == MPV_ERROR_OPTION_NOT_FOUND &&
+            mp_get_property_id(ctx->mpctx, name) >= 0)
+            return MPV_ERROR_PROPERTY_UNAVAILABLE;
+        switch (r) {
+        case MPV_ERROR_OPTION_FORMAT:    return MPV_ERROR_PROPERTY_FORMAT;
+        case MPV_ERROR_OPTION_NOT_FOUND: return MPV_ERROR_PROPERTY_NOT_FOUND;
+        default:                         return MPV_ERROR_PROPERTY_ERROR;
+        }
+    }
     if (!get_mp_type(format))
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1143,6 +1172,8 @@ int mpv_set_property_async(mpv_handle *ctx, uint64_t ud, const char *name,
                            mpv_format format, void *data)
 {
     const struct m_option *type = get_mp_type(format);
+    if (!ctx->mpctx->initialized)
+        return MPV_ERROR_UNINITIALIZED;
     if (!type)
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1255,6 +1286,8 @@ static void getproperty_fn(void *arg)
 int mpv_get_property(mpv_handle *ctx, const char *name, mpv_format format,
                      void *data)
 {
+    if (!ctx->mpctx->initialized)
+        return MPV_ERROR_UNINITIALIZED;
     if (!data)
         return MPV_ERROR_INVALID_PARAMETER;
     if (!get_mp_type_get(format))
@@ -1287,6 +1320,8 @@ char *mpv_get_property_osd_string(mpv_handle *ctx, const char *name)
 int mpv_get_property_async(mpv_handle *ctx, uint64_t ud, const char *name,
                            mpv_format format)
 {
+    if (!ctx->mpctx->initialized)
+        return MPV_ERROR_UNINITIALIZED;
     if (!get_mp_type_get(format))
         return MPV_ERROR_PROPERTY_FORMAT;
 
@@ -1373,11 +1408,9 @@ int mpv_unobserve_property(mpv_handle *ctx, uint64_t userdata)
 static void mark_property_changed(struct mpv_handle *client, int index)
 {
     struct observe_property *prop = client->properties[index];
-    if (!prop->changed && !prop->need_new_value) {
-        prop->changed = true;
-        prop->need_new_value = prop->format != 0;
-        client->lowest_changed = MPMIN(client->lowest_changed, index);
-    }
+    prop->changed = true;
+    prop->need_new_value = prop->format != 0;
+    client->lowest_changed = MPMIN(client->lowest_changed, index);
 }
 
 // Broadcast that a property has changed.
@@ -1455,6 +1488,8 @@ static void update_prop(void *p)
 // outstanding property.
 static bool gen_property_change_event(struct mpv_handle *ctx)
 {
+    if (!ctx->mpctx->initialized)
+        return false;
     int start = ctx->lowest_changed;
     ctx->lowest_changed = ctx->num_properties;
     for (int n = start; n < ctx->num_properties; n++) {
@@ -1597,7 +1632,7 @@ static const char *const err_table[] = {
     [-MPV_ERROR_COMMAND] = "error running command",
     [-MPV_ERROR_LOADING_FAILED] = "loading failed",
     [-MPV_ERROR_AO_INIT_FAILED] = "audio output initialization failed",
-    [-MPV_ERROR_VO_INIT_FAILED] = "audio output initialization failed",
+    [-MPV_ERROR_VO_INIT_FAILED] = "video output initialization failed",
     [-MPV_ERROR_NOTHING_TO_PLAY] = "no audio or video data played",
     [-MPV_ERROR_UNKNOWN_FORMAT] = "unrecognized file format",
     [-MPV_ERROR_UNSUPPORTED] = "not supported",
@@ -1666,8 +1701,12 @@ void kill_video(struct mp_client_api *client_api)
 {
     struct MPContext *mpctx = client_api->mpctx;
     mp_dispatch_lock(mpctx->dispatch);
-    mp_switch_track(mpctx, STREAM_VIDEO, NULL, 0);
+    struct track *track = mpctx->vo_chain ? mpctx->vo_chain->track : NULL;
     uninit_video_out(mpctx);
+    if (track) {
+        mpctx->error_playing = MPV_ERROR_VO_INIT_FAILED;
+        error_on_track(mpctx, track);
+    }
     mp_dispatch_unlock(mpctx->dispatch);
 }
 
@@ -1720,6 +1759,8 @@ int mpv_opengl_cb_render(mpv_opengl_cb_context *ctx, int fbo, int vp[4])
 
 void *mpv_get_sub_api(mpv_handle *ctx, mpv_sub_api sub_api)
 {
+    if (!ctx->mpctx->initialized)
+        return NULL;
     void *res = NULL;
     lock_core(ctx);
     switch (sub_api) {

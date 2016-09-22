@@ -34,7 +34,7 @@ typedef struct mp_vo_opts {
     struct m_geometry autofit;
     struct m_geometry autofit_larger;
     struct m_geometry autofit_smaller;
-    float window_scale;
+    double window_scale;
 
     int keepaspect;
     int keepaspect_window;
@@ -101,7 +101,6 @@ typedef struct MPOpts {
     double audio_buffer;
 
     mp_vo_opts *vo;
-    int allow_win_drag;
 
     char *wintitle;
     char *media_title;
@@ -149,9 +148,8 @@ typedef struct MPOpts {
     int load_config;
     char *force_configdir;
     int use_filedir_conf;
-    int network_rtsp_transport;
     int hls_bitrate;
-    struct mp_cache_opts stream_cache;
+    struct mp_cache_opts *stream_cache;
     int chapterrange[2];
     int edition_id;
     int correct_pts;
@@ -192,6 +190,7 @@ typedef struct MPOpts {
     int position_save_on_quit;
     int write_filename_in_watch_later_config;
     int ignore_path_in_watch_later_config;
+    char *watch_later_directory;
     int pause;
     int keep_open;
     double image_display_duration;
@@ -212,19 +211,13 @@ typedef struct MPOpts {
     int stretch_image_subs;
 
     int sub_fix_timing;
-    char *sub_cp;
 
     char **audio_files;
     char *demuxer_name;
-    int demuxer_max_packs;
-    int demuxer_max_bytes;
     int demuxer_thread;
-    double demuxer_min_secs;
     char *audio_demuxer_name;
     char *sub_demuxer_name;
-    int force_seekable;
 
-    double demuxer_min_secs_cache;
     int cache_pausing;
 
     struct image_writer_opts *screenshot_image_opts;
@@ -291,17 +284,6 @@ typedef struct MPOpts {
 
     int w32_priority;
 
-    int network_cookies_enabled;
-    char *network_cookies_file;
-    char *network_useragent;
-    char *network_referrer;
-    char **network_http_header_fields;
-    int network_tls_verify;
-    char *network_tls_ca_file;
-    char *network_tls_cert_file;
-    char *network_tls_key_file;
-    double network_timeout;
-
     struct tv_params *tv_params;
     struct pvr_params *stream_pvr_opts;
     struct cdda_params *stream_cdda_opts;
@@ -309,11 +291,6 @@ typedef struct MPOpts {
     struct stream_lavf_params *stream_lavf_opts;
 
     char *cdrom_device;
-    int dvd_title;
-    int dvd_angle;
-    int dvd_speed;
-    char *dvd_device;
-    int bluray_angle;
     char *bluray_device;
 
     double mf_fps;
@@ -323,6 +300,8 @@ typedef struct MPOpts {
     struct demux_rawvideo_opts *demux_rawvideo;
     struct demux_lavf_opts *demux_lavf;
     struct demux_mkv_opts *demux_mkv;
+
+    struct demux_opts *demux_opts;
 
     struct vd_lavc_params *vd_lavc_params;
     struct ad_lavc_params *ad_lavc_params;
@@ -336,10 +315,19 @@ typedef struct MPOpts {
     char *input_file;
 
     struct gl_video_opts *gl_video_opts;
+    struct dvd_opts *dvd_opts;
 } MPOpts;
+
+struct dvd_opts {
+    int angle;
+    int speed;
+    char *device;
+};
 
 extern const m_option_t mp_opts[];
 extern const struct MPOpts mp_default_opts;
 extern const struct m_sub_options vo_sub_opts;
+extern const struct m_sub_options stream_cache_conf;
+extern const struct m_sub_options dvd_conf;
 
 #endif

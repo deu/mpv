@@ -21,6 +21,8 @@
 #include <stdbool.h>
 #include <pthread.h>
 
+#include "osdep/atomic.h"
+
 #include "libmpv/client.h"
 
 #include "common/common.h"
@@ -233,6 +235,7 @@ typedef struct MPContext {
     struct mp_client_api *clients;
     struct mp_dispatch_queue *dispatch;
     struct mp_cancel *playback_abort;
+    bool in_dispatch;
 
     struct mp_log *statusline;
     struct osd_state *osd;
@@ -483,7 +486,7 @@ int mp_initialize(struct MPContext *mpctx, char **argv);
 struct MPContext *mp_create(void);
 void mp_destroy(struct MPContext *mpctx);
 void mp_print_version(struct mp_log *log, int always);
-void wakeup_playloop(void *ctx);
+void mp_update_logging(struct MPContext *mpctx);
 
 // misc.c
 double rel_time_to_abs(struct MPContext *mpctx, struct m_rel_time t);
@@ -497,7 +500,6 @@ void error_on_track(struct MPContext *mpctx, struct track *track);
 int stream_dump(struct MPContext *mpctx, const char *source_filename);
 int mpctx_run_reentrant(struct MPContext *mpctx, void (*thread_fn)(void *arg),
                         void *thread_arg);
-struct mpv_global *create_sub_global(struct MPContext *mpctx);
 double get_track_seek_offset(struct MPContext *mpctx, struct track *track);
 
 // osd.c
@@ -511,7 +513,10 @@ void get_current_osd_sym(struct MPContext *mpctx, char *buf, size_t buf_size);
 void set_osd_bar_chapters(struct MPContext *mpctx, int type);
 
 // playloop.c
-void mp_wait_events(struct MPContext *mpctx, double sleeptime);
+void mp_wait_events(struct MPContext *mpctx);
+void mp_set_timeout(struct MPContext *mpctx, double sleeptime);
+void mp_wakeup_core(struct MPContext *mpctx);
+void mp_wakeup_core_cb(void *ctx);
 void mp_process_input(struct MPContext *mpctx);
 double get_relative_time(struct MPContext *mpctx);
 void reset_playback_state(struct MPContext *mpctx);
@@ -544,6 +549,8 @@ struct mp_scripting {
     int (*load)(struct mpv_handle *client, const char *filename);
 };
 void mp_load_scripts(struct MPContext *mpctx);
+void mp_load_builtin_scripts(struct MPContext *mpctx);
+int mp_load_script(struct MPContext *mpctx, const char *fname);
 
 // sub.c
 void reset_subtitle_state(struct MPContext *mpctx);
@@ -570,7 +577,7 @@ void uninit_video_chain(struct MPContext *mpctx);
 double calc_average_frame_duration(struct MPContext *mpctx);
 int init_video_decoder(struct MPContext *mpctx, struct track *track);
 int get_deinterlacing(struct MPContext *mpctx);
-void set_deinterlacing(struct MPContext *mpctx, bool enable);
+void set_deinterlacing(struct MPContext *mpctx, int opt_val);
 
 // Values of MPOpts.softvol
 enum {

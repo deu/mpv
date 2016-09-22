@@ -77,6 +77,17 @@ typedef struct m_config {
     int (*includefunc)(void *ctx, char *filename, int flags);
     void *includefunc_ctx;
 
+    // Can intercept option write accesses.
+    int (*option_set_callback)(void *ctx, struct m_config_option *co,
+                               void *data, int flags);
+    void *option_set_callback_cb;
+
+    // Notification after an option was successfully written to.
+    // Uses flags as set in UPDATE_OPTS_MASK.
+    void (*option_change_callback)(void *ctx, struct m_config_option *co,
+                                   int flags);
+    void *option_change_callback_ctx;
+
     // For the command line parser
     int recursion_depth;
 
@@ -112,9 +123,6 @@ struct m_config *m_config_new(void *talloc_ctx, struct mp_log *log,
 // Creates "backup" shadow memory for use with m_config_cache. Sets it on
 // mpv_global. Expected to be called at early init on the main m_config.
 void m_config_create_shadow(struct m_config *config);
-
-// (Warning: new object references config->log and others.)
-struct m_config *m_config_dup(void *talloc_ctx, struct m_config *config);
 
 struct m_config *m_config_from_obj_desc(void *talloc_ctx, struct mp_log *log,
                                         struct m_obj_desc *desc);
@@ -173,10 +181,12 @@ static inline int m_config_set_option0(struct m_config *config,
     return m_config_set_option(config, bstr0(name), bstr0(param));
 }
 
-// Similar to m_config_set_option_ext(), but set as data in its native format.
-// The type data points to is as in co->opt
 int m_config_set_option_raw(struct m_config *config, struct m_config_option *co,
                             void *data, int flags);
+
+int m_config_set_option_raw_direct(struct m_config *config,
+                                   struct m_config_option *co,
+                                   void *data, int flags);
 
 // Similar to m_config_set_option_ext(), but set as data using mpv_node.
 struct mpv_node;
@@ -187,6 +197,8 @@ int m_config_set_option_node(struct m_config *config, bstr name,
 int m_config_parse_suboptions(struct m_config *config, char *name,
                               char *subopts);
 
+struct m_config_option *m_config_get_co_raw(const struct m_config *config,
+                                            struct bstr name);
 struct m_config_option *m_config_get_co(const struct m_config *config,
                                         struct bstr name);
 
@@ -215,10 +227,7 @@ bool m_config_is_in_group(struct m_config *config,
 // Return all (visible) option names as NULL terminated string list.
 char **m_config_list_options(void *ta_parent, const struct m_config *config);
 
-/*  Print a list of all registered options.
- *  \param config The config object.
- */
-void m_config_print_option_list(const struct m_config *config);
+void m_config_print_option_list(const struct m_config *config, const char *name);
 
 
 /*  Find the profile with the given name.
@@ -271,15 +280,6 @@ int m_config_set_profile_option(struct m_config *config, struct m_profile *p,
 int m_config_set_profile(struct m_config *config, char *name, int flags);
 
 struct mpv_node m_config_get_profiles(struct m_config *config);
-
-void *m_config_alloc_struct(void *talloc_ctx,
-                            const struct m_sub_options *subopts);
-
-// Create a copy of the struct ptr, described by opts.
-// "opts" must live until the struct is free'd.
-// Freeing the struct frees all members.
-void *m_sub_options_copy(void *talloc_ctx, const struct m_sub_options *opts,
-                         const void *ptr);
 
 // This can be used to create and synchronize per-thread option structs,
 // which then can be read without synchronization. No concurrent access to

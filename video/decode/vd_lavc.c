@@ -133,6 +133,7 @@ extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va;
 extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy;
+extern const struct vd_lavc_hwdec mp_vd_lavc_cuda;
 
 #if HAVE_RPI
 static const struct vd_lavc_hwdec mp_vd_lavc_rpi = {
@@ -146,6 +147,14 @@ static const struct vd_lavc_hwdec mp_vd_lavc_rpi = {
 static const struct vd_lavc_hwdec mp_vd_lavc_mediacodec = {
     .type = HWDEC_MEDIACODEC,
     .lavc_suffix = "_mediacodec",
+    .copying = true,
+};
+#endif
+
+#if HAVE_CUDA_HWACCEL
+static const struct vd_lavc_hwdec mp_vd_lavc_cuda_copy = {
+    .type = HWDEC_CUDA_COPY,
+    .lavc_suffix = "_cuvid",
     .copying = true,
 };
 #endif
@@ -173,6 +182,10 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #endif
 #if HAVE_ANDROID
     &mp_vd_lavc_mediacodec,
+#endif
+#if HAVE_CUDA_HWACCEL
+    &mp_vd_lavc_cuda,
+    &mp_vd_lavc_cuda_copy,
 #endif
     NULL
 };
@@ -579,7 +592,6 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
                                 struct mp_image_params *out_params)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
-    struct MPOpts *opts = ctx->opts;
 
 #if HAVE_AVUTIL_MASTERING_METADATA
     // Get the reference peak (for HDR) if available. This is cached into ctx
@@ -619,13 +631,6 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
         .rotate = vd->codec->rotate,
         .stereo_in = vd->codec->stereo_mode,
     };
-
-    if (opts->video_rotate < 0) {
-        out_params->rotate = 0;
-    } else {
-        out_params->rotate = (out_params->rotate + opts->video_rotate) % 360;
-    }
-    out_params->stereo_out = opts->video_stereo_mode;
 }
 
 static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
