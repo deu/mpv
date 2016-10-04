@@ -74,6 +74,8 @@ typedef struct MPOpts {
     int msg_time;
     char *log_file;
 
+    int operation_mode;
+
     char **reset_options;
     char **script_files;
     char **script_opts;
@@ -258,7 +260,7 @@ typedef struct MPOpts {
     int sub_scale_with_window;
     int ass_scale_with_window;
     struct osd_style_opts *osd_style;
-    struct osd_style_opts *sub_text_style;
+    struct osd_style_opts *sub_style;
     float sub_scale;
     float sub_gauss;
     int sub_gray;
