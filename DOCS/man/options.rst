@@ -637,6 +637,7 @@ Video
     :rpi-copy:  copies video back to system RAM (Raspberry Pi only)
     :cuda:      requires ``--vo=opengl`` (Any platform CUDA is available)
     :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
+    :crystalhd: copies video back to system RAM (Any platform supported by hardware)
 
     ``auto`` tries to automatically enable hardware decoding using the first
     available method. This still depends what VO you are using. For example,
@@ -722,6 +723,11 @@ Video
 
         ``rpi`` always uses the hardware overlay renderer, even with
         ``--vo=opengl``.
+
+        ``crystalhd`` is not safe. It always converts to 4:2:2 YUV, which
+        may be lossy, depending on how chroma sub-sampling is done during
+        conversion. It also discards the top left pixel of each frame for
+        some reason.
 
         All other methods, in particular the copy-back methods (like
         ``dxva2-copy`` etc.) are either fully safe, or not worse than software
@@ -4605,7 +4611,7 @@ The following video options are currently all specific to ``--vo=opengl`` and
 
 ``--opengl-early-flush=<yes|no>``
     Call ``glFlush()`` after rendering a frame and before attempting to display
-    it (default: no). Can fix stuttering in some causes, in other cases probably
+    it (default: no). Can fix stuttering in some cases, in other cases probably
     causes it. For testing - could be removed any time.
 
 Miscellaneous

@@ -48,6 +48,10 @@
 #include "player/command.h"
 #include "stream/stream.h"
 
+#if HAVE_DRM
+#include "video/out/drm_common.h"
+#endif
+
 extern const char mp_help_text[];
 
 static void print_version(struct mp_log *log)
@@ -102,6 +106,7 @@ const struct m_opt_choice_alternatives mp_hwdec_names[] = {
     {"mediacodec",  HWDEC_MEDIACODEC},
     {"cuda",        HWDEC_CUDA},
     {"cuda-copy",   HWDEC_CUDA_COPY},
+    {"crystalhd",   HWDEC_CRYSTALHD},
     {0}
 };
 
@@ -189,6 +194,11 @@ static const m_option_t mp_vo_opt_list[] = {
 #endif
 #if HAVE_WIN32
     OPT_STRING("vo-mmcss-profile", mmcss_profile, 0),
+#endif
+#if HAVE_DRM
+    OPT_STRING_VALIDATE("drm-connector", drm_connector_spec,
+                        0, drm_validate_connector_opt),
+    OPT_INT("drm-mode", drm_mode_id, 0),
 #endif
 
     {0}
@@ -500,9 +510,9 @@ const m_option_t mp_opts[] = {
     OPT_SETTINGSLIST("ao", audio_driver_list, 0, &ao_obj_list, ),
     OPT_SETTINGSLIST("ao-defaults", ao_defs, 0, &ao_obj_list,
                      .deprecation_message = "deprecated, use global options"),
-    OPT_STRING("audio-device", audio_device, 0),
+    OPT_STRING("audio-device", audio_device, UPDATE_AUDIO),
     OPT_FLAG("audio-exclusive", audio_exclusive, UPDATE_AUDIO),
-    OPT_STRING("audio-client-name", audio_client_name, 0),
+    OPT_STRING("audio-client-name", audio_client_name, UPDATE_AUDIO),
     OPT_FLAG("audio-fallback-to-null", ao_null_fallback, 0),
     OPT_FLAG("audio-stream-silence", audio_stream_silence, 0),
     OPT_FLOATRANGE("audio-wait-open", audio_wait_open, 0, 0, 60),

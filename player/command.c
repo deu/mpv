@@ -1881,13 +1881,6 @@ static int get_device_entry(int item, int action, void *arg, void *ctx)
     return m_property_read_sub(props, action, arg);
 }
 
-static void reload_audio_output(struct MPContext *mpctx)
-{
-    if (!mpctx->ao)
-        return;
-    ao_request_reload(mpctx->ao);
-}
-
 static void create_hotplug(struct MPContext *mpctx)
 {
     struct command_ctx *cmd = mpctx->command_ctx;
@@ -1915,10 +1908,7 @@ static int mp_property_audio_device(void *ctx, struct m_property *prop,
             }
         }
     }
-    int r = mp_property_generic_option(mpctx, prop, action, arg);
-    if (action == M_PROPERTY_SET)
-        reload_audio_output(mpctx);
-    return r;
+    return mp_property_generic_option(mpctx, prop, action, arg);
 }
 
 static int mp_property_audio_devices(void *ctx, struct m_property *prop,
@@ -5735,12 +5725,8 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags)
         }
     }
 
-    if ((flags & UPDATE_AUDIO) && mpctx->ao_chain) {
-        // Force full mid-stream reinit.
-        reinit_audio_filters(mpctx);
-        uninit_audio_out(mpctx);
-        mp_wakeup_core(mpctx);
-    }
+    if (flags & UPDATE_AUDIO)
+        reload_audio_output(mpctx);
 
     if (flags & UPDATE_PRIORITY)
         update_priority(mpctx);
