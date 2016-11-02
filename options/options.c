@@ -93,6 +93,7 @@ const struct m_opt_choice_alternatives mp_hwdec_names[] = {
     {"yes" ,        HWDEC_AUTO},
     {"auto-copy",   HWDEC_AUTO_COPY},
     {"vdpau",       HWDEC_VDPAU},
+    {"vdpau-copy",  HWDEC_VDPAU_COPY},
     {"videotoolbox",HWDEC_VIDEOTOOLBOX},
     {"videotoolbox-copy",HWDEC_VIDEOTOOLBOX_COPY},
     {"vaapi",       HWDEC_VAAPI},
@@ -301,7 +302,7 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("ytdl", lua_load_ytdl, UPDATE_BUILTIN_SCRIPTS),
     OPT_STRING("ytdl-format", lua_ytdl_format, 0),
     OPT_KEYVALUELIST("ytdl-raw-options", lua_ytdl_raw_options, 0),
-    OPT_FLAG("load-scripts", auto_load_scripts, M_OPT_FIXED),
+    OPT_FLAG("load-scripts", auto_load_scripts, 0),
 #endif
 
 // ------------------------- stream options --------------------

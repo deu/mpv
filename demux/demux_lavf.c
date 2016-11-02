@@ -699,6 +699,10 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
         AVDictionaryEntry *title = av_dict_get(st->metadata, "title", NULL, 0);
         if (title && title->value)
             sh->title = talloc_strdup(sh, title->value);
+        if (!sh->title && st->disposition & AV_DISPOSITION_VISUAL_IMPAIRED)
+            sh->title = talloc_asprintf(sh, "visual impaired");
+        if (!sh->title && st->disposition & AV_DISPOSITION_HEARING_IMPAIRED)
+            sh->title = talloc_asprintf(sh, "hearing impaired");
         AVDictionaryEntry *lang = av_dict_get(st->metadata, "language", NULL, 0);
         if (lang && lang->value)
             sh->lang = talloc_strdup(sh, lang->value);
@@ -938,6 +942,11 @@ static int demux_lavf_fill_buffer(demuxer_t *demux)
 #endif
     dp->pos = pkt->pos;
     dp->keyframe = pkt->flags & AV_PKT_FLAG_KEY;
+#if LIBAVFORMAT_VERSION_MICRO >= 100 && \
+    LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 50, 100)
+    if (pkt->flags & AV_PKT_FLAG_DISCARD)
+        MP_ERR(demux, "Edit lists are not correctly supported (FFmpeg issue).\n");
+#endif
     av_packet_unref(pkt);
 
     if (priv->format_hack.clear_filepos)
