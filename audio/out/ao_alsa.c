@@ -376,12 +376,18 @@ static bool query_chmaps(struct ao *ao, struct mp_chmap *chmap)
         struct mp_chmap entry;
         if (mp_chmap_from_alsa(&entry, &maps[i]->map)) {
             struct mp_chmap reorder = entry;
-            if (maps[i]->type == SND_CHMAP_TYPE_VAR)
-                mp_chmap_reorder_norm(&reorder);
-            MP_DBG(ao, "Got supported channel map: %s (type %s) -> %s -> %s\n",
-                   aname, snd_pcm_chmap_type_name(maps[i]->type),
-                   mp_chmap_to_str(&entry), mp_chmap_to_str(&reorder));
-            mp_chmap_sel_add_map(&chmap_sel, &reorder);
+            mp_chmap_reorder_norm(&reorder);
+
+            MP_DBG(ao, "got ALSA chmap: %s (%s) -> %s", aname,
+                   snd_pcm_chmap_type_name(maps[i]->type),
+                   mp_chmap_to_str(&entry));
+            if (!mp_chmap_equals(&entry, &reorder))
+                MP_DBG(ao, " -> %s", mp_chmap_to_str(&reorder));
+            MP_DBG(ao, "\n");
+
+            struct mp_chmap final =
+                maps[i]->type == SND_CHMAP_TYPE_VAR ? reorder : entry;
+            mp_chmap_sel_add_map(&chmap_sel, &final);
         } else {
             MP_VERBOSE(ao, "skipping unknown ALSA channel map: %s\n", aname);
         }
@@ -482,10 +488,14 @@ static int set_chmap(struct ao *ao, struct mp_chmap *dev_chmap, int num_channels
         } else if (chmap.num != num_channels) {
             MP_WARN(ao, "ALSA channel map conflicts with channel count!\n");
         } else {
-            MP_VERBOSE(ao, "using the ALSA channel map.\n");
-            if (mp_chmap_equals(&chmap, &ao->channels))
+            if (mp_chmap_equals(&chmap, &ao->channels)) {
                 MP_VERBOSE(ao, "which is what we requested.\n");
-            ao->channels = chmap;
+            } else if (!mp_chmap_is_valid(dev_chmap)) {
+                MP_VERBOSE(ao, "ignoring the ALSA channel map.\n");
+            } else {
+                MP_VERBOSE(ao, "using the ALSA channel map.\n");
+                ao->channels = chmap;
+            }
         }
 
         free(alsa_chmap);
@@ -714,18 +724,27 @@ static int init_device(struct ao *ao, int mode)
     CHECK_ALSA_ERROR("Unable to set format");
     dump_hw_params(ao, MSGL_DEBUG, "HW params after format:\n", alsa_hwparams);
 
-    struct mp_chmap dev_chmap = ao->channels;
-    if (af_fmt_is_spdif(ao->format) || p->opts->ignore_chmap) {
-        dev_chmap.num = 0; // disable chmap API
-    } else if (dev_chmap.num == 1 && dev_chmap.speaker[0] == MP_SPEAKER_ID_FC) {
-        // As yet another ALSA API inconsistency, mono is not reported correctly.
-        dev_chmap.num = 0;
-    } else if (query_chmaps(ao, &dev_chmap)) {
-        ao->channels = dev_chmap;
-    } else {
-        // Assume only stereo and mono are supported.
-        mp_chmap_from_channels(&ao->channels, MPMIN(2, dev_chmap.num));
-        dev_chmap.num = 0;
+    // Stereo, or mono if input is 1 channel.
+    struct mp_chmap reduced;
+    mp_chmap_from_channels(&reduced, MPMIN(2, ao->channels.num));
+
+    struct mp_chmap dev_chmap = {0};
+    if (!af_fmt_is_spdif(ao->format) && !p->opts->ignore_chmap &&
+        !mp_chmap_equals(&ao->channels, &reduced))
+    {
+        struct mp_chmap res = ao->channels;
+        if (query_chmaps(ao, &res))
+            dev_chmap = res;
+
+        // Whatever it is, we dumb it down to mono or stereo. Some drivers may
+        // return things like bl-br, but the user (probably) still wants stereo.
+        // This also handles the failure case (dev_chmap.num==0).
+        if (dev_chmap.num <= 2) {
+            dev_chmap.num = 0;
+            ao->channels = reduced;
+        } else if (dev_chmap.num) {
+            ao->channels = dev_chmap;
+        }
     }
 
     int num_channels = ao->channels.num;
@@ -775,8 +794,13 @@ static int init_device(struct ao *ao, int mode)
     if (num_channels != ao->channels.num) {
         int req = ao->channels.num;
         mp_chmap_from_channels(&ao->channels, MPMIN(2, num_channels));
+        mp_chmap_fill_na(&ao->channels, num_channels);
         MP_ERR(ao, "Asked for %d channels, got %d - fallback to %s.\n", req,
                num_channels, mp_chmap_to_str(&ao->channels));
+        if (num_channels != ao->channels.num) {
+            MP_FATAL(ao, "mismatching channel counts.\n");
+            goto alsa_error;
+        }
     }
 
     err = snd_pcm_hw_params_get_buffer_size(alsa_hwparams, &p->buffersize);
