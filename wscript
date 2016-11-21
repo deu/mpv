@@ -119,7 +119,7 @@ main_dependencies = [
         'name': 'mingw',
         'desc': 'MinGW',
         'deps': [ 'os-win32' ],
-        'func': check_statement('stddef.h', 'int x = __MINGW32__;'
+        'func': check_statement('stdlib.h', 'int x = __MINGW32__;'
                                             'int y = __MINGW64_VERSION_MAJOR'),
     }, {
         'name': 'posix',
@@ -127,6 +127,10 @@ main_dependencies = [
         # This should be good enough.
         'func': check_statement(['poll.h', 'unistd.h', 'sys/mman.h'],
             'struct pollfd pfd; poll(&pfd, 1, 0); fork(); int f[2]; pipe(f); munmap(f,0)'),
+    }, {
+        'name': 'fnmatch',
+        'desc': 'fnmatch()',
+        'func': check_statement('fnmatch.h', 'fnmatch("", "", 0)')
     }, {
         'name': 'posix-or-mingw',
         'desc': 'development environment',
@@ -1049,6 +1053,12 @@ def configure(ctx):
     ctx.find_program('rst2pdf',   var='RST2PDF',   mandatory=False)
     ctx.find_program(windres,     var='WINDRES',   mandatory=False)
 
+    ctx.load('compiler_c')
+    ctx.load('waf_customizations')
+    ctx.load('dependencies')
+    ctx.load('detections.compiler')
+    ctx.load('detections.devices')
+
     for ident, _, _ in _INSTALL_DIRS_LIST:
         varname = ident.upper()
         ctx.env[varname] = getattr(ctx.options, ident)
@@ -1056,12 +1066,6 @@ def configure(ctx):
         # keep substituting vars, until the paths are fully expanded
         while re.match('\$\{([^}]+)\}', ctx.env[varname]):
             ctx.env[varname] = Utils.subst_vars(ctx.env[varname], ctx.env)
-
-    ctx.load('compiler_c')
-    ctx.load('waf_customizations')
-    ctx.load('dependencies')
-    ctx.load('detections.compiler')
-    ctx.load('detections.devices')
 
     ctx.parse_dependencies(build_options)
     ctx.parse_dependencies(main_dependencies)

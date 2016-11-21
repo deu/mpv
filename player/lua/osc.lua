@@ -32,7 +32,8 @@ local user_opts = {
                                 -- internal track list management (and some
                                 -- functions that depend on it)
     layout = "bottombar",
-    seekbarstyle = "bar",       -- slider (diamond marker) or bar (fill)
+    seekbarstyle = "bar",       -- slider (diamond marker), knob (circle
+                                -- marker with guide), or bar (fill)
     tooltipborder = 1,          -- border of tooltip in bottom/topbar
     timetotal = false,          -- display total time instead of remaining time?
     timems = false,             -- display timecodes with milliseconds?
@@ -404,7 +405,8 @@ function prepare_elements()
             local foV = slider_lo.border + slider_lo.gap
 
             -- calculate positions of min and max points
-            if (slider_lo.stype == "slider") then
+            if (slider_lo.stype == "slider") or
+                (slider_lo.stype == "knob") then
                 element.slider.min.ele_pos = elem_geo.h / 2
                 element.slider.max.ele_pos = elem_geo.w - (elem_geo.h / 2)
 
@@ -566,7 +568,8 @@ function render_elements(master_ass)
 
                 local foV = slider_lo.border + slider_lo.gap
                 local foH = 0
-                if (slider_lo.stype == "slider") then
+                if (slider_lo.stype == "slider") or
+                    (slider_lo.stype == "knob") then
                     foH = elem_geo.h / 2
                 elseif (slider_lo.stype == "bar") then
                     foV = foV + 1
@@ -585,6 +588,11 @@ function render_elements(master_ass)
                     elem_ass:line_to(xp+(innerH/2), (innerH/2)+foV)
                     elem_ass:line_to(xp, (innerH)+foV)
                     elem_ass:line_to(xp-(innerH/2), (innerH/2)+foV)
+                elseif (slider_lo.stype == "knob") then
+                    elem_ass:rect_cw(xp, (9*innerH/20)+foV, elem_geo.w - foH, (11*innerH/20)+foV)
+                    elem_ass:rect_cw(foH, (3*innerH/8)+foV, xp, (5*innerH/8)+foV)
+                    elem_ass:round_rect_cw(xp - innerH/2, foV, xp + innerH/2,
+                                           foV + innerH, innerH/2.0)
                 end
             end
 
@@ -1011,6 +1019,9 @@ layouts["box"] = function ()
     lo.style = osc_styles.timecodes
     lo.slider.tooltip_style = osc_styles.vidtitle
     lo.slider.stype = user_opts["seekbarstyle"]
+    if lo.slider.stype == "knob" then
+        lo.slider.border = 0
+    end
 
     --
     -- Timecodes + Cache
@@ -1454,7 +1465,8 @@ function validate_user_opts()
     end
 
     if user_opts.seekbarstyle ~= "slider" and
-       user_opts.seekbarstyle ~= "bar" then
+       user_opts.seekbarstyle ~= "bar" and
+       user_opts.seekbarstyle ~= "knob" then
         msg.warn("Invalid setting \"" .. user_opts.seekbarstyle
             .. "\" for seekbarstyle")
         user_opts.seekbarstyle = "slider"
@@ -2062,7 +2074,8 @@ function process_event(source, what)
 
             if n == 0 then
                 --click on background (does not work)
-            elseif n > 0 and not (elements[n].eventresponder[source .. "_" .. what] == nil) then
+            elseif n > 0 and not (n > #elements) and
+                not (elements[n].eventresponder[source .. "_" .. what] == nil) then
 
                 if mouse_hit(elements[n]) then
                     elements[n].eventresponder[source .. "_" .. what](elements[n])
@@ -2094,7 +2107,7 @@ function process_event(source, what)
 
             local n = state.active_element
 
-            if not (elements[n].eventresponder == nil) then
+            if not (n > #elements) and not (elements[n].eventresponder == nil) then
                 if not (elements[n].eventresponder[source] == nil) then
                     elements[n].eventresponder[source](elements[n])
                 end

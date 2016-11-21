@@ -1187,9 +1187,9 @@ Audio
     to use the volume controls of the audio output driver or the internal mpv
     volume filter.
 
-    The current behavior is as if this option was set to ``yes``. The other
-    behaviors are not available anymore, although ``auto`` almost matches
-    current behavior in most cases.
+    The current behavior is that softvol is always enabled, i.e. as if this
+    option is set to ``yes``. The other behaviors are not available anymore,
+    although ``auto`` almost matches current behavior in most cases.
 
     The ``no`` behavior is still partially available through the ``ao-volume``
     and ``ao-mute`` properties. But there are no options to reset these.
@@ -2364,6 +2364,13 @@ Window
 
         - ``--monitoraspect=4:3``  or ``--monitoraspect=1.3333``
         - ``--monitoraspect=16:9`` or ``--monitoraspect=1.7777``
+
+``--hidpi-window-scale``, ``--no-hidpi-window-scale``
+    (OS X only)
+    Scale the window size according to the backing scale factor (default: yes).
+    On regular HiDPI resolutions the window opens with double the size but appears
+    as having the same size as on none-HiDPI resolutions. This is the default OS X
+    behavior.
 
 ``--monitorpixelaspect=<ratio>``
     Set the aspect of a single pixel of your monitor or TV screen (default:
@@ -4586,7 +4593,8 @@ The following video options are currently all specific to ``--vo=opengl`` and
     blend-tiles
         Blend the frame against a 16x16 gray/white tiles background (default).
     blend
-        Blend the frame against a black background.
+        Blend the frame against the background color (``--background``, normally
+        black).
     yes
         Try to create a framebuffer with alpha component. This only makes sense
         if the video contains alpha information (which is extremely rare). May
