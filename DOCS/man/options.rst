@@ -146,11 +146,11 @@ Playback Control
     speed higher than normal automatically inserts the ``scaletempo`` audio
     filter.
 
-``--loop=<N|inf|force|no>``
+``--loop=<N|inf|force|no>``, ``--loop``
     Loops playback ``N`` times. A value of ``1`` plays it one time (default),
     ``2`` two times, etc. ``inf`` means forever. ``no`` is the same as ``1`` and
     disables looping. If several files are specified on command line, the
-    entire playlist is looped.
+    entire playlist is looped. ``--loop`` is the same as ``--loop=inf``.
 
     The ``force`` mode is like ``inf``, but does not skip playlist entries
     which have been marked as failing. This means the player might waste CPU
@@ -279,6 +279,26 @@ Playback Control
     Note that ``--playlist`` always loads all entries, so you use that instead
     if you really have the need for this functionality.
 
+``--access-references=<yes|no>``
+    Follow any references in the file being opened (default: yes). Disabling
+    this is helpful if the file is automatically scanned (e.g. thumbnail
+    generation). If the thumbnail scanner for example encounters a playlist
+    file, which contains network URLs, and the scanner should not open these,
+    enabling this option will prevent it. This option also disables ordered
+    chapters, mov reference files, opening of archives, and a number of other
+    features.
+
+    On older FFmpeg versions, this will not work in some cases. Some FFmpeg
+    demuxers might not respect this option.
+
+    This option does not prevent opening of paired subtitle files and such. Use
+    ``--autoload-files=no`` to prevent this.
+
+    This option does not always work if you open non-files (for example using
+    ``dvd://directory`` would open a whole bunch of files in the given
+    directory). Prefixing the filename with ``./`` if it doesn't start with
+    a ``/`` will avoid this.
+
 ``--loop-file=<N|inf|no>``
     Loop a single file N times. ``inf`` means forever, ``no`` means normal
     playback. For compatibility, ``--loop-file`` and ``--loop-file=yes`` are
@@ -342,9 +362,10 @@ Program Behavior
 ``--help``, ``--h``
     Show short summary of options.
 
-    You can also pass a shell pattern to this option, which will list all
-    matching top-level options, e.g. ``--h=*scale*`` for all options that
-    contain the word "scale".
+    You can also pass a string to this option, which will list all top-level
+    options which contain the string in the name, e.g. ``--h=scale`` for all
+    options that contain the word ``scale``. The special string ``*`` lists
+    all top-level options.
 
 ``-v``
     Increment verbosity level, one level for each ``-v`` found on the command
@@ -1746,66 +1767,31 @@ Subtitles
     :all:   Load all subs in the current and ``--sub-paths`` directories.
 
 ``--sub-codepage=<codepage>``
-    If your system supports ``iconv(3)``, you can use this option to specify
-    the subtitle codepage. By default, uchardet will be used to guess the
-    charset. If mpv is not compiled with uchardet, enca will be used.
-    If mpv is compiled with neither uchardet nor enca, ``UTF-8:UTF-8-BROKEN``
-    is the default, which means it will try to use UTF-8, otherwise the
-    ``UTF-8-BROKEN`` pseudo codepage (see below).
+    You can use this option to specify the subtitle codepage. uchardet will be
+    used to guess the charset. (If mpv was not compiled with uchardet, then
+    ``utf-8`` is the effective default.)
 
-    The default value for this option is ``auto``, whose actual effect depends
-    on whether ENCA is compiled.
+    The default value for this option is ``auto``, which enables autodetection.
 
-    .. admonition:: Warning
+    The following steps are taken to determine the final codepage, in order:
 
-        If you force the charset, even subtitles that are known to be
-        UTF-8 will be recoded, which is perhaps not what you expect. Prefix
-        codepages with ``utf8:`` if you want the codepage to be used only if the
-        input is not valid UTF-8.
+    - if the specific codepage has a ``+``, use that codepage
+    - if the data looks like UTF-8, assume it is UTF-8
+    - if ``--sub-codepage`` is set to a specific codepage, use that
+    - run uchardet, and if successful, use that
+    - otherwise, use ``UTF-8-BROKEN``
 
     .. admonition:: Examples
 
-        - ``--sub-codepage=utf8:latin2`` Use Latin 2 if input is not UTF-8.
-        - ``--sub-codepage=cp1250`` Always force recoding to cp1250.
+        - ``--sub-codepage=latin2`` Use Latin 2 if input is not UTF-8.
+        - ``--sub-codepage=+cp1250`` Always force recoding to cp1250.
 
-    The pseudo codepage ``UTF-8-BROKEN`` is used internally. When it
-    is the codepage, subtitles are interpreted as UTF-8 with "Latin 1" as
-    fallback for bytes which are not valid UTF-8 sequences. iconv is
-    never involved in this mode.
+    The pseudo codepage ``UTF-8-BROKEN`` is used internally. If it's set,
+    subtitles are interpreted as UTF-8 with "Latin 1" as fallback for bytes
+    which are not valid UTF-8 sequences. iconv is never involved in this mode.
 
-    If the player was compiled with ENCA support, you can control it with the
-    following syntax:
-
-    ``--sub-codepage=enca:<language>:<fallback codepage>``
-
-    Language is specified using a two letter code to help ENCA detect
-    the codepage automatically. If an invalid language code is
-    entered, mpv will complain and list valid languages.  (Note
-    however that this list will only be printed when the conversion code is actually
-    called, for example when loading an external subtitle). The
-    fallback codepage is used if autodetection fails.  If no fallback
-    is specified, ``UTF-8-BROKEN`` is used.
-
-    .. admonition:: Examples
-
-        - ``--sub-codepage=enca:pl:cp1250`` guess the encoding, assuming the subtitles
-          are Polish, fall back on cp1250
-        - ``--sub-codepage=enca:pl`` guess the encoding for Polish, fall back on UTF-8.
-        - ``--sub-codepage=enca`` try universal detection, fall back on UTF-8.
-
-    If the player was compiled with libguess support, you can use it with:
-
-    ``--sub-codepage=guess:<language>:<fallback codepage>``
-
-    libguess always needs a language. There is no universal detection
-    mode. Use ``--sub-codepage=guess:help`` to get a list of
-    languages subject to the same caveat as with ENCA above.
-
-    If the player was compiled with uchardet support you can use it with:
-
-    ``--sub-codepage=uchardet``
-
-    This mode doesn't take language or fallback codepage.
+    This option changed in mpv 0.23.0. The old syntax is still emulated to some
+    degree.
 
 ``--sub-fix-timing``, ``--no-sub-fix-timing``
     By default, subtitle timing is adjusted to remove minor gaps or overlaps
@@ -2052,10 +2038,6 @@ Window
         ``all`` does not work on OS X and will behave like ``current``.
 
     See also ``--screen``.
-
-``--fs-black-out-screens``
-
-    OS X only. Black out other displays when going fullscreen.
 
 ``--keep-open=<yes|no|always>``
     Do not terminate when playing or seeking beyond the end of the file, and
@@ -2317,7 +2299,7 @@ Window
         ensure it does not cause security problems (e.g. make sure to use full
         paths if "." is in your path like on Windows). It also only works when
         playing video (i.e. not with ``--no-video`` but works with
-        ``-vo=null``).
+        ``--vo=null``).
 
     This can be "misused" to disable screensavers that do not support the
     proper X API (see also ``--stop-screensaver``). If you think this is too
@@ -3809,21 +3791,7 @@ OpenGL renderer options
 -----------------------
 
 The following video options are currently all specific to ``--vo=opengl`` and
-``-vo=opengl-cb`` only, which are the only VOs that implement them.
-
-``--opengl-dumb-mode=<yes|no>``
-    This mode is extremely restricted, and will disable most extended OpenGL
-    features. This includes high quality scalers and custom shaders!
-
-    It is intended for hardware that does not support FBOs (including GLES,
-    which supports it insufficiently), or to get some more performance out of
-    bad or old hardware.
-
-    This mode is forced automatically if needed, and this option is mostly
-    useful for debugging. It's also enabled automatically if nothing uses
-    features which require FBOs.
-
-    This option might be silently removed in the future.
+``--vo=opengl-cb`` only, which are the only VOs that implement them.
 
 ``--scale=<filter>``
 
@@ -4627,6 +4595,20 @@ The following video options are currently all specific to ``--vo=opengl`` and
     the renderer is going to wait for a while after rendering, instead of
     flipping GL front and backbuffers immediately (i.e. it doesn't call it
     in display-sync mode).
+
+``--opengl-dumb-mode=<yes|no>``
+    This mode is extremely restricted, and will disable most extended OpenGL
+    features. This includes high quality scalers and custom shaders!
+
+    It is intended for hardware that does not support FBOs (including GLES,
+    which supports it insufficiently), or to get some more performance out of
+    bad or old hardware.
+
+    This mode is forced automatically if needed, and this option is mostly
+    useful for debugging. It's also enabled automatically if nothing uses
+    features which require FBOs.
+
+    This option might be silently removed in the future.
 
 Miscellaneous
 -------------
