@@ -43,6 +43,12 @@ Interface changes
         - --sub-codepage=<codepage> does not force the codepage anymore
           (this requires different and new syntax)
     - remove --fs-black-out-screens option for macOS
+    - change how spdif codecs are selected. You can't enable spdif passthrough
+      with --ad anymore. This was deprecated; use --audio-spdif instead.
+    - deprecate the "family" selection with --ad/--vd
+      forcing/excluding codecs with "+", "-", "-" is deprecated as well
+    - explicitly mark --ad-spdif-dtshd as deprecated (it was done so a long time
+      ago, but it didn't complain when using the option)
  --- mpv 0.22.0 ---
     - the "audio-device-list" property now sets empty device description to the
       device name as a fallback

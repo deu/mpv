@@ -427,7 +427,8 @@ const m_option_t mp_opts[] = {
 
     OPT_STRING("audio-spdif", audio_spdif, 0),
 
-    OPT_FLAG("ad-spdif-dtshd", dtshd, 0),
+    OPT_FLAG("ad-spdif-dtshd", dtshd, 0,
+             .deprecation_message = "use --audio-spdif instead"),
 
     OPT_CHOICE_C("hwdec", hwdec_api, 0, mp_hwdec_names),
     OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
@@ -805,7 +806,7 @@ const struct MPOpts mp_default_opts = {
     .use_terminal = 1,
     .msg_color = 1,
     .audio_driver_list = NULL,
-    .audio_decoders = "-spdif:*", // never select spdif by default
+    .audio_decoders = NULL,
     .video_decoders = NULL,
     .deinterlace = -1,
     .softvol = SOFTVOL_AUTO,

@@ -567,7 +567,7 @@ Video
     Specify the video output backend to be used. See `VIDEO OUTPUT DRIVERS`_ for
     details and descriptions of available drivers.
 
-``--vd=<[+|-]family1:(*|decoder1),[+|-]family2:(*|decoder2),...[-]>``
+``--vd=<...>``
     Specify a priority list of video decoders to be used, according to their
     family and name. See ``--ad`` for further details. Both of these options
     use the same syntax and semantics; the only difference is that they
@@ -1133,11 +1133,10 @@ Audio
     Possible codecs are ``ac3``, ``dts``, ``dts-hd``. Multiple codecs can be
     specified by separating them with ``,``. ``dts`` refers to low bitrate DTS
     core, while ``dts-hd`` refers to DTS MA (receiver and OS support varies).
-    You should only use either ``dts`` or ``dts-hd`` (if both are specified,
-    and ``dts`` comes first, only ``dts`` will be used).
+    If both ``dts`` and ``dts-hd`` are specified, it behaves equivalent to
+    specifying ``dts-hd`` only.
 
-    In general, all codecs in the ``spdif`` family listed with ``--ad=help``
-    are supported in theory.
+    In earlier mpv versions
 
     .. admonition:: Warning
 
@@ -1147,27 +1146,31 @@ Audio
 
 ``--ad=<[+|-]family1:(*|decoder1),[+|-]family2:(*|decoder2),...[-]>``
     Specify a priority list of audio decoders to be used, according to their
-    family and decoder name. Entries like ``family:*`` prioritize all decoders
-    of the given family. When determining which decoder to use, the first
-    decoder that matches the audio format is selected. If that is unavailable,
-    the next decoder is used. Finally, it tries all other decoders that are not
+    decoder name. When determining which decoder to use, the first decoder that
+    matches the audio format is selected. If that is unavailable, the next
+    decoder is used. Finally, it tries all other decoders that are not
     explicitly selected or rejected by the option.
+
+    Specifying family names is deprecated. Entries like ``family:*`` prioritize
+    all decoders of the given family.
 
     ``-`` at the end of the list suppresses fallback on other available
     decoders not on the ``--ad`` list. ``+`` in front of an entry forces the
     decoder. Both of these should not normally be used, because they break
-    normal decoder auto-selection!
+    normal decoder auto-selection! Both of these methods are deprecated.
 
-    ``-`` in front of an entry disables selection of the decoder.
+    ``-`` in front of an entry disables selection of the decoder. This is
+    deprecated.
 
     .. admonition:: Examples
 
-        ``--ad=lavc:mp3float``
+        ``--ad=mp3float``
             Prefer the FFmpeg/Libav ``mp3float`` decoder over all other MP3
             decoders.
 
-        ``--ad=spdif:ac3,lavc:*``
-            Always prefer spdif AC3 over FFmpeg/Libav over anything else.
+        ``--ad=lavc:mp3float``
+            Prefer the FFmpeg/Libav ``mp3float`` decoder over all other MP3
+            decoders. (Using deprecated family syntax.)
 
         ``--ad=help``
             List all available decoders.
@@ -2176,7 +2179,7 @@ Window
         ``50%x50%``
             Forces the window width and height to half the screen width and
             height. Will show black borders to compensate for the video aspect
-            ration (with most VOs and without ``--no-keepaspect``).
+            ratio (with most VOs and without ``--no-keepaspect``).
         ``50%+10+10``
             Sets the window to half the screen widths, and positions it 10
             pixels below/left of the top left corner of the screen.

@@ -638,10 +638,10 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
         .p_w = frame->sample_aspect_ratio.num,
         .p_h = frame->sample_aspect_ratio.den,
         .color = {
-            .space = avcol_spc_to_mp_csp(ctx->avctx->colorspace),
-            .levels = avcol_range_to_mp_csp_levels(ctx->avctx->color_range),
-            .primaries = avcol_pri_to_mp_csp_prim(ctx->avctx->color_primaries),
-            .gamma = avcol_trc_to_mp_csp_trc(ctx->avctx->color_trc),
+            .space = avcol_spc_to_mp_csp(frame->colorspace),
+            .levels = avcol_range_to_mp_csp_levels(frame->color_range),
+            .primaries = avcol_pri_to_mp_csp_prim(frame->color_primaries),
+            .gamma = avcol_trc_to_mp_csp_trc(frame->color_trc),
             .sig_peak = ctx->cached_hdr_peak,
         },
         .chroma_location =
@@ -858,6 +858,11 @@ static void decode(struct dec_video *vd, struct demux_packet *packet,
     assert(mpi->planes[0] || mpi->planes[3]);
     mpi->pts = mp_pts_from_av(ctx->pic->pts, &ctx->codec_timebase);
     mpi->dts = mp_pts_from_av(ctx->pic->pkt_dts, &ctx->codec_timebase);
+
+#if LIBAVCODEC_VERSION_MICRO >= 100
+    mpi->pkt_duration =
+        mp_pts_from_av(av_frame_get_pkt_duration(ctx->pic), &ctx->codec_timebase);
+#endif
 
     struct mp_image_params params;
     update_image_params(vd, ctx->pic, &params);
