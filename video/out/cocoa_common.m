@@ -87,6 +87,11 @@ struct vo_cocoa_state {
     uint32_t old_dwidth;
     uint32_t old_dheight;
 
+    CVDisplayLinkRef link;
+    pthread_mutex_t sync_lock;
+    pthread_cond_t sync_wakeup;
+    uint64_t sync_counter;
+
     pthread_mutex_t lock;
     pthread_cond_t wakeup;
 
@@ -113,14 +118,36 @@ static void run_on_main_thread(struct vo *vo, void(^block)(void))
     dispatch_sync(dispatch_get_main_queue(), block);
 }
 
+static NSRect calculate_window_geometry(struct vo *vo, NSRect rect)
+{
+    struct vo_cocoa_state *s = vo->cocoa;
+    struct mp_vo_opts *opts  = vo->opts;
+
+    NSRect screenFrame = [s->current_screen frame];
+    rect.origin.y = screenFrame.size.height - (rect.origin.y + rect.size.height);
+
+    if(!opts->hidpi_window_scale) {
+        NSRect oldRect = rect;
+        rect = [s->current_screen convertRectFromBacking:rect];
+
+        CGFloat x_per = screenFrame.size.width - oldRect.size.width;
+        CGFloat y_per = screenFrame.size.height - oldRect.size.height;
+        if (x_per > 0) x_per = oldRect.origin.x/x_per;
+        if (y_per > 0) y_per = oldRect.origin.y/y_per;
+
+        rect.origin.x = (screenFrame.size.width - rect.size.width)*x_per;
+        rect.origin.y = (screenFrame.size.height - rect.size.height)*y_per;
+    }
+
+    return rect;
+}
+
 static void queue_new_video_size(struct vo *vo, int w, int h)
 {
     struct vo_cocoa_state *s = vo->cocoa;
     struct mp_vo_opts *opts  = vo->opts;
-    id<MpvSizing> win = (id<MpvSizing>) s->window;
-    NSRect r = NSMakeRect(0, 0, w, h);
-    if(!opts->hidpi_window_scale)
-        r = [s->current_screen convertRectFromBacking:r];
+    id<MpvWindowUpdate> win = (id<MpvWindowUpdate>) s->window;
+    NSRect r = calculate_window_geometry(vo, NSMakeRect(0, 0, w, h));
     [win queueNewVideoSize:NSMakeSize(r.size.width, r.size.height)];
 }
 
@@ -283,6 +310,26 @@ static void vo_cocoa_update_screen_info(struct vo *vo)
     }
 }
 
+static void vo_cocoa_init_displaylink(struct vo *vo)
+{
+    struct vo_cocoa_state *s = vo->cocoa;
+
+    NSDictionary* sinfo = [s->current_screen deviceDescription];
+    NSNumber* sid = [sinfo objectForKey:@"NSScreenNumber"];
+    CGDirectDisplayID did = [sid longValue];
+
+    CVDisplayLinkCreateWithCGDisplay(did, &s->link);
+    CVDisplayLinkSetOutputCallback(s->link, &displayLinkCallback, vo);
+    CVDisplayLinkStart(s->link);
+}
+
+static void vo_cocoa_uninit_displaylink(struct vo_cocoa_state *s)
+{
+    if (CVDisplayLinkIsRunning(s->link))
+        CVDisplayLinkStop(s->link);
+    CVDisplayLinkRelease(s->link);
+}
+
 void vo_cocoa_init(struct vo *vo)
 {
     struct vo_cocoa_state *s = talloc_zero(NULL, struct vo_cocoa_state);
@@ -299,8 +346,11 @@ void vo_cocoa_init(struct vo *vo)
     }
     pthread_mutex_init(&s->lock, NULL);
     pthread_cond_init(&s->wakeup, NULL);
+    pthread_mutex_init(&s->sync_lock, NULL);
+    pthread_cond_init(&s->sync_wakeup, NULL);
     vo->cocoa = s;
     vo_cocoa_update_screen_info(vo);
+    vo_cocoa_init_displaylink(vo);
     cocoa_init_light_sensor(vo);
     cocoa_add_screen_reconfiguration_observer(vo);
     if (!s->embedded) {
@@ -338,8 +388,22 @@ void vo_cocoa_uninit(struct vo *vo)
     pthread_cond_signal(&s->wakeup);
     pthread_mutex_unlock(&s->lock);
 
+    // close window beforehand to prevent undefined behavior when in fullscreen
+    // that resets the desktop to space 1
+    run_on_main_thread(vo, ^{
+        // if using --wid + libmpv there's no window to release
+        if (s->window) {
+            [s->window setDelegate:nil];
+            [s->window close];
+        }
+    });
+
     run_on_main_thread(vo, ^{
         enable_power_management(s);
+        vo_cocoa_uninit_displaylink(s);
+        pthread_mutex_lock(&s->sync_lock);
+        pthread_cond_signal(&s->sync_wakeup);
+        pthread_mutex_unlock(&s->sync_lock);
         cocoa_uninit_light_sensor(s);
         cocoa_rm_screen_reconfiguration_observer(vo);
 
@@ -353,15 +417,11 @@ void vo_cocoa_uninit(struct vo *vo)
         [s->view removeFromSuperview];
         [s->view release];
 
-        // if using --wid + libmpv there's no window to release
-        if (s->window) {
-            [s->window setDelegate:nil];
-            [s->window close];
-        }
-
         if (!s->embedded)
             [s->blankCursor release];
 
+        pthread_cond_destroy(&s->sync_wakeup);
+        pthread_mutex_destroy(&s->sync_lock);
         pthread_cond_destroy(&s->wakeup);
         pthread_mutex_destroy(&s->lock);
         talloc_free(s);
@@ -376,29 +436,18 @@ static void vo_cocoa_update_screen_fps(struct vo *vo)
     NSNumber* sid = [sinfo objectForKey:@"NSScreenNumber"];
     CGDirectDisplayID did = [sid longValue];
 
-    CVDisplayLinkRef link;
-    CVDisplayLinkCreateWithCGDisplay(did, &link);
-    CVDisplayLinkSetOutputCallback(link, &displayLinkCallback, NULL);
-    CVDisplayLinkStart(link);
-    CVDisplayLinkSetCurrentCGDisplay(link, did);
-
-    double display_period = CVDisplayLinkGetActualOutputVideoRefreshPeriod(link);
+    CVDisplayLinkSetCurrentCGDisplay(s->link, did);
+    double display_period = CVDisplayLinkGetActualOutputVideoRefreshPeriod(s->link);
 
     if (display_period > 0) {
         s->screen_fps = 1/display_period;
     } else {
-        // Fallback to using Nominal refresh rate from DisplayLink,
-        // CVDisplayLinkGet *Actual* OutputVideoRefreshPeriod seems to
-        // return 0 on some Apple devices. Use the nominal refresh period
-        // instead.
-        const CVTime t = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
+        const CVTime t = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(s->link);
         if (!(t.flags & kCVTimeIsIndefinite)) {
             s->screen_fps = (t.timeScale / (double) t.timeValue);
             MP_VERBOSE(vo, "Falling back to %f for display sync.\n", s->screen_fps);
         }
     }
-
-    CVDisplayLinkRelease(link);
 
     flag_events(vo, VO_EVENT_WIN_STATE);
 }
@@ -407,6 +456,13 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
                                     const CVTimeStamp* outputTime, CVOptionFlags flagsIn,
                                     CVOptionFlags* flagsOut, void* displayLinkContext)
 {
+    struct vo *vo = displayLinkContext;
+    struct vo_cocoa_state *s = vo->cocoa;
+
+    pthread_mutex_lock(&s->sync_lock);
+    s->sync_counter += 1;
+    pthread_cond_signal(&s->sync_wakeup);
+    pthread_mutex_unlock(&s->sync_lock);
     return kCVReturnSuccess;
 }
 
@@ -472,10 +528,8 @@ static void create_ui(struct vo *vo, struct mp_rect *win, int geo_flags)
     if (s->embedded) {
         parent = (NSView *) (intptr_t) opts->WinID;
     } else {
-        NSRect wr =
-            NSMakeRect(win->x0, win->y0, win->x1 - win->x0, win->y1 - win->y0);
-        if(!opts->hidpi_window_scale)
-            wr = [s->current_screen convertRectFromBacking:wr];
+        NSRect wr = calculate_window_geometry(vo,
+            NSMakeRect(win->x0, win->y0, win->x1 - win->x0, win->y1 - win->y0));
         s->window = create_window(wr, s->current_screen, opts->border, adapter);
         parent = [s->window contentView];
     }
@@ -529,6 +583,21 @@ static int cocoa_set_window_title(struct vo *vo)
         }
     }
     talloc_free(talloc_ctx);
+    return VO_TRUE;
+}
+
+static int vo_cocoa_window_border(struct vo *vo)
+{
+    struct vo_cocoa_state *s = vo->cocoa;
+    if (s->embedded)
+        return VO_NOTIMPL;
+
+    struct mp_vo_opts *opts = vo->opts;
+    id<MpvWindowUpdate> win = (id<MpvWindowUpdate>) s->window;
+    [win updateBorder:opts->border];
+    if (opts->border)
+        cocoa_set_window_title(vo);
+
     return VO_TRUE;
 }
 
@@ -666,6 +735,13 @@ void vo_cocoa_swap_buffers(struct vo *vo)
     if (skip)
         return;
 
+    pthread_mutex_lock(&s->sync_lock);
+    uint64_t old_counter = s->sync_counter;
+    while(old_counter == s->sync_counter) {
+        pthread_cond_wait(&s->sync_wakeup, &s->sync_lock);
+    }
+    pthread_mutex_unlock(&s->sync_lock);
+
     pthread_mutex_lock(&s->lock);
     s->frame_w = vo->dwidth;
     s->frame_h = vo->dheight;
@@ -727,6 +803,8 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
         return VO_TRUE;
     case VOCTRL_ONTOP:
         return vo_cocoa_ontop(vo);
+    case VOCTRL_BORDER:
+        return vo_cocoa_window_border(vo);
     case VOCTRL_GET_UNFS_WINDOW_SIZE: {
         int *sz = arg;
         NSSize size = [s->view frame].size;

@@ -10,6 +10,7 @@ typedef struct mp_vo_opts {
     struct m_obj_settings *video_driver_list;
 
     int taskbar_progress;
+    int snap_window;
     int ontop;
     int fullscreen;
     int border;
@@ -50,7 +51,7 @@ typedef struct mp_vo_opts {
     // vo_wayland, vo_drm
     struct sws_opts *sws_opts;
     // vo_opengl, vo_opengl_cb
-    int hwdec_preload_api;
+    char *gl_hwdec_interop;
     // vo_drm
     char *drm_connector_spec;
     int drm_mode_id;
@@ -136,7 +137,6 @@ typedef struct MPOpts {
     int video_osd;
 
     int untimed;
-    char *stream_capture;
     char *stream_dump;
     int stop_playback_on_init_failure;
     int loop_times;
@@ -214,12 +214,14 @@ typedef struct MPOpts {
     int forced_subs_only;
     int stretch_dvd_subs;
     int stretch_image_subs;
+    int image_subs_video_res;
 
     int sub_fix_timing;
 
     char **audio_files;
     char *demuxer_name;
     int demuxer_thread;
+    int prefetch_open;
     char *audio_demuxer_name;
     char *sub_demuxer_name;
 
@@ -319,7 +321,10 @@ typedef struct MPOpts {
     char *ipc_path;
     char *input_file;
 
+    int wingl_dwm_flush;
+
     struct gl_video_opts *gl_video_opts;
+    struct angle_opts *angle_opts;
     struct dvd_opts *dvd_opts;
 } MPOpts;
 

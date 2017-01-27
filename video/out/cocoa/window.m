@@ -97,16 +97,26 @@
     [super toggleFullScreen:sender];
 
     if (![self.adapter isInFullScreenMode]) {
-        [self setStyleMask:([self styleMask] | NSWindowStyleMaskFullScreen)];
-        NSRect frame = [[self targetScreen] frame];
-        [self setFrame:frame display:YES];
+        [self setToFullScreen];
     } else {
-        [self setStyleMask:([self styleMask] & ~NSWindowStyleMaskFullScreen)];
-        NSRect frame = [self calculateWindowPositionForScreen:[self targetScreen]];
-        [self setFrame:frame display:YES];
-        [self setContentAspectRatio:_unfs_content_frame.size];
-        [self setCenteredContentSize:_unfs_content_frame.size];
+        [self setToWindow];
     }
+}
+
+- (void)setToFullScreen
+{
+    [self setStyleMask:([self styleMask] | NSWindowStyleMaskFullScreen)];
+    NSRect frame = [[self targetScreen] frame];
+    [self setFrame:frame display:YES];
+}
+
+- (void)setToWindow
+{
+    [self setStyleMask:([self styleMask] & ~NSWindowStyleMaskFullScreen)];
+    NSRect frame = [self calculateWindowPositionForScreen:[self targetScreen]];
+    [self setFrame:frame display:YES];
+    [self setContentAspectRatio:_unfs_content_frame.size];
+    [self setCenteredContentSize:_unfs_content_frame.size];
 }
 
 - (NSArray *)customWindowsToEnterFullScreenForWindow:(NSWindow *)window
@@ -139,11 +149,13 @@
 - (void)windowDidFailToEnterFullScreen:(NSWindow *)window
 {
     _is_animating = 0;
+    [self setToWindow];
 }
 
 - (void)windowDidFailToExitFullScreen:(NSWindow *)window
 {
     _is_animating = 0;
+    [self setToFullScreen];
 }
 
 - (void)windowDidChangeBackingProperties:(NSNotification *)notification
@@ -212,6 +224,34 @@
     [self.adapter putCommand:cmd];
 }
 
+- (void)updateBorder:(int)border
+{
+    int borderStyle = NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|
+                 NSWindowStyleMaskMiniaturizable;
+    if (border) {
+        int window_mask = [self styleMask] & ~NSWindowStyleMaskBorderless;
+        window_mask |= borderStyle;
+        [self setStyleMask:window_mask];
+    } else {
+        int window_mask = [self styleMask] & ~borderStyle;
+        window_mask |= NSWindowStyleMaskBorderless;
+        [self setStyleMask:window_mask];
+    }
+
+    if (![self.adapter isInFullScreenMode]) {
+        // XXX: workaround to force redrawing of window decoration
+        if (border) {
+            NSRect frame = [self frame];
+            frame.size.width += 1;
+            [self setFrame:frame display:YES];
+            frame.size.width -= 1;
+            [self setFrame:frame display:YES];
+        }
+
+        [self setContentAspectRatio:_unfs_content_frame.size];
+    }
+}
+
 - (NSRect)frameRect:(NSRect)f forCenteredContentSize:(NSSize)ns
 {
     NSRect cr  = [self contentRectForFrameRect:f];
@@ -259,11 +299,12 @@
 
 - (NSRect)constrainFrameRect:(NSRect)nf toScreen:(NSScreen *)screen
 {
-    if (_is_animating)
-        screen = [self targetScreen];
+    if (_is_animating && ![self.adapter isInFullScreenMode])
+        return nf;
 
+    screen = screen ?: self.screen ?: [NSScreen mainScreen];
     NSRect of  = [self frame];
-    NSRect vf  = [screen ?: self.screen ?: [NSScreen mainScreen] visibleFrame];
+    NSRect vf  = [_is_animating ? [self targetScreen] : screen visibleFrame];
     NSRect ncf = [self contentRectForFrameRect:nf];
 
     // Prevent the window's titlebar from exiting the screen on the top edge.
@@ -304,11 +345,6 @@
            display:NO];
 }
 
-- (void)updateWindowFrame:(NSSize)newSize
-{
-    _unfs_content_frame = [self frameRect:_unfs_content_frame forCenteredContentSize:newSize];
-}
-
 - (void)tryDequeueSize
 {
     if (_queued_video_size.width <= 0.0 || _queued_video_size.height <= 0.0)
@@ -321,9 +357,8 @@
 
 - (void)queueNewVideoSize:(NSSize)newSize
 {
-    if ([self.adapter isInFullScreenMode]) {
-        [self updateWindowFrame:newSize];
-    } else {
+    _unfs_content_frame = [self frameRect:_unfs_content_frame forCenteredContentSize:newSize];
+    if (![self.adapter isInFullScreenMode]) {
         if (NSEqualSizes(_queued_video_size, newSize))
             return;
         _queued_video_size = newSize;
