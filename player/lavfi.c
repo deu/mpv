@@ -43,6 +43,11 @@
 
 #include "lavfi.h"
 
+#if LIBAVFILTER_VERSION_MICRO < 100
+#define av_buffersink_get_frame_flags(a, b, c) av_buffersink_get_frame(a, b)
+#define AV_BUFFERSINK_FLAG_NO_REQUEST 0
+#endif
+
 struct lavfi {
     struct mp_log *log;
     char *graph_string;
@@ -545,19 +550,23 @@ static void read_output_pads(struct lavfi *c)
         if (pad->dir != LAVFI_OUT)
             continue;
 
-        // If disconnected, read and discard everything.
         if (!pad->pending_v && !pad->pending_a && !pad->connected)
-            pad->output_needed = true;
+            pad->output_needed = pad->connected;
 
-        if (!pad->output_needed)
+        // If disconnected, read and discard everything (passively).
+        if (!pad->output_needed || !pad->connected)
             continue;
 
         assert(pad->buffer);
         assert(!pad->pending_v && !pad->pending_a);
 
+        int flags = 0;
+        if (!pad->connected)
+            flags |= AV_BUFFERSINK_FLAG_NO_REQUEST;
+
         int r = AVERROR_EOF;
         if (!pad->buffer_is_eof)
-            r = av_buffersink_get_frame(pad->buffer, pad->tmp_frame);
+            r = av_buffersink_get_frame_flags(pad->buffer, pad->tmp_frame, flags);
         if (r >= 0) {
             pad->output_needed = false;
             double pts = mp_pts_from_av(pad->tmp_frame->pts, &pad->timebase);

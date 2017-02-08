@@ -662,8 +662,15 @@ function render_elements(master_ass)
             end
 
             local maxchars = element.layout.button.maxchars
-
             if not (maxchars == nil) and (#buttontext > maxchars) then
+                if (#buttontext > maxchars+20) then
+                    while (#buttontext > maxchars+20) do
+                        buttontext = buttontext:gsub(".[\128-\191]*$", "")
+                    end
+                    buttontext = buttontext .. "..."
+                end
+                local _, nchars2 = buttontext:gsub(".[\128-\191]*", "")
+                local stretch = (maxchars/#buttontext)*100
                 buttontext = string.format("{\\fscx%f}",
                     (maxchars/#buttontext)*100) .. buttontext
             end
@@ -948,7 +955,7 @@ layouts["box"] = function ()
     lo = add_layout("title")
     lo.geometry = {x = posX, y = titlerowY, an = 8, w = 496, h = 12}
     lo.style = osc_styles.vidtitle
-    lo.button.maxchars = 90
+    lo.button.maxchars = 80
 
     lo = add_layout("pl_prev")
     lo.geometry =
@@ -1228,8 +1235,9 @@ layouts["bottombar"] = function()
             w = t_r - t_l, h = geo.h }
     lo = add_layout("title")
     lo.geometry = geo
-    lo.style = osc_styles.vidtitleBar
-    lo.button.maxchars = math.floor(geo.w/7)
+    lo.style = string.format("%s{\\clip(%f,%f,%f,%f)}",
+        osc_styles.vidtitleBar,
+        geo.x, geo.y-geo.h/2, geo.w, geo.y+geo.h/2)
 
 
     -- Playback control buttons
@@ -1454,8 +1462,9 @@ layouts["topbar"] = function()
             w = t_r - t_l, h = geo.h }
     lo = add_layout("title")
     lo.geometry = geo
-    lo.style = osc_styles.vidtitleBar
-    lo.button.maxchars = math.floor(geo.w/7)
+    lo.style = string.format("%s{\\clip(%f,%f,%f,%f)}",
+        osc_styles.vidtitleBar,
+        geo.x, geo.y-geo.h/2, geo.w, geo.y+geo.h/2)
 end
 
 -- Validate string type user options
@@ -1511,6 +1520,7 @@ function osc_init()
     local have_pl = (pl_count > 1)
     local pl_pos = mp.get_property_number("playlist-pos", 0) + 1
     local have_ch = (mp.get_property_number("chapters", 0) > 0)
+    local loop = mp.get_property("loop", "no")
 
     local ne
 
@@ -1544,7 +1554,7 @@ function osc_init()
     ne = new_element("pl_prev", "button")
 
     ne.content = "\238\132\144"
-    ne.enabled = (pl_pos > 1)
+    ne.enabled = (pl_pos > 1) or (loop ~= "no")
     ne.eventresponder["mouse_btn0_up"] =
         function ()
             mp.commandv("playlist-prev", "weak")
@@ -1559,7 +1569,7 @@ function osc_init()
     ne = new_element("pl_next", "button")
 
     ne.content = "\238\132\129"
-    ne.enabled = (have_pl) and (pl_pos < pl_count)
+    ne.enabled = (have_pl and (pl_pos < pl_count)) or (loop ~= "no")
     ne.eventresponder["mouse_btn0_up"] =
         function ()
             mp.commandv("playlist-next", "weak")

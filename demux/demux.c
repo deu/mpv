@@ -661,7 +661,9 @@ static bool read_packet(struct demux_internal *in)
         demux->desc->seek(demux, seek_pts, SEEK_BACKWARD | SEEK_HR);
     }
 
-    bool eof = !demux->desc->fill_buffer || demux->desc->fill_buffer(demux) <= 0;
+    bool eof = true;
+    if (demux->desc->fill_buffer && !demux_cancel_test(demux))
+        eof = demux->desc->fill_buffer(demux) <= 0;
     update_cache(in);
 
     pthread_mutex_lock(&in->lock);
@@ -1246,8 +1248,7 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         .events = DEMUX_EVENT_ALL,
     };
     demuxer->seekable = stream->seekable;
-    if (demuxer->stream->uncached_stream &&
-        !demuxer->stream->uncached_stream->seekable)
+    if (demuxer->stream->underlying && !demuxer->stream->underlying->seekable)
         demuxer->seekable = false;
 
     struct demux_internal *in = demuxer->in = talloc_ptrtype(demuxer, in);
@@ -1263,9 +1264,6 @@ static struct demuxer *open_given_type(struct mpv_global *global,
     };
     pthread_mutex_init(&in->lock, NULL);
     pthread_cond_init(&in->wakeup, NULL);
-
-    if (stream->uncached_stream)
-        in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);
 
     *in->d_thread = *demuxer;
     *in->d_buffer = *demuxer;
@@ -1315,11 +1313,15 @@ static struct demuxer *open_given_type(struct mpv_global *global,
                 struct demuxer *sub =
                     open_given_type(global, log, &demuxer_desc_timeline, stream,
                                     &params2, DEMUX_CHECK_FORCE);
-                if (sub)
-                    return sub;
-                timeline_destroy(tl);
+                if (sub) {
+                    demuxer = sub;
+                } else {
+                    timeline_destroy(tl);
+                }
             }
         }
+        if (demuxer->is_network || stream->caching)
+            in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);
         return demuxer;
     }
 

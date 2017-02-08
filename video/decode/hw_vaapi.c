@@ -45,7 +45,13 @@ struct priv {
 static int init_decoder(struct lavc_ctx *ctx, int w, int h)
 {
     struct priv *p = ctx->hwdec_priv;
-    // From avconv_vaapi.c. Disgusting, but apparently this is the best we get.
+    // libavcodec has no way yet to communicate the exact surface format needed
+    // for the frame pool, or the required minimum size of the frame pool.
+    // Hopefully, this weakness in the libavcodec API will be fixed in the
+    // future.
+    // For the pixel format, we try to second-guess from what the libavcodec
+    // software decoder would require (sw_pix_fmt). It could break and require
+    // adjustment if new VAAPI surface formats are added.
     int sw_format = ctx->avctx->sw_pix_fmt == AV_PIX_FMT_YUV420P10 ?
                     AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
 
@@ -142,18 +148,6 @@ static int init_copy(struct lavc_ctx *ctx)
     return init(ctx, false);
 }
 
-static void intel_shit_lock(struct lavc_ctx *ctx)
-{
-    struct priv *p = ctx->hwdec_priv;
-    va_lock(p->ctx);
-}
-
-static void intel_crap_unlock(struct lavc_ctx *ctx)
-{
-    struct priv *p = ctx->hwdec_priv;
-    va_unlock(p->ctx);
-}
-
 const struct vd_lavc_hwdec mp_vd_lavc_vaapi = {
     .type = HWDEC_VAAPI,
     .image_format = IMGFMT_VAAPI,
@@ -162,8 +156,6 @@ const struct vd_lavc_hwdec mp_vd_lavc_vaapi = {
     .init = init_direct,
     .uninit = uninit,
     .init_decoder = init_decoder,
-    .lock = intel_shit_lock,
-    .unlock = intel_crap_unlock,
 };
 
 const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy = {

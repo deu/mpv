@@ -3549,6 +3549,26 @@ static int mp_property_cwd(void *ctx, struct m_property *prop,
     return M_PROPERTY_NOT_IMPLEMENTED;
 }
 
+static int mp_property_record_file(void *ctx, struct m_property *prop,
+                                   int action, void *arg)
+{
+    struct MPContext *mpctx = ctx;
+    struct MPOpts *opts = mpctx->opts;
+    if (action == M_PROPERTY_SET) {
+        char *new = *(char **)arg;
+        if (!bstr_equals(bstr0(new), bstr0(opts->record_file))) {
+            talloc_free(opts->record_file);
+            opts->record_file = talloc_strdup(NULL, new);
+            open_recorder(mpctx, false);
+            // open_recorder() unsets it on failure.
+            if (new && !opts->record_file)
+                return M_PROPERTY_ERROR;
+        }
+        return M_PROPERTY_OK;
+    }
+    return mp_property_generic_option(mpctx, prop, action, arg);
+}
+
 static int mp_property_protocols(void *ctx, struct m_property *prop,
                                  int action, void *arg)
 {
@@ -4020,6 +4040,8 @@ static const struct m_property mp_properties_base[] = {
 
     {"working-directory", mp_property_cwd},
 
+    {"record-file", mp_property_record_file},
+
     {"protocol-list", mp_property_protocols},
     {"decoder-list", mp_property_decoders},
     {"encoder-list", mp_property_encoders},
@@ -4250,6 +4272,7 @@ static const struct property_osd_display {
 } property_osd_display[] = {
     // general
     { "loop", "Loop" },
+    { "loop-file", "Loop current file" },
     { "chapter", .seek_msg = OSD_SEEK_INFO_CHAPTER_TEXT,
                  .seek_bar = OSD_SEEK_INFO_BAR },
     { "hr-seek", "hr-seek" },

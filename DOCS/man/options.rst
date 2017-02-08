@@ -652,8 +652,8 @@ Video
                 ``--opengl-backend=dxinterop`` (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
     :d3d11va:   requires ``--vo=opengl`` with ``--opengl-backend=angle``
-                (Windows only)
-    :d3d11va-copy: copies video back to system RAM (Windows only)
+                (Windows 8+ only)
+    :d3d11va-copy: copies video back to system RAM (Windows 8+ only)
     :mediacodec: copies video back to system RAM (Android only)
     :rpi:       requires ``--vo=opengl`` (Raspberry Pi only - default if available)
     :rpi-copy:  copies video back to system RAM (Raspberry Pi only)
@@ -680,6 +680,14 @@ Video
     (automatically used if available). You can also try the old GLX backend by
     forcing it with ``--opengl-backend=x11``, but the vaapi/GLX interop is
     said to be slower than ``vaapi-copy``.
+
+    The ``cuda`` and ``cuda-copy`` modes provides deinterlacing in the decoder
+    which is useful as there is no other deinterlacing mechanism in the opengl
+    output path. To use this deinterlacing you must pass the option:
+    ``vd-lavc-o=deint=[weave|bob|adaptive]``.
+    Pass ``weave`` (or leave the option unset) to not attempt any
+    deinterlacing. ``cuda`` should always be preferred unless the ``opengl``
+    vo is not being used or filters are required.
 
     Most video filters will not work with hardware decoding as they are
     primarily implemented on the CPU. Some exceptions are ``vdpaupp``,
@@ -730,18 +738,6 @@ Video
         In addition to driver-specific behavior, global system settings might
         affect this additionally. This can give incorrect results even with
         completely ordinary video sources.
-
-        ``cuda`` is usually safe. Interlaced content can be deinterlaced by
-        the decoder, which is useful as there is no other deinterlacing
-        mechanism in the opengl output path. To use this deinterlacing you
-        must pass the option: ``vd-lavc-o=deint=[weave|bob|adaptive]``. Pass
-        ``weave`` to not attempt any deinterlacing.
-        10 and 12bit HEVC is available if the hardware supports it and a
-        sufficiently new driver (> 375.xx) is used.
-
-        ``cuda-copy`` has the same behaviour as ``cuda`` - including the ability
-        to deinterlace inside the decoder. However, traditional deinterlacing
-        filters can be used in this case.
 
         ``rpi`` always uses the hardware overlay renderer, even with
         ``--vo=opengl``.
@@ -1987,6 +1983,18 @@ Subtitles
 ``--sub-align-y=<top|center|bottom>``
     Vertical position (default: ``bottom``).
     Details see ``--sub-align-x``.
+
+``--sub-justify=<auto|left|center|right>``
+    Control how multi line subs are justified irrespective of where they
+    are aligned (default: ``auto`` which justifies as defined by
+    ``--sub-align-y``).
+    Left justification is recommended to make the subs easier to read
+    as it is easier for the eyes.
+
+``--sub-ass-justify=<yes|no>``
+    Applies justification as defined by ``--sub-justify`` on ASS subtitles
+    if ``--sub-ass-style-override`` is not set to ``no``.
+    Default: ``no``.
 
 ``--sub-shadow-color=<color>``
     See ``--sub-color``. Color used for sub text shadow.
@@ -4335,15 +4343,69 @@ The following video options are currently all specific to ``--vo=opengl`` and
 
     Windows only.
 
-``--opengl-dcomposition=<yes|no>``
-    Allows DirectComposition when using the ANGLE backend (default: yes).
-    DirectComposition implies flip-model presentation, which can improve
-    rendering efficiency on Windows 8+ by avoiding a copy of the video frame.
-    mpv uses it by default where possible, but it can cause poor behaviour with
-    some drivers, such as a black screen or graphical corruption when leaving
-    full-screen mode. Use "no" to disable it.
+``--angle-d3d11-feature-level=<11_0|10_1|10_0|9_3>``
+    Selects a specific feature level when using the ANGLE backend with D3D11.
+    By default, the highest available feature level is used. This option can be
+    used to select a lower feature level, which is mainly useful for debugging.
+    Note that OpenGL ES 3.0 is only supported at feature level 10_1 or higher.
+    Most extended OpenGL features will not work at lower feature levels
+    (similar to ``--opengl-dumb-mode``).
 
     Windows with ANGLE only.
+
+``--angle-d3d11-warp=<yes|no|auto>``
+    Use WARP (Windows Advanced Rasterization Platform) when using the ANGLE
+    backend with D3D11 (default: auto). This is a high performance software
+    renderer. By default, it is used when the Direct3D hardware does not
+    support Direct3D 11 feature level 9_3. While the extended OpenGL features
+    will work with WARP, they can be very slow.
+
+    Windows with ANGLE only.
+
+``--angle-egl-windowing=<yes|no|auto>``
+    Use ANGLE's built in EGL windowing functions to create a swap chain
+    (default: auto). If this is set to ``no`` and the D3D11 renderer is in use,
+    ANGLE's built in swap chain will not be used and a custom swap chain that
+    is optimized for video rendering will be created instead. If set to
+    ``auto``, a custom swap chain will be used for D3D11 and the built in swap
+    chain will be used for D3D9. This option is mainly for debugging purposes,
+    in case the custom swap chain has poor performance or does not work.
+
+    If set to ``yes``, the ``--angle-max-frame-latency`` and
+    ``--angle-swapchain-length`` options will have no effect.
+
+    Windows with ANGLE only.
+
+``--angle-max-frame-latency=<1-16>``
+    Sets the maximum number of frames that the system is allowed to queue for
+    rendering with the ANGLE backend (default: 3). Lower values should make
+    VSync timing more accurate, but a value of ``1`` requires powerful
+    hardware, since the CPU will not be able to "render ahead" of the GPU.
+
+    Windows with ANGLE only.
+
+``--angle-renderer=<d3d9|d3d11|auto>``
+    Forces a specific renderer when using the ANGLE backend (default: auto). In
+    auto mode this will pick D3D11 for systems that support Direct3D 11 feature
+    level 9_3 or higher, and D3D9 otherwise. This option is mainly for
+    debugging purposes. Normally there is no reason to force a specific
+    renderer, though ``--angle-renderer=d3d9`` may give slightly better
+    performance on old hardware. Note that the D3D9 renderer only supports
+    OpenGL ES 2.0, so most extended OpenGL features will not work if this
+    renderer is selected (similar to ``--opengl-dumb-mode``).
+
+    Windows with ANGLE only.
+
+``--angle-swapchain-length=<2-16>``
+    Sets the number of buffers in the D3D11 presentation queue when using the
+    ANGLE backend (default: 6). At least 2 are required, since one is the back
+    buffer that mpv renders to and the other is the front buffer that is
+    presented by the DWM. Additional buffers can improve performance, because
+    for example, mpv will not have to wait on the DWM to release the front
+    buffer before rendering a new frame to it. For this reason, Microsoft
+    recommends at least 4.
+
+    Windows 8+ with ANGLE only.
 
 ``--opengl-sw``
     Continue even if a software renderer is detected.
@@ -4812,6 +4874,29 @@ Miscellaneous
 
     This does not affect playlist expansion, redirection, or other loading of
     referenced files like with ordered chapters.
+
+``--record-file=<file>``
+    Record the current stream to the given target file. The target file will
+    always be overwritten without asking.
+
+    This remuxes the source stream without reencoding, which makes this a
+    highly fragile and experimental feature. It's entirely possible that this
+    writes files which are broken, not standards compliant, not playable with
+    all players (including mpv), or incomplete.
+
+    The target file format is determined by the file extension of the target
+    filename. It is recommended to use the same target container as the source
+    container if possible, and preferring Matroska as fallback.
+
+    Seeking during stream recording, or enabling/disabling stream recording
+    during playback, can cut off data, or produce "holes" in the output file.
+    These are technical restrictions. In particular, video data or subtitles
+    which were read ahead can produce such holes, which might cause playback
+    problems with various players (including mpv).
+
+    The behavior of this option might changed in the future, such as changing
+    it to a template (similar to ``--screenshot-template``), being renamed,
+    removed, or anything else, until it is declared semi-stable.
 
 ``--lavfi-complex=<string>``
     Set a "complex" libavfilter filter, which means a single filter graph can

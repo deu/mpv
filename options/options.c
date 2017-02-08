@@ -501,6 +501,7 @@ const m_option_t mp_opts[] = {
                ({"none", 0}, {"light", 1}, {"normal", 2}, {"native", 3})),
     OPT_CHOICE("sub-ass-shaper", ass_shaper, UPDATE_OSD,
                ({"simple", 0}, {"complex", 1})),
+    OPT_FLAG("sub-ass-justify", ass_justify, 0),
     OPT_CHOICE("sub-ass-style-override", ass_style_override, UPDATE_OSD,
                ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4}, {"strip", 5})),
     OPT_FLAG("sub-scale-by-window", sub_scale_by_window, UPDATE_OSD),
@@ -680,6 +681,8 @@ const m_option_t mp_opts[] = {
     OPT_SUBSTRUCT("screenshot", screenshot_image_opts, screenshot_conf, 0),
     OPT_STRING("screenshot-template", screenshot_template, 0),
     OPT_STRING("screenshot-directory", screenshot_directory, 0),
+
+    OPT_STRING("record-file", record_file, M_OPT_FILE),
 
     OPT_SUBSTRUCT("", input_opts, input_config, 0),
 

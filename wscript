@@ -738,27 +738,9 @@ video_output_features = [
         'desc': 'Android support',
         'func': check_statement('android/api-level.h', '(void)__ANDROID__'),  # arbitrary android-specific header
     }, {
-        # We need MMAL/bcm_host/dispmanx APIs. Also, most RPI distros require
-        # every project to hardcode the paths to the include directories. Also,
-        # these headers are so broken that they spam tons of warnings by merely
-        # including them (compensate with -isystem and -fgnu89-inline).
         'name': '--rpi',
         'desc': 'Raspberry Pi support',
-        'func': compose_checks(
-            check_cc(cflags="-isystem/opt/vc/include/ "+
-                            "-isystem/opt/vc/include/interface/vcos/pthreads " +
-                            "-isystem/opt/vc/include/interface/vmcs_host/linux " +
-                            "-fgnu89-inline",
-                     linkflags="-L/opt/vc/lib",
-                     header_name="bcm_host.h",
-                     lib=['mmal_core', 'mmal_util', 'mmal_vc_client', 'bcm_host']),
-            # We still need all OpenGL symbols, because the vo_opengl code is
-            # generic and supports anything from GLES2/OpenGL 2.1 to OpenGL 4 core.
-            check_cc(lib="EGL"),
-            check_cc(lib="GLESv2"),
-            check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
-            check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
-        ),
+        'func': check_rpi,
     }, {
         'name': '--standard-gl',
         'desc': 'Desktop standard OpenGL support',
@@ -810,7 +792,8 @@ video_output_features = [
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
-        'deps_any': [ 'egl-x11', 'mali-fbdev', 'rpi', 'gl-wayland', 'egl-drm' ],
+        'deps_any': [ 'egl-x11', 'mali-fbdev', 'rpi', 'gl-wayland', 'egl-drm',
+                      'egl-angle' ],
         'func': check_true
     }
 ]
@@ -868,6 +851,7 @@ hwaccel_features = [
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',
+        'deps': [ 'gl' ],
         'func': check_cc(fragment=load_fragment('cuda.c'),
                          use='libav'),
     }, {
@@ -1006,6 +990,8 @@ def configure(ctx):
     ctx.find_program('rst2pdf',   var='RST2PDF',   mandatory=False)
     ctx.find_program(windres,     var='WINDRES',   mandatory=False)
     ctx.find_program('perl',      var='BIN_PERL',  mandatory=False)
+
+    ctx.add_os_flags('LIBRARY_PATH')
 
     ctx.load('compiler_c')
     ctx.load('waf_customizations')
