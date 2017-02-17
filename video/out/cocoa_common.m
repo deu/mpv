@@ -69,9 +69,14 @@ struct vo_cocoa_state {
     NSOpenGLContext *nsgl_ctx;
 
     NSScreen *current_screen;
+    CGDirectDisplayID display_id;
 
     NSInteger window_level;
     int fullscreen;
+
+    bool cursor_visibility;
+    bool cursor_visibility_wanted;
+    bool cursor_needs_set;
 
     bool embedded; // wether we are embedding in another GUI
 
@@ -106,8 +111,6 @@ struct vo_cocoa_state {
     bool vo_ready;                      // the VO is in a state in which it can
                                         // render frames
     int frame_w, frame_h;               // dimensions of the frame rendered
-
-    NSCursor *blankCursor;
 
     char *window_title;
 };
@@ -307,25 +310,45 @@ static void vo_cocoa_update_screen_info(struct vo *vo)
         if (!s->current_screen)
             s->current_screen = [NSScreen mainScreen];
     }
+
+    NSDictionary* sinfo = [s->current_screen deviceDescription];
+    s->display_id = [[sinfo objectForKey:@"NSScreenNumber"] longValue];
+}
+
+static void vo_cocoa_signal_swap(struct vo_cocoa_state *s)
+{
+    pthread_mutex_lock(&s->sync_lock);
+    s->sync_counter += 1;
+    pthread_cond_signal(&s->sync_wakeup);
+    pthread_mutex_unlock(&s->sync_lock);
+}
+
+static void vo_cocoa_start_displaylink(struct vo_cocoa_state *s)
+{
+    if (!CVDisplayLinkIsRunning(s->link))
+        CVDisplayLinkStart(s->link);
+}
+
+static void vo_cocoa_stop_displaylink(struct vo_cocoa_state *s)
+{
+    if (CVDisplayLinkIsRunning(s->link)) {
+        CVDisplayLinkStop(s->link);
+        vo_cocoa_signal_swap(s);
+    }
 }
 
 static void vo_cocoa_init_displaylink(struct vo *vo)
 {
     struct vo_cocoa_state *s = vo->cocoa;
 
-    NSDictionary* sinfo = [s->current_screen deviceDescription];
-    NSNumber* sid = [sinfo objectForKey:@"NSScreenNumber"];
-    CGDirectDisplayID did = [sid longValue];
-
-    CVDisplayLinkCreateWithCGDisplay(did, &s->link);
+    CVDisplayLinkCreateWithCGDisplay(s->display_id, &s->link);
     CVDisplayLinkSetOutputCallback(s->link, &displayLinkCallback, vo);
     CVDisplayLinkStart(s->link);
 }
 
 static void vo_cocoa_uninit_displaylink(struct vo_cocoa_state *s)
 {
-    if (CVDisplayLinkIsRunning(s->link))
-        CVDisplayLinkStop(s->link);
+    vo_cocoa_stop_displaylink(s);
     CVDisplayLinkRelease(s->link);
 }
 
@@ -336,13 +359,10 @@ void vo_cocoa_init(struct vo *vo)
         .power_mgmt_assertion = kIOPMNullAssertionID,
         .log = mp_log_new(s, vo->log, "cocoa"),
         .embedded = vo->opts->WinID >= 0,
+        .cursor_visibility = true,
+        .cursor_visibility_wanted = true,
         .fullscreen = 0,
     };
-    if (!s->embedded) {
-        NSImage* blankImage = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
-        s->blankCursor = [[NSCursor alloc] initWithImage:blankImage hotSpot:NSZeroPoint];
-        [blankImage release];
-    }
     pthread_mutex_init(&s->lock, NULL);
     pthread_cond_init(&s->wakeup, NULL);
     pthread_mutex_init(&s->sync_lock, NULL);
@@ -358,6 +378,22 @@ void vo_cocoa_init(struct vo *vo)
     }
 }
 
+static void vo_cocoa_update_cursor(struct vo *vo, bool forceVisible)
+{
+    struct vo_cocoa_state *s = vo->cocoa;
+
+    if (s->embedded)
+        return;
+
+    if ((forceVisible || s->cursor_visibility_wanted) && !s->cursor_visibility) {
+        [NSCursor unhide];
+        s->cursor_visibility = YES;
+    } else if (!s->cursor_visibility_wanted && s->cursor_visibility) {
+        [NSCursor hide];
+        s->cursor_visibility = NO;
+    }
+}
+
 static int vo_cocoa_set_cursor_visibility(struct vo *vo, bool *visible)
 {
     struct vo_cocoa_state *s = vo->cocoa;
@@ -365,15 +401,15 @@ static int vo_cocoa_set_cursor_visibility(struct vo *vo, bool *visible)
     if (s->embedded)
         return VO_NOTIMPL;
 
-    MpvEventsView *v = (MpvEventsView *) s->view;
-
-    if (*visible) {
-        [[NSCursor arrowCursor] set];
-    } else if ([v canHideCursor] && s->blankCursor) {
-        [s->blankCursor set];
+    if (s->view) {
+        MpvEventsView *v = (MpvEventsView *) s->view;
+        s->cursor_visibility_wanted = !(!*visible && [v canHideCursor]);
+        vo_cocoa_update_cursor(vo, false);
     } else {
-        *visible = true;
+        s->cursor_visibility_wanted = *visible;
+        s->cursor_needs_set = true;
     }
+    *visible = s->cursor_visibility;
 
     return VO_TRUE;
 }
@@ -392,6 +428,7 @@ void vo_cocoa_uninit(struct vo *vo)
     run_on_main_thread(vo, ^{
         // if using --wid + libmpv there's no window to release
         if (s->window) {
+            vo_cocoa_update_cursor(vo, true);
             [s->window setDelegate:nil];
             [s->window close];
         }
@@ -400,9 +437,7 @@ void vo_cocoa_uninit(struct vo *vo)
     run_on_main_thread(vo, ^{
         enable_power_management(s);
         vo_cocoa_uninit_displaylink(s);
-        pthread_mutex_lock(&s->sync_lock);
-        pthread_cond_signal(&s->sync_wakeup);
-        pthread_mutex_unlock(&s->sync_lock);
+        vo_cocoa_signal_swap(s);
         cocoa_uninit_light_sensor(s);
         cocoa_rm_screen_reconfiguration_observer(vo);
 
@@ -415,9 +450,6 @@ void vo_cocoa_uninit(struct vo *vo)
 
         [s->view removeFromSuperview];
         [s->view release];
-
-        if (!s->embedded)
-            [s->blankCursor release];
 
         pthread_cond_destroy(&s->sync_wakeup);
         pthread_mutex_destroy(&s->sync_lock);
@@ -467,21 +499,25 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeSt
     struct vo *vo = displayLinkContext;
     struct vo_cocoa_state *s = vo->cocoa;
 
-    pthread_mutex_lock(&s->sync_lock);
-    s->sync_counter += 1;
-    pthread_cond_signal(&s->sync_wakeup);
-    pthread_mutex_unlock(&s->sync_lock);
+    vo_cocoa_signal_swap(s);
     return kCVReturnSuccess;
 }
 
-static void vo_set_level(struct vo *vo, int ontop)
+static void vo_set_level(struct vo *vo, int ontop, int ontop_level)
 {
     struct vo_cocoa_state *s = vo->cocoa;
 
     if (ontop) {
-        // +1 is not enough as that will show the icon layer on top of the
-        // menubar when the application is not frontmost. so use +2
-        s->window_level = NSMainMenuWindowLevel + 2;
+        switch (ontop_level) {
+        case -1:
+            s->window_level = NSFloatingWindowLevel;
+            break;
+        case -2:
+            s->window_level = NSStatusWindowLevel;
+            break;
+        default:
+            s->window_level = ontop_level;
+        }
     } else {
         s->window_level = NSNormalWindowLevel;
     }
@@ -499,7 +535,7 @@ static int vo_cocoa_ontop(struct vo *vo)
         return VO_NOTIMPL;
 
     struct mp_vo_opts *opts = vo->opts;
-    vo_set_level(vo, opts->ontop);
+    vo_set_level(vo, opts->ontop, opts->ontop_level);
     return VO_TRUE;
 }
 
@@ -548,8 +584,6 @@ static void create_ui(struct vo *vo, struct mp_rect *win, int geo_flags)
     view.adapter = adapter;
     s->view = view;
     [parent addSubview:s->view];
-    // update the cursor position now that the view has been added.
-    [view signalMousePosition];
     s->adapter = adapter;
 
     cocoa_register_menu_item_action(MPM_H_SIZE,   @selector(halfSize));
@@ -618,11 +652,7 @@ static void cocoa_screen_reconfiguration_observer(
         struct vo *vo = ctx;
         struct vo_cocoa_state *s = vo->cocoa;
 
-        NSDictionary* sinfo = [s->current_screen deviceDescription];
-        NSNumber* sid = [sinfo objectForKey:@"NSScreenNumber"];
-        CGDirectDisplayID did = [sid longValue];
-
-        if (did == display) {
+        if (s->display_id == display) {
             MP_VERBOSE(vo, "detected display mode change, updating screen refresh rate\n");
             flag_events(vo, VO_EVENT_WIN_STATE);
         }
@@ -679,7 +709,7 @@ int vo_cocoa_config_window(struct vo *vo)
             if (opts->fullscreen && !s->fullscreen)
                 vo_cocoa_fullscreen(vo);
             cocoa_set_window_title(vo);
-            vo_set_level(vo, opts->ontop);
+            vo_set_level(vo, opts->ontop, opts->ontop_level);
 
             GLint o;
             if (!CGLGetParameter(s->cgl_ctx, kCGLCPSurfaceOpacity, &o) && !o) {
@@ -753,7 +783,7 @@ void vo_cocoa_swap_buffers(struct vo *vo)
 
     pthread_mutex_lock(&s->sync_lock);
     uint64_t old_counter = s->sync_counter;
-    while(old_counter == s->sync_counter) {
+    while(CVDisplayLinkIsRunning(s->link) && old_counter == s->sync_counter) {
         pthread_cond_wait(&s->sync_wakeup, &s->sync_lock);
     }
     pthread_mutex_unlock(&s->sync_lock);
@@ -999,11 +1029,13 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 {
     // Make vo.c not do video timing, which would slow down resizing.
     vo_event(self.vout, VO_EVENT_LIVE_RESIZING);
+    vo_cocoa_stop_displaylink(self.vout->cocoa);
 }
 
 - (void)windowDidEndLiveResize:(NSNotification *)notification
 {
     vo_query_and_reset_events(self.vout, VO_EVENT_LIVE_RESIZING);
+    vo_cocoa_start_displaylink(self.vout->cocoa);
 }
 
 - (void)didChangeWindowedScreenProfile:(NSNotification *)notification
@@ -1012,20 +1044,20 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
     flag_events(self.vout, VO_EVENT_ICC_PROFILE_CHANGED);
 }
 
-- (void)didChangeMousePosition
-{
-    struct vo_cocoa_state *s = self.vout->cocoa;
-    [(MpvEventsView *)s->view signalMousePosition];
-}
-
 - (void)windowDidResignKey:(NSNotification *)notification
 {
-    [self didChangeMousePosition];
+    vo_cocoa_update_cursor(self.vout, true);
 }
 
 - (void)windowDidBecomeKey:(NSNotification *)notification
 {
-    [self didChangeMousePosition];
+    struct vo_cocoa_state *s = self.vout->cocoa;
+    if (s->cursor_needs_set) {
+        vo_cocoa_set_cursor_visibility(self.vout, &s->cursor_visibility_wanted);
+        s->cursor_needs_set = false;
+    } else {
+        vo_cocoa_update_cursor(self.vout, false);
+    }
 }
 
 - (void)windowDidMiniaturize:(NSNotification *)notification

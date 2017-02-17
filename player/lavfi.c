@@ -71,6 +71,8 @@ struct lavfi {
 
     struct lavfi_pad **pads;
     int num_pads;
+
+    AVFrame *tmp_frame;
 };
 
 struct lavfi_pad {
@@ -78,7 +80,6 @@ struct lavfi_pad {
     enum stream_type type;
     enum lavfi_direction dir;
     char *name; // user-given pad name
-    AVFrame *tmp_frame;
 
     bool connected;     // if false, inputs/otuputs are considered always EOF
 
@@ -144,9 +145,6 @@ static void add_pad(struct lavfi *c, enum lavfi_direction dir, AVFilterInOut *it
         p->main = c;
         p->dir = dir;
         p->name = talloc_strdup(p, item->name);
-        p->tmp_frame = av_frame_alloc();
-        if (!p->tmp_frame)
-            abort();
         p->type = type;
         MP_TARRAY_APPEND(c, c->pads, c->num_pads, p);
     }
@@ -238,6 +236,9 @@ struct lavfi *lavfi_create(struct mp_log *log, char *graph_string)
     struct lavfi *c = talloc_zero(NULL, struct lavfi);
     c->log = log;
     c->graph_string = graph_string;
+    c->tmp_frame = av_frame_alloc();
+    if (!c->tmp_frame)
+        abort();
     precreate_graph(c);
     return c;
 }
@@ -246,6 +247,7 @@ void lavfi_destroy(struct lavfi *c)
 {
     free_graph(c);
     clear_data(c);
+    av_frame_free(&c->tmp_frame);
     talloc_free(c);
 }
 
@@ -271,6 +273,10 @@ enum stream_type lavfi_pad_type(struct lavfi_pad *pad)
 void lavfi_set_connected(struct lavfi_pad *pad, bool connected)
 {
     pad->connected = connected;
+    if (!pad->connected) {
+        pad->output_needed = false;
+        drop_pad_data(pad);
+    }
 }
 
 bool lavfi_get_connected(struct lavfi_pad *pad)
@@ -550,38 +556,32 @@ static void read_output_pads(struct lavfi *c)
         if (pad->dir != LAVFI_OUT)
             continue;
 
-        if (!pad->pending_v && !pad->pending_a && !pad->connected)
-            pad->output_needed = pad->connected;
-
         // If disconnected, read and discard everything (passively).
-        if (!pad->output_needed || !pad->connected)
+        if (pad->connected && !pad->output_needed)
             continue;
 
         assert(pad->buffer);
         assert(!pad->pending_v && !pad->pending_a);
 
-        int flags = 0;
-        if (!pad->connected)
-            flags |= AV_BUFFERSINK_FLAG_NO_REQUEST;
-
+        int flags = pad->output_needed ? 0 : AV_BUFFERSINK_FLAG_NO_REQUEST;
         int r = AVERROR_EOF;
         if (!pad->buffer_is_eof)
-            r = av_buffersink_get_frame_flags(pad->buffer, pad->tmp_frame, flags);
+            r = av_buffersink_get_frame_flags(pad->buffer, c->tmp_frame, flags);
         if (r >= 0) {
             pad->output_needed = false;
-            double pts = mp_pts_from_av(pad->tmp_frame->pts, &pad->timebase);
+            double pts = mp_pts_from_av(c->tmp_frame->pts, &pad->timebase);
             if (pad->type == STREAM_AUDIO) {
-                pad->pending_a = mp_audio_from_avframe(pad->tmp_frame);
+                pad->pending_a = mp_audio_from_avframe(c->tmp_frame);
                 if (pad->pending_a)
                     pad->pending_a->pts = pts;
             } else if (pad->type == STREAM_VIDEO) {
-                pad->pending_v = mp_image_from_av_frame(pad->tmp_frame);
+                pad->pending_v = mp_image_from_av_frame(c->tmp_frame);
                 if (pad->pending_v)
                     pad->pending_v->pts = pts;
             } else {
                 assert(0);
             }
-            av_frame_unref(pad->tmp_frame);
+            av_frame_unref(c->tmp_frame);
             if (!pad->pending_v && !pad->pending_a)
                 MP_ERR(c, "could not use filter output\n");
             pad->output_eof = false;
@@ -592,6 +592,7 @@ static void read_output_pads(struct lavfi *c)
             // input pads (via av_buffersrc_get_nb_failed_requests()).
             pad->output_eof = false;
         } else if (r == AVERROR_EOF) {
+            pad->output_needed = false;
             pad->buffer_is_eof = true;
             if (!c->draining_recover_eof && !c->draining_new_format)
                 pad->output_eof = true;
@@ -620,7 +621,7 @@ bool lavfi_process(struct lavfi *c)
     bool all_waiting = true;
     bool any_needs_input = false;
     bool any_needs_output = false;
-    bool all_lavfi_eof = true;
+    bool all_output_eof = true;
     bool all_input_eof = true;
 
     // Determine the graph state
@@ -632,12 +633,12 @@ bool lavfi_process(struct lavfi *c)
             any_needs_input |= pad->input_needed;
             all_input_eof &= pad->input_eof;
         } else if (pad->dir == LAVFI_OUT) {
-            all_lavfi_eof &= pad->buffer_is_eof;
+            all_output_eof &= pad->buffer_is_eof;
             any_needs_output |= pad->output_needed;
         }
     }
 
-    if (all_lavfi_eof && !all_input_eof) {
+    if (all_output_eof && !all_input_eof) {
         free_graph(c);
         precreate_graph(c);
         all_waiting = false;
