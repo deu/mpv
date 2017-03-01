@@ -646,8 +646,9 @@ Video
     :vdpau-copy: copies video back into system RAM (Linux with some GPUs only)
     :vaapi:     requires ``--vo=opengl`` or ``--vo=vaapi`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with Intel GPUs only)
-    :videotoolbox: requires ``--vo=opengl`` (OS X 10.8 and up only)
-    :videotoolbox-copy: copies video back into system RAM (OS X 10.8 and up only)
+    :videotoolbox: requires ``--vo=opengl`` (OS X 10.8 and up),
+                   or ``--vo=opengl-cb`` (iOS 9.0 and up)
+    :videotoolbox-copy: copies video back into system RAM (OS X 10.8 or iOS 9.0 and up)
     :dxva2:     requires ``--vo=opengl`` with ``--opengl-backend=angle`` or
                 ``--opengl-backend=dxinterop`` (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
@@ -788,8 +789,8 @@ Video
     choice of the format can influence performance considerably. On the other
     hand, there doesn't appear to be a good way to detect the best format for
     the given hardware. ``nv12``, the default, works better on modern hardware,
-    while ``uyvy422`` appears to be better for old hardware. ``rgb0`` and
-    ``yuv420p`` also work.
+    while ``uyvy422`` appears to be better for old hardware. ``yuv420p`` also
+    works.
 
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
@@ -2562,6 +2563,15 @@ Demuxer
 
 ``--demuxer-lavf-analyzeduration=<value>``
     Maximum length in seconds to analyze the stream properties.
+
+``--demuxer-lavf-probe-info=<yes|no|auto>``
+    Whether to probe stream information (default: auto). Technically, this
+    controls whether libavformat's ``avformat_find_stream_info()`` function
+    is called. Usually it's safer to call it, but it can also make startup
+    slower.
+
+    The ``auto`` choice (the default) tries to skip this for a few know-safe
+    whitelisted formats, while calling it for everything else.
 
 ``--demuxer-lavf-probescore=<1-100>``
     Minimum required libavformat probe score. Lower values will require
@@ -4402,6 +4412,12 @@ The following video options are currently all specific to ``--vo=opengl`` and
     recommends at least 4.
 
     Windows 8+ with ANGLE only.
+
+``--cocoa-force-dedicated-gpu=<yes|no>``
+    Deactivates the automatic graphics switching and forces the dedicated GPU.
+    (default: no)
+
+    OS X only.
 
 ``--opengl-sw``
     Continue even if a software renderer is detected.

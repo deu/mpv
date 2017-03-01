@@ -76,7 +76,8 @@ struct vo_cocoa_state {
 
     bool cursor_visibility;
     bool cursor_visibility_wanted;
-    bool cursor_needs_set;
+    bool window_is_dragged;
+    id event_monitor_mouseup;
 
     bool embedded; // wether we are embedding in another GUI
 
@@ -352,6 +353,23 @@ static void vo_cocoa_uninit_displaylink(struct vo_cocoa_state *s)
     CVDisplayLinkRelease(s->link);
 }
 
+static void cocoa_add_event_monitor(struct vo *vo)
+{
+    struct vo_cocoa_state *s = vo->cocoa;
+
+    s->event_monitor_mouseup = [NSEvent
+        addLocalMonitorForEventsMatchingMask: NSEventMaskLeftMouseUp
+                                     handler:^NSEvent*(NSEvent* event) {
+            s->window_is_dragged = false;
+            return event;
+        }];
+}
+
+static void cocoa_rm_event_monitor(struct vo *vo)
+{
+    [NSEvent removeMonitor:vo->cocoa->event_monitor_mouseup];
+}
+
 void vo_cocoa_init(struct vo *vo)
 {
     struct vo_cocoa_state *s = talloc_zero(NULL, struct vo_cocoa_state);
@@ -372,29 +390,15 @@ void vo_cocoa_init(struct vo *vo)
     vo_cocoa_init_displaylink(vo);
     cocoa_init_light_sensor(vo);
     cocoa_add_screen_reconfiguration_observer(vo);
+    cocoa_add_event_monitor(vo);
+
     if (!s->embedded) {
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         set_application_icon(NSApp);
     }
 }
 
-static void vo_cocoa_update_cursor(struct vo *vo, bool forceVisible)
-{
-    struct vo_cocoa_state *s = vo->cocoa;
-
-    if (s->embedded)
-        return;
-
-    if ((forceVisible || s->cursor_visibility_wanted) && !s->cursor_visibility) {
-        [NSCursor unhide];
-        s->cursor_visibility = YES;
-    } else if (!s->cursor_visibility_wanted && s->cursor_visibility) {
-        [NSCursor hide];
-        s->cursor_visibility = NO;
-    }
-}
-
-static int vo_cocoa_set_cursor_visibility(struct vo *vo, bool *visible)
+static int vo_cocoa_update_cursor_visibility(struct vo *vo, bool forceVisible)
 {
     struct vo_cocoa_state *s = vo->cocoa;
 
@@ -403,14 +407,16 @@ static int vo_cocoa_set_cursor_visibility(struct vo *vo, bool *visible)
 
     if (s->view) {
         MpvEventsView *v = (MpvEventsView *) s->view;
-        s->cursor_visibility_wanted = !(!*visible && [v canHideCursor]);
-        vo_cocoa_update_cursor(vo, false);
-    } else {
-        s->cursor_visibility_wanted = *visible;
-        s->cursor_needs_set = true;
-    }
-    *visible = s->cursor_visibility;
+        bool visibility = !(!s->cursor_visibility_wanted && [v canHideCursor]);
 
+        if ((forceVisible || visibility) && !s->cursor_visibility) {
+            [NSCursor unhide];
+            s->cursor_visibility = YES;
+        } else if (!visibility && s->cursor_visibility) {
+            [NSCursor hide];
+            s->cursor_visibility = NO;
+        }
+    }
     return VO_TRUE;
 }
 
@@ -428,7 +434,7 @@ void vo_cocoa_uninit(struct vo *vo)
     run_on_main_thread(vo, ^{
         // if using --wid + libmpv there's no window to release
         if (s->window) {
-            vo_cocoa_update_cursor(vo, true);
+            vo_cocoa_update_cursor_visibility(vo, true);
             [s->window setDelegate:nil];
             [s->window close];
         }
@@ -440,6 +446,7 @@ void vo_cocoa_uninit(struct vo *vo)
         vo_cocoa_signal_swap(s);
         cocoa_uninit_light_sensor(s);
         cocoa_rm_screen_reconfiguration_observer(vo);
+        cocoa_rm_event_monitor(vo);
 
         [s->nsgl_ctx release];
         CGLReleaseContext(s->cgl_ctx);
@@ -606,6 +613,8 @@ static void create_ui(struct vo *vo, struct mp_rect *win, int geo_flags)
         [s->window setRestorable:NO];
         [s->window makeMainWindow];
         [s->window makeKeyAndOrderFront:nil];
+        if (!opts->fullscreen)
+            [s->window setMovableByWindowBackground:YES];
         [NSApp activateIgnoringOtherApps:YES];
     }
 }
@@ -872,7 +881,8 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
         return VO_TRUE;
     }
     case VOCTRL_SET_CURSOR_VISIBILITY:
-        return vo_cocoa_set_cursor_visibility(vo, arg);
+        s->cursor_visibility_wanted = *(bool *)arg;
+        return vo_cocoa_update_cursor_visibility(vo, false);
     case VOCTRL_UPDATE_WINDOW_TITLE: {
         talloc_free(s->window_title);
         s->window_title = talloc_strdup(s, (char *) arg);
@@ -958,8 +968,9 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 
 - (void)signalMouseMovement:(NSPoint)point
 {
-    mp_input_set_mouse_pos(self.vout->input_ctx, point.x, point.y);
     [self recalcMovableByWindowBackground:point];
+    if (!self.vout->cocoa->window_is_dragged)
+        mp_input_set_mouse_pos(self.vout->input_ctx, point.x, point.y);
 }
 
 - (void)putKeyEvent:(NSEvent*)event
@@ -1007,6 +1018,10 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 - (void)windowDidChangeScreen:(NSNotification *)notification
 {
     vo_cocoa_update_screen_info(self.vout);
+}
+
+- (void)windowDidChangePhysicalScreen
+{
     vo_cocoa_update_displaylink(self.vout);
     flag_events(self.vout, VO_EVENT_WIN_STATE);
 }
@@ -1046,18 +1061,12 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 
 - (void)windowDidResignKey:(NSNotification *)notification
 {
-    vo_cocoa_update_cursor(self.vout, true);
+    vo_cocoa_update_cursor_visibility(self.vout, true);
 }
 
 - (void)windowDidBecomeKey:(NSNotification *)notification
 {
-    struct vo_cocoa_state *s = self.vout->cocoa;
-    if (s->cursor_needs_set) {
-        vo_cocoa_set_cursor_visibility(self.vout, &s->cursor_visibility_wanted);
-        s->cursor_needs_set = false;
-    } else {
-        vo_cocoa_update_cursor(self.vout, false);
-    }
+    vo_cocoa_update_cursor_visibility(self.vout, false);
 }
 
 - (void)windowDidMiniaturize:(NSNotification *)notification
@@ -1068,6 +1077,11 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
 - (void)windowDidDeminiaturize:(NSNotification *)notification
 {
     flag_events(self.vout, VO_EVENT_WIN_STATE);
+}
+
+- (void)windowWillMove:(NSNotification *)notification
+{
+    self.vout->cocoa->window_is_dragged = true;
 }
 
 @end

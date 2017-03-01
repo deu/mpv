@@ -177,6 +177,17 @@ void mp_image_steal_data(struct mp_image *dst, struct mp_image *src)
     talloc_free(src);
 }
 
+// Unref most data buffer (and clear the data array), but leave other fields
+// allocated. In particular, mp_image.hwctx is preserved.
+void mp_image_unref_data(struct mp_image *img)
+{
+    for (int n = 0; n < MP_MAX_PLANES; n++) {
+        img->planes[n] = NULL;
+        img->stride[n] = 0;
+        av_buffer_unref(&img->bufs[n]);
+    }
+}
+
 // Return a new reference to img. The returned reference is owned by the caller,
 // while img is left untouched.
 struct mp_image *mp_image_new_ref(struct mp_image *img)
@@ -603,7 +614,8 @@ void mp_image_set_attributes(struct mp_image *image,
 // the colorspace as implied by the pixel format.
 void mp_image_params_guess_csp(struct mp_image_params *params)
 {
-    struct mp_imgfmt_desc fmt = mp_imgfmt_get_desc(params->imgfmt);
+    int imgfmt = params->hw_subfmt ? params->hw_subfmt : params->imgfmt;
+    struct mp_imgfmt_desc fmt = mp_imgfmt_get_desc(imgfmt);
     if (!fmt.id)
         return;
     if (fmt.flags & MP_IMGFLAG_YUV) {

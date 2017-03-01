@@ -354,7 +354,7 @@ int mp_on_set_option(void *ctx, struct m_config_option *co, void *data, int flag
     bstr bname = bstr0(name);
     char tmp[50];
     if (bstr_eatend0(&bname, "*")) {
-        snprintf(tmp, sizeof(name), "%.*s", BSTR_P(bname));
+        snprintf(tmp, sizeof(tmp), "%.*s", BSTR_P(bname));
         name = tmp;
     }
 
@@ -2214,7 +2214,7 @@ static int get_track_entry(int item, int action, void *arg, void *ctx)
     if (track->d_audio)
         decoder_desc = track->d_audio->decoder_desc;
 
-    bool has_rg = track->stream->codec->replaygain_data;
+    bool has_rg = track->stream && track->stream->codec->replaygain_data;
     struct replaygain_data rg = has_rg ? *track->stream->codec->replaygain_data
                                        : (struct replaygain_data){0};
 

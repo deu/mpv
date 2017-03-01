@@ -1121,11 +1121,13 @@ static int audio_wait(struct ao *ao, pthread_mutex_t *lock)
             return r;
 
         unsigned short revents;
-        snd_pcm_poll_descriptors_revents(p->alsa, fds, num_fds, &revents);
+        err = snd_pcm_poll_descriptors_revents(p->alsa, fds, num_fds, &revents);
         CHECK_ALSA_ERROR("cannot read poll events");
 
-        if (revents & POLLERR)
+        if (revents & POLLERR)  {
+            check_device_present(ao, -ENODEV);
             return -1;
+        }
         if (revents & POLLOUT)
             return 0;
     }

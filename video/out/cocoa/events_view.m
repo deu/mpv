@@ -86,7 +86,19 @@
 
 - (BOOL)containsMouseLocation
 {
-    NSRect vF  = [[self.window screen] visibleFrame];
+    CGFloat topMargin = 0.0;
+    CGFloat menuBarHeight = [[NSApp mainMenu] menuBarHeight];
+
+    // menuBarHeight is 0 when menu bar is hidden in fullscreen
+    // 1pt to compensate of the black line beneath the menu bar
+    if ([self.adapter isInFullScreenMode] && menuBarHeight > 0) {
+        NSRect tr = [NSWindow frameRectForContentRect:CGRectZero
+                                            styleMask:NSWindowStyleMaskTitled];
+        topMargin = tr.size.height + 1 + menuBarHeight;
+    }
+
+    NSRect vF  = [[self.window screen] frame];
+    vF.size.height -= topMargin;
     NSRect vFW = [self.window convertRectFromScreen:vF];
     NSRect vFV = [self convertRect:vFW fromView:nil];
     NSPoint pt = [self convertPoint:[self mouseLocation] fromView:nil];
@@ -266,7 +278,8 @@
         [self preciseScroll:event];
     } else {
         const int modifiers = [event modifierFlags];
-        const int mpkey = [event deltaY] > 0 ? MP_MOUSE_BTN3 : MP_MOUSE_BTN4;
+        const int mpkey = ([event deltaX] + [event deltaY]) > 0 ?
+                            MP_MOUSE_BTN3 : MP_MOUSE_BTN4;
         [self.adapter putKey:mpkey withModifiers:modifiers];
     }
 }

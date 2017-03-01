@@ -663,8 +663,10 @@ video_output_features = [
         'groups': [ 'gl' ],
         'func': check_statement(['EGL/egl.h'],
                                 'eglCreateWindowSurface(0, 0, 0, 0)',
-                                cflags="-DGL_APICALL= -DEGLAPI= -DANGLE_NO_ALIASES -DANGLE_EXPORT=",
-                                lib=['EGL', 'GLESv2', 'dxguid', 'd3d9', 'gdi32', 'stdc++'])
+                                cflags=['-DGL_APICALL=', '-DEGLAPI=',
+                                        '-DANGLE_NO_ALIASES', '-DANGLE_EXPORT='],
+                                lib=['EGL', 'GLESv2', 'dxguid', 'd3d9',
+                                     'gdi32', 'stdc++'])
     } , {
         'name': '--vdpau',
         'desc': 'VDPAU acceleration',
@@ -795,7 +797,7 @@ hwaccel_features = [
         'name': '--vaapi-hwaccel',
         'desc': 'libavcodec VAAPI hwaccel',
         'deps': [ 'vaapi' ],
-        'func': check_headers('libavcodec/vaapi.h', use='libav'),
+        'func': check_true,
     }, {
         'name': '--vaapi-hwaccel-new',
         'desc': 'libavcodec VAAPI hwaccel (new)',
@@ -835,11 +837,9 @@ hwaccel_features = [
                                 use='libav'),
     }, {
         'name': '--d3d-hwaccel',
-        'desc': 'libavcodec DXVA2 and D3D11VA hwaccel',
+        'desc': 'DXVA2 and D3D11VA hwaccel',
         'deps': [ 'win32' ],
-        'func': compose_checks(
-                    check_headers('libavcodec/dxva2.h',  use='libav'),
-                    check_headers('libavcodec/d3d11va.h',  use='libav')),
+        'func': check_true,
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',

@@ -56,7 +56,8 @@
 // mp_wait_events() was called.
 void mp_wait_events(struct MPContext *mpctx)
 {
-    if (mpctx->sleeptime > 0)
+    bool sleeping = mpctx->sleeptime > 0;
+    if (sleeping)
         MP_STATS(mpctx, "start sleep");
 
     mpctx->in_dispatch = true;
@@ -66,7 +67,7 @@ void mp_wait_events(struct MPContext *mpctx)
     mpctx->in_dispatch = false;
     mpctx->sleeptime = INFINITY;
 
-    if (mpctx->sleeptime > 0)
+    if (sleeping)
         MP_STATS(mpctx, "end sleep");
 }
 
@@ -180,8 +181,8 @@ void update_screensaver_state(struct MPContext *mpctx)
 
     bool saver_state = mpctx->opts->pause || !mpctx->opts->stop_screensaver ||
                        !mpctx->playback_initialized;
-    vo_control(mpctx->video_out, saver_state ? VOCTRL_RESTORE_SCREENSAVER
-                                             : VOCTRL_KILL_SCREENSAVER, NULL);
+    vo_control_async(mpctx->video_out, saver_state ? VOCTRL_RESTORE_SCREENSAVER
+                                                   : VOCTRL_KILL_SCREENSAVER, NULL);
 }
 
 void add_step_frame(struct MPContext *mpctx, int dir)
@@ -586,7 +587,6 @@ static void handle_osd_redraw(struct MPContext *mpctx)
     if (!want_redraw)
         return;
     vo_redraw(mpctx->video_out);
-    mp_wakeup_core(mpctx);
 }
 
 static void handle_pause_on_low_cache(struct MPContext *mpctx)
@@ -1108,9 +1108,6 @@ void run_playloop(struct MPContext *mpctx)
     handle_keep_open(mpctx);
 
     handle_sstep(mpctx);
-
-    if (mpctx->stop_play == AT_END_OF_FILE && mpctx->seek.type)
-        mpctx->stop_play = KEEP_PLAYING;
 
     if (mpctx->stop_play)
         return;
