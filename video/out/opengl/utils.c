@@ -100,15 +100,15 @@ void gl_upload_tex(GL *gl, GLenum target, GLenum format, GLenum type,
     gl->PixelStorei(GL_UNPACK_ALIGNMENT, 4);
 }
 
-mp_image_t *gl_read_window_contents(GL *gl, int w, int h)
+mp_image_t *gl_read_fbo_contents(GL *gl, int fbo, int w, int h)
 {
     if (gl->es)
         return NULL; // ES can't read from front buffer
     mp_image_t *image = mp_image_alloc(IMGFMT_RGB24, w, h);
     if (!image)
         return NULL;
-    gl->BindFramebuffer(GL_FRAMEBUFFER, gl->main_fb);
-    GLenum obj = gl->main_fb ? GL_COLOR_ATTACHMENT0 : GL_FRONT;
+    gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
+    GLenum obj = fbo ? GL_COLOR_ATTACHMENT0 : GL_FRONT;
     gl->PixelStorei(GL_PACK_ALIGNMENT, 1);
     gl->ReadBuffer(obj);
     //flip image while reading (and also avoid stride-related trouble)
@@ -1061,7 +1061,7 @@ void gl_sc_generate(struct gl_shader_cache *sc)
 
 // How many samples to keep around, for the sake of average and peak
 // calculations. This corresponds to a few seconds (exact time variable)
-#define QUERY_SAMPLE_SIZE 256
+#define QUERY_SAMPLE_SIZE 256u
 
 struct gl_timer {
     GL *gl;
@@ -1248,4 +1248,50 @@ void gl_pbo_upload_uninit(struct gl_pbo_upload *pbo)
     if (pbo->gl)
         pbo->gl->DeleteBuffers(NUM_PBO_BUFFERS, &pbo->buffers[0]);
     *pbo = (struct gl_pbo_upload){0};
+}
+
+// The intention is to return the actual depth of any fixed point 16 bit
+// textures. (Actually tests only 1 format - hope that is good enough.)
+int gl_determine_16bit_tex_depth(GL *gl)
+{
+    const struct gl_format *fmt = gl_find_unorm_format(gl, 2, 1);
+    if (!gl->GetTexLevelParameteriv || !fmt)
+        return -1;
+
+    GLuint tex;
+    gl->GenTextures(1, &tex);
+    gl->BindTexture(GL_TEXTURE_2D, tex);
+    gl->TexImage2D(GL_TEXTURE_2D, 0, fmt->internal_format, 64, 64, 0,
+                   fmt->format, fmt->type, NULL);
+    GLenum pname = 0;
+    switch (fmt->format) {
+    case GL_RED:        pname = GL_TEXTURE_RED_SIZE; break;
+    case GL_LUMINANCE:  pname = GL_TEXTURE_LUMINANCE_SIZE; break;
+    }
+    GLint param = -1;
+    if (pname)
+        gl->GetTexLevelParameteriv(GL_TEXTURE_2D, 0, pname, &param);
+    gl->DeleteTextures(1, &tex);
+    return param;
+}
+
+int gl_get_fb_depth(GL *gl, int fbo)
+{
+    if ((gl->es < 300 && !gl->version) || !(gl->mpgl_caps & MPGL_CAP_FB))
+        return -1;
+
+    gl->BindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    GLenum obj = gl->version ? GL_BACK_LEFT : GL_BACK;
+    if (fbo)
+        obj = GL_COLOR_ATTACHMENT0;
+
+    GLint depth_g = -1;
+
+    gl->GetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, obj,
+                            GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &depth_g);
+
+    gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    return depth_g > 0 ? depth_g : -1;
 }

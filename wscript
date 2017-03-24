@@ -72,7 +72,7 @@ build_options = [
         'desc': 'C plugins',
         'deps': [ 'libdl' ],
         'default': 'disable',
-        'func': check_cc(linkflags=['-Wl,-export-dynamic']),
+        'func': check_cc(linkflags=['-rdynamic']),
     }, {
         'name': 'dlopen',
         'desc': 'dlopen',
@@ -329,19 +329,23 @@ iconv support use --disable-iconv.",
         'name': '--libbluray',
         'desc': 'Bluray support',
         'func': check_pkg_config('libbluray', '>= 0.3.0'),
+        #'default': 'disable',
     }, {
         'name': '--dvdread',
         'desc': 'dvdread support',
         'func': check_pkg_config('dvdread', '>= 4.1.0'),
+        'default': 'disable',
     }, {
         'name': '--dvdnav',
         'desc': 'dvdnav support',
         'deps': [ 'dvdread' ],
         'func': check_pkg_config('dvdnav', '>= 4.2.0'),
+        'default': 'disable',
     }, {
         'name': '--cdda',
         'desc': 'cdda support (libcdio)',
         'func': check_pkg_config('libcdio_paranoia'),
+        'default': 'disable',
     }, {
         'name': '--uchardet',
         'desc': 'uchardet support',
@@ -828,10 +832,27 @@ hwaccel_features = [
         'desc': 'Videotoolbox with OpenGL',
         'deps': [ 'gl-cocoa', 'videotoolbox-hwaccel' ],
         'func': check_true
-    } , {
+    }, {
         'name': '--vdpau-hwaccel',
         'desc': 'libavcodec VDPAU hwaccel',
         'deps': [ 'vdpau' ],
+        'func': check_true,
+    }, {
+        'name': '--vdpau-hwaccel-new',
+        'desc': 'libavcodec VDPAU hwaccel (new)',
+        'deps': [ 'vdpau-hwaccel' ],
+        'func': check_statement('libavcodec/version.h',
+            'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 37, 1) && '
+            '       LIBAVCODEC_VERSION_MICRO < 100) ||'
+            '      (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 85, 101) && '
+            '       LIBAVCODEC_VERSION_MICRO >= 100)'
+            '      ? 1 : -1]',
+            use='libav'),
+    }, {
+        'name': '--vdpau-hwaccel-old',
+        'desc': 'libavcodec VDPAU hwaccel (old)',
+        'deps': [ 'vdpau' ],
+        'deps_neg': [ 'vdpau-hwaccel-new' ],
         'func': check_statement('libavcodec/vdpau.h',
                                 'av_vdpau_bind_context(0,0,0,AV_HWACCEL_FLAG_ALLOW_HIGH_DEPTH)',
                                 use='libav'),
@@ -1033,7 +1054,7 @@ def configure(ctx):
         # not linked against libmpv. The C plugin needs to be able to pick
         # up the libmpv symbols from the binary. We still restrict the set
         # of exported symbols via mpv.def.
-        ctx.env.LINKFLAGS += ['-Wl,-export-dynamic']
+        ctx.env.LINKFLAGS += ['-rdynamic']
 
     ctx.store_dependencies_lists()
 

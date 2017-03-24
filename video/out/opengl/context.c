@@ -47,6 +47,7 @@ extern const struct mpgl_driver mpgl_driver_angle_es2;
 extern const struct mpgl_driver mpgl_driver_dxinterop;
 extern const struct mpgl_driver mpgl_driver_rpi;
 extern const struct mpgl_driver mpgl_driver_mali;
+extern const struct mpgl_driver mpgl_driver_vdpauglx;
 
 static const struct mpgl_driver *const backends[] = {
 #if HAVE_RPI
@@ -82,6 +83,9 @@ static const struct mpgl_driver *const backends[] = {
 #endif
 #if HAVE_MALI_FBDEV
     &mpgl_driver_mali,
+#endif
+#if HAVE_VDPAU_GL_X11
+    &mpgl_driver_vdpauglx,
 #endif
 };
 
@@ -160,6 +164,7 @@ static MPGLContext *init_backend(struct vo *vo, const struct mpgl_driver *driver
         .vo = vo,
         .global = vo->global,
         .driver = driver,
+        .log = vo->log,
     };
     if (probing)
         vo_flags |= VOFLAG_PROBING;
@@ -233,6 +238,12 @@ int mpgl_reconfig_window(struct MPGLContext *ctx)
 int mpgl_control(struct MPGLContext *ctx, int *events, int request, void *arg)
 {
     return ctx->driver->control(ctx, events, request, arg);
+}
+
+void mpgl_start_frame(struct MPGLContext *ctx)
+{
+    if (ctx->driver->start_frame)
+        ctx->driver->start_frame(ctx);
 }
 
 void mpgl_swap_buffers(struct MPGLContext *ctx)

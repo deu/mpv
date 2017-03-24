@@ -159,10 +159,10 @@ List of Input Commands
 ``multiply <property> <factor>``
     Multiplies the value of a property with the numeric factor.
 
-``screenshot [subtitles|video|window|- [single|each-frame]]``
+``screenshot [subtitles|video|window|single|each-frame]``
     Take a screenshot.
 
-    First argument:
+    Multiple flags are available (some can be combined with ``+``):
 
     <subtitles> (default)
         Save the video image, in its original resolution, and with subtitles.
@@ -181,6 +181,10 @@ List of Input Commands
         this mode - or you might receive duplicate images in cases when a
         frame was dropped. This flag can be combined with the other flags,
         e.g. ``video+each-frame``.
+
+    Older mpv versions required passing ``single`` and ``each-frame`` as
+    second argument (and did not have flags). This syntax is still understood,
+    but deprecated and might be removed in the future.
 
 ``screenshot-to-file "<filename>" [subtitles|video|window]``
     Take a screenshot and save it to a given file. The format of the file will
@@ -673,11 +677,12 @@ Input Commands that are Possibly Subject to Change
 ``screenshot-raw [subtitles|video|window]``
     Return a screenshot in memory. This can be used only through the client
     API. The MPV_FORMAT_NODE_MAP returned by this command has the ``w``, ``h``,
-    ``stride`` fields set to obvious contents. A ``format`` field is set to
+    ``stride`` fields set to obvious contents. The ``format`` field is set to
     ``bgr0`` by default. This format is organized as ``B8G8R8X8`` (where ``B``
-    is the LSB). The contents of the padding ``X`` is undefined. The ``data``
+    is the LSB). The contents of the padding ``X`` are undefined. The ``data``
     field is of type MPV_FORMAT_BYTE_ARRAY with the actual image data. The image
-    is freed as soon as the result node is freed.
+    is freed as soon as the result mpv_node is freed. As usual with client API
+    semantics, you are not allowed to write to the image data.
 
 ``vf-command "<label>" "<cmd>" "<args>"``
     Send a command to the filter with the given ``<label>``. Use ``all`` to send

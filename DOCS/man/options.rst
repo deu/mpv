@@ -791,6 +791,8 @@ Video
     the given hardware. ``nv12``, the default, works better on modern hardware,
     while ``uyvy422`` appears to be better for old hardware. ``yuv420p`` also
     works.
+    Since mpv 0.25.0, ``no`` is an accepted value, which lets the decoder pick
+    the format on newer FFmpeg versions (will use ``nv12`` on older versions).
 
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
@@ -3117,12 +3119,8 @@ Screenshot
     Available choices:
 
     :png:       PNG
-    :ppm:       PPM
-    :pgm:       PGM
-    :pgmyuv:    PGM with YV12 pixel format
-    :tga:       TARGA
     :jpg:       JPEG (default)
-    :jpeg:      JPEG (same as jpg, but with .jpeg file ending)
+    :jpeg:      JPEG (alias for jpg)
 
 ``--screenshot-tag-colorspace=<yes|no>``
     Tag screenshots with the appropriate colorspace.
@@ -4454,12 +4452,19 @@ The following video options are currently all specific to ``--vo=opengl`` and
         X11/EGL
     mali-fbdev
         Direct fbdev/EGL support on some ARM/MALI devices.
+    vdpauglx
+        Use vdpau presentation with GLX as backing. Experimental use only.
+        Using this will have no advantage (other than additional bugs or
+        performance problems), and is for doing experiments only. Will not
+        be used automatically.
 
 ``--opengl-es=<mode>``
     Select whether to use GLES:
 
     yes
         Try to prefer ES over Desktop GL
+    force2
+        Try to request a ES 2.0 context (the driver might ignore this)
     no
         Try to prefer desktop GL over ES
     auto
