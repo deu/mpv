@@ -186,6 +186,12 @@ List of Input Commands
     second argument (and did not have flags). This syntax is still understood,
     but deprecated and might be removed in the future.
 
+    Setting the ``async`` flag will make encoding and writing the actual image
+    file asynchronous in most cases. (``each-frame`` mode ignores this flag
+    currently.) Requesting async screenshots too early or too often could lead
+    to the same filenames being chosen, and overwriting each others in undefined
+    order.
+
 ``screenshot-to-file "<filename>" [subtitles|video|window]``
     Take a screenshot and save it to a given file. The format of the file will
     be guessed by the extension (and ``--screenshot-format`` is ignored - the
@@ -197,6 +203,9 @@ List of Input Commands
 
     Like all input command parameters, the filename is subject to property
     expansion as described in `Property Expansion`_.
+
+    The ``async`` flag has an effect on this command (see ``screenshot``
+    command).
 
 ``playlist-next [weak|force]``
     Go to the next entry on the playlist.
@@ -357,6 +366,11 @@ List of Input Commands
     <level>
         The minimum OSD level to show the text at (see ``--osd-level``).
 
+``expand-text "<string>"``
+    Property-expand the argument and return the expanded string. This can be
+    used only through the client API or from a script using
+    ``mp.command_native``. (see `Property Expansion`_).
+
 ``show-progress``
     Show the progress bar, the elapsed time and the total duration of the file
     on the OSD.
@@ -452,6 +466,10 @@ Input Commands that are Possibly Subject to Change
         (If several filters are passed to the command, this is done for
         each filter.)
 
+        A special variant is combining this with labels, and using ``@name``
+        without filter name and parameters as filter entry. This toggles the
+        enable/disable flag.
+
     del
         Remove the given filters from the video chain. Unlike in the other
         cases, the second parameter is a comma separated list of filter names
@@ -486,6 +504,16 @@ Input Commands that are Possibly Subject to Change
         - ``a vf set flip`` turn video upside-down on the ``a`` key
         - ``b vf set ""`` remove all video filters on ``b``
         - ``c vf toggle lavfi=gradfun`` toggle debanding on ``c``
+
+    .. admonition:: Example how to toggle disabled filters at runtime
+
+        - Add something ``vf-add=@deband:!lavfi=[gradfun]`` to ``mpv.conf``. The
+          ``@deband:`` is the label, and ``deband`` is an arbitrary, user-given
+          name for this filter entry. The ``!`` before the filter name disables
+          the filter by default. Everything after this is the normal filter name
+          and the filter parameters.
+        - Add ``a vf toggle @deband`` to ``input.conf``. This toggles the
+          "disabled" flag for the filter identified with ``deband``.
 
 ``cycle-values ["!reverse"] <property> "<value1>" "<value2>" ...``
     Cycle through a list of values. Each invocation of the command will set the
@@ -787,8 +815,10 @@ Input Command Prefixes
 These prefixes are placed between key name and the actual command. Multiple
 prefixes can be specified. They are separated by whitespace.
 
-``osd-auto`` (default)
-    Use the default behavior for this command.
+``osd-auto``
+    Use the default behavior for this command. This is the default for
+    ``input.conf`` commands. Some libmpv/scripting/IPC APIs do not use this as
+    default, but use ``no-osd`` instead.
 ``no-osd``
     Do not use any OSD for this command.
 ``osd-bar``
@@ -802,11 +832,20 @@ prefixes can be specified. They are separated by whitespace.
     Combine osd-bar and osd-msg.
 ``raw``
     Do not expand properties in string arguments. (Like ``"${property-name}"``.)
-``expand-properties`` (default)
+    This is the default for some libmpv/scripting/IPC APIs.
+``expand-properties``
     All string arguments are expanded as described in `Property Expansion`_.
+    This is the default for ``input.conf`` commands.
 ``repeatable``
     For some commands, keeping a key pressed doesn't run the command repeatedly.
     This prefix forces enabling key repeat in any case.
+``async``
+    Allow asynchronous execution (if possible). Note that only a few commands
+    will support this (usually this is explicitly documented). Some commands
+    are asynchronous by default (or rather, their effects might manifest
+    after completion of the command). The semantics of this flag might change
+    in the future. Set it only if you don't rely on the effects of this command
+    being fully realized when it returns.
 
 All of the osd prefixes are still overridden by the global ``--osd-level``
 settings.
@@ -1223,6 +1262,17 @@ Property list
 ``demuxer-cache-idle``
     Returns ``yes`` if the demuxer is idle, which means the demuxer cache is
     filled to the requested amount, and is currently not reading more data.
+
+``demuxer-via-network``
+    Returns ``yes`` if the stream demuxed via the main demuxer is most likely
+    played via network. What constitutes "network" is not always clear, might
+    be used for other types of untrusted streams, could be wrong in certain
+    cases, and its definition might be changing. Also, external files (like
+    separate audio files or streams) do not influence the value of this
+    property (currently).
+
+``demuxer-start-time`` (R)
+    Returns the start time reported by the demuxer in fractional seconds.
 
 ``paused-for-cache``
     Returns ``yes`` when playback is paused because of waiting for the cache.
@@ -1776,6 +1826,7 @@ Property list
             MPV_FORMAT_NODE_MAP (for each filter entry)
                 "name"      MPV_FORMAT_STRING
                 "label"     MPV_FORMAT_STRING [optional]
+                "enabled"   MPV_FORMAT_FLAG [optional]
                 "params"    MPV_FORMAT_NODE_MAP [optional]
                     "key"   MPV_FORMAT_STRING
                     "value" MPV_FORMAT_STRING

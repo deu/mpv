@@ -124,7 +124,6 @@ def build(ctx):
         ( "audio/decode/dec_audio.c" ),
         ( "audio/filter/af.c" ),
         ( "audio/filter/af_channels.c" ),
-        ( "audio/filter/af_drc.c" ),
         ( "audio/filter/af_equalizer.c" ),
         ( "audio/filter/af_format.c" ),
         ( "audio/filter/af_lavcac3enc.c" ),
@@ -216,6 +215,7 @@ def build(ctx):
         ( "misc/node.c" ),
         ( "misc/ring.c" ),
         ( "misc/rendezvous.c" ),
+        ( "misc/thread_pool.c" ),
 
         ## Options
         ( "options/m_config.c" ),
@@ -260,8 +260,8 @@ def build(ctx):
         ( "stream/stream_bluray.c",              "libbluray" ),
         ( "stream/stream_cdda.c",                "cdda" ),
         ( "stream/stream_dvb.c",                 "dvbin" ),
-        ( "stream/stream_dvd.c",                 "dvdread" ),
-        ( "stream/stream_dvd_common.c",          "dvdread" ),
+        ( "stream/stream_dvd.c",                 "dvdread-common" ),
+        ( "stream/stream_dvd_common.c",          "dvdread-common" ),
         ( "stream/stream_dvdnav.c",              "dvdnav" ),
         ( "stream/stream_edl.c" ),
         ( "stream/stream_file.c" ),
@@ -289,6 +289,7 @@ def build(ctx):
         ( "sub/osd_libass.c",                    "libass-osd" ),
         ( "sub/sd_ass.c",                        "libass" ),
         ( "sub/sd_lavc.c" ),
+        ( "sub/filter_sdh.c" ),
 
         ## Video
         ( "video/csputils.c" ),
@@ -309,8 +310,6 @@ def build(ctx):
         ( "video/decode/hw_cuda.c",              "cuda-hwaccel" ),
         ( "video/decode/hw_dxva2.c",             "d3d-hwaccel" ),
         ( "video/decode/hw_d3d11va.c",           "d3d-hwaccel" ),
-        ( "video/decode/hw_vaapi_old.c",         "vaapi-hwaccel-old" ),
-        ( "video/decode/hw_vdpau.c",             "vdpau-hwaccel-old" ),
         ( "video/decode/hw_videotoolbox.c",      "videotoolbox-hwaccel" ),
         ( "video/decode/vd_lavc.c" ),
         ( "video/filter/refqueue.c" ),
@@ -399,6 +398,7 @@ def build(ctx):
         ( "video/out/vo_xv.c",                   "xv" ),
         ( "video/out/w32_common.c",              "win32" ),
         ( "video/out/win32/displayconfig.c",     "win32" ),
+        ( "video/out/win32/droptarget.c",        "win32" ),
         ( "video/out/win32/exclusive_hack.c",    "gl-win32" ),
         ( "video/out/wayland_common.c",          "wayland" ),
         ( "video/out/wayland/buffer.c",          "wayland" ),
@@ -417,6 +417,7 @@ def build(ctx):
         ( "osdep/ar/HIDRemote.m",                "apple-remote" ),
         ( "osdep/macosx_application.m",          "cocoa" ),
         ( "osdep/macosx_events.m",               "cocoa" ),
+        ( "osdep/macosx_touchbar.m",             "macos-touchbar" ),
         ( "osdep/semaphore_osx.c" ),
         ( "osdep/subprocess.c" ),
         ( "osdep/subprocess-posix.c",            "posix-spawn" ),
@@ -543,6 +544,7 @@ def build(ctx):
                 "features": features,
                 "export_symbols_def": "libmpv/mpv.def",
                 "install_path": ctx.env.LIBDIR,
+                "install_path_implib": ctx.env.LIBDIR,
             }
 
             if shared and ctx.dependency_satisfied('android'):
@@ -554,6 +556,9 @@ def build(ctx):
             else:
                 # for all other configurations we want SONAME to be used
                 libmpv_kwargs["vnum"] = libversion
+
+            if shared and ctx.env.DEST_OS == 'win32':
+                libmpv_kwargs["install_path"] = ctx.env.BINDIR
 
             ctx(**libmpv_kwargs)
 

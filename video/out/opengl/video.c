@@ -389,7 +389,7 @@ const struct m_sub_options gl_video_conf = {
         OPT_SUBSTRUCT("", icc_opts, mp_icc_conf, 0),
         OPT_CHOICE("opengl-early-flush", early_flush, 0,
                    ({"no", 0}, {"yes", 1}, {"auto", -1})),
-
+        OPT_STRING("opengl-shader-cache-dir", shader_cache_dir, 0),
         {0}
     },
     .size = sizeof(struct gl_video_opts),
@@ -1224,11 +1224,19 @@ static void load_shader(struct gl_video *p, struct bstr body)
     gl_sc_hadd_bstr(p->sc, body);
     gl_sc_uniform_f(p->sc, "random", (double)av_lfg_get(&p->lfg) / UINT32_MAX);
     gl_sc_uniform_f(p->sc, "frame", p->frames_uploaded);
-    gl_sc_uniform_vec2(p->sc, "image_size", (GLfloat[]){p->image_params.w,
-                                                        p->image_params.h});
+    gl_sc_uniform_vec2(p->sc, "input_size",
+                       (GLfloat[]){(p->src_rect.x1 - p->src_rect.x0) *
+                                   p->texture_offset.m[0][0],
+                                   (p->src_rect.y1 - p->src_rect.y0) *
+                                   p->texture_offset.m[1][1]});
     gl_sc_uniform_vec2(p->sc, "target_size",
                        (GLfloat[]){p->dst_rect.x1 - p->dst_rect.x0,
                                    p->dst_rect.y1 - p->dst_rect.y0});
+    gl_sc_uniform_vec2(p->sc, "tex_offset",
+                       (GLfloat[]){p->src_rect.x0 * p->texture_offset.m[0][0] +
+                                   p->texture_offset.t[0],
+                                   p->src_rect.y0 * p->texture_offset.m[1][1] +
+                                   p->texture_offset.t[1]});
 }
 
 // Semantic equality
@@ -1508,6 +1516,12 @@ static bool szexp_lookup(void *priv, struct bstr var, float size[2])
 {
     struct szexp_ctx *ctx = priv;
     struct gl_video *p = ctx->p;
+
+    if (bstr_equals0(var, "NATIVE_CROPPED")) {
+        size[0] = (p->src_rect.x1 - p->src_rect.x0) * p->texture_offset.m[0][0];
+        size[1] = (p->src_rect.y1 - p->src_rect.y0) * p->texture_offset.m[1][1];
+        return true;
+    }
 
     // The size of OUTPUT is determined. It could be useful for certain
     // user shaders to skip passes.
@@ -3056,6 +3070,7 @@ static void check_gl_features(struct gl_video *p)
             .dither_depth = p->opts.dither_depth,
             .dither_size = p->opts.dither_size,
             .temporal_dither = p->opts.temporal_dither,
+            .temporal_dither_period = p->opts.temporal_dither_period,
             .tex_pad_x = p->opts.tex_pad_x,
             .tex_pad_y = p->opts.tex_pad_y,
             .target_brightness = p->opts.target_brightness,
@@ -3296,7 +3311,6 @@ struct gl_video *gl_video_init(GL *gl, struct mp_log *log, struct mpv_global *g)
         .gl = gl,
         .global = g,
         .log = log,
-        .texture_16bit_depth = 16,
         .sc = gl_sc_create(gl, log),
         .opts_cache = m_config_cache_alloc(p, g, &gl_video_conf),
     };
@@ -3349,6 +3363,7 @@ static void reinit_from_options(struct gl_video *p)
 
     check_gl_features(p);
     uninit_rendering(p);
+    gl_sc_set_cache_dir(p->sc, p->global, p->opts.shader_cache_dir);
     gl_video_setup_hooks(p);
     reinit_osd(p);
 

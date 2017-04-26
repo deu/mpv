@@ -73,6 +73,7 @@ struct vo_cocoa_state {
 
     NSInteger window_level;
     int fullscreen;
+    NSRect unfs_window;
 
     bool cursor_visibility;
     bool cursor_visibility_wanted;
@@ -694,6 +695,8 @@ int vo_cocoa_config_window(struct vo *vo)
             create_ui(vo, &geo.win, geo.flags);
         }
 
+        s->unfs_window = NSMakeRect(0, 0, width, height);
+
         if (!s->embedded && s->window) {
             if (reset_size)
                 queue_new_video_size(vo, width, height);
@@ -809,10 +812,10 @@ static int vo_cocoa_fullscreen(struct vo *vo)
     if (s->embedded)
         return VO_NOTIMPL;
 
+    if (!s->fullscreen)
+        s->unfs_window = [s->view frame];
+
     [s->window toggleFullScreen:nil];
-    // for whatever reason sometimes cocoa doesn't create an up event on
-    // the fullscreen input key
-    cocoa_put_key(MP_INPUT_RELEASE_ALL);
 
     return VO_TRUE;
 }
@@ -844,9 +847,12 @@ static int vo_cocoa_control_on_main_thread(struct vo *vo, int request, void *arg
         return vo_cocoa_window_border(vo);
     case VOCTRL_GET_UNFS_WINDOW_SIZE: {
         int *sz = arg;
-        NSSize size = [s->view frame].size;
-        sz[0] = size.width;
-        sz[1] = size.height;
+        NSRect rect = (s->fullscreen || vo->opts->fullscreen) ?
+                       s->unfs_window : [s->view frame];
+        if(!vo->opts->hidpi_window_scale)
+            rect = [s->current_screen convertRectToBacking:rect];
+        sz[0] = rect.size.width;
+        sz[1] = rect.size.height;
         return VO_TRUE;
     }
     case VOCTRL_SET_UNFS_WINDOW_SIZE: {
@@ -953,11 +959,6 @@ int vo_cocoa_control(struct vo *vo, int *events, int request, void *arg)
     [self recalcMovableByWindowBackground:point];
     if (!self.vout->cocoa->window_is_dragged)
         mp_input_set_mouse_pos(self.vout->input_ctx, point.x, point.y);
-}
-
-- (void)putKeyEvent:(NSEvent*)event
-{
-    cocoa_put_key_event(event);
 }
 
 - (void)putKey:(int)mpkey withModifiers:(int)modifiers

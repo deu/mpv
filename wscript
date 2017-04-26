@@ -338,9 +338,14 @@ iconv support use --disable-iconv.",
     }, {
         'name': '--dvdnav',
         'desc': 'dvdnav support',
-        'deps': [ 'dvdread' ],
-        'func': check_pkg_config('dvdnav', '>= 4.2.0'),
+        'func': check_pkg_config('dvdnav',  '>= 4.2.0',
+                                 'dvdread', '>= 4.1.0'),
         'default': 'disable',
+    }, {
+        'name': 'dvdread-common',
+        'desc': 'DVD/IFO support',
+        'deps_any': [ 'dvdread', 'dvdnav' ],
+        'func': check_true,
     }, {
         'name': '--cdda',
         'desc': 'cdda support (libcdio)',
@@ -574,32 +579,16 @@ video_output_features = [
     } , {
         'name': '--x11',
         'desc': 'X11',
-        'func': check_pkg_config('x11'),
-    } , {
-        'name': '--xss',
-        'desc': 'Xss screensaver extensions',
-        'deps': [ 'x11' ],
-        'func': check_pkg_config('xscrnsaver'),
-    } , {
-        'name': '--xext',
-        'desc': 'X extensions',
-        'deps': [ 'x11' ],
-        'func': check_pkg_config('xext'),
+        'func': check_pkg_config('x11',         '>= 1.0.0',
+                                 'xscrnsaver',  '>= 1.0.0',
+                                 'xext',        '>= 1.0.0',
+                                 'xinerama',    '>= 1.0.0',
+                                 'xrandr',      '>= 1.2.0'),
     } , {
         'name': '--xv',
         'desc': 'Xv video output',
         'deps': [ 'x11' ],
         'func': check_pkg_config('xv'),
-    } , {
-        'name': '--xinerama',
-        'desc': 'Xinerama',
-        'deps': [ 'x11' ],
-        'func': check_pkg_config('xinerama'),
-    }, {
-        'name': '--xrandr',
-        'desc': 'Xrandr',
-        'deps': [ 'x11' ],
-        'func': check_pkg_config('xrandr', '>= 1.2.0'),
     } , {
         'name': '--gl-cocoa',
         'desc': 'OpenGL Cocoa Backend',
@@ -739,37 +728,19 @@ video_output_features = [
         'name': '--rpi',
         'desc': 'Raspberry Pi support',
         'func': check_rpi,
-    }, {
-        'name': '--standard-gl',
-        'desc': 'Desktop standard OpenGL support',
-        'func': compose_checks(
-            check_statement('GL/gl.h', '(void)GL_RGB32F'),     # arbitrary OpenGL 3.0 symbol
-            check_statement('GL/gl.h', '(void)GL_LUMINANCE16') # arbitrary OpenGL legacy-only symbol
-        ),
-    } , {
-        'name': '--android-gl',
-        'desc': 'Android OpenGL ES support',
-        'deps': ['android'],
-        'func': check_statement('GLES3/gl3.h', '(void)GL_RGB32F'),  # arbitrary OpenGL ES 3.0 symbol
     } , {
         'name': '--ios-gl',
-        'desc': 'iOS OpenGL ES support',
+        'desc': 'iOS OpenGL ES hardware decoding interop support',
         'func': check_statement('OpenGLES/ES3/glext.h', '(void)GL_RGB32F'),  # arbitrary OpenGL ES 3.0 symbol
-    } , {
-        'name': '--any-gl',
-        'desc': 'Any OpenGL (ES) support',
-        'deps_any': ['standard-gl', 'android-gl', 'ios-gl', 'cocoa'],
-        'func': check_true
     } , {
         'name': '--plain-gl',
         'desc': 'OpenGL without platform-specific code (e.g. for libmpv)',
-        'deps': ['any-gl'],
         'deps_any': [ 'libmpv-shared', 'libmpv-static' ],
         'func': check_true,
     }, {
         'name': '--mali-fbdev',
         'desc': 'MALI via Linux fbdev',
-        'deps': ['standard-gl', 'libdl'],
+        'deps': ['libdl'],
         'func': compose_checks(
             check_cc(lib="EGL"),
             check_cc(lib="GLESv2"),
@@ -799,13 +770,8 @@ video_output_features = [
 hwaccel_features = [
     {
         'name': '--vaapi-hwaccel',
-        'desc': 'libavcodec VAAPI hwaccel',
+        'desc': 'libavcodec VAAPI hwaccel (FFmpeg 3.3 API)',
         'deps': [ 'vaapi' ],
-        'func': check_true,
-    }, {
-        'name': '--vaapi-hwaccel-new',
-        'desc': 'libavcodec VAAPI hwaccel (new)',
-        'deps': [ 'vaapi-hwaccel' ],
         'func': check_statement('libavcodec/version.h',
             'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 26, 0) && '
             '       LIBAVCODEC_VERSION_MICRO < 100) ||'
@@ -813,12 +779,6 @@ hwaccel_features = [
             '       LIBAVCODEC_VERSION_MICRO >= 100)'
             '      ? 1 : -1]',
             use='libav'),
-    }, {
-        'name': '--vaapi-hwaccel-old',
-        'desc': 'libavcodec VAAPI hwaccel (old)',
-        'deps': [ 'vaapi-hwaccel' ],
-        'deps_neg': [ 'vaapi-hwaccel-new' ],
-        'func': check_true,
     }, {
         'name': '--videotoolbox-hwaccel',
         'desc': 'libavcodec videotoolbox hwaccel',
@@ -834,13 +794,8 @@ hwaccel_features = [
         'func': check_true
     }, {
         'name': '--vdpau-hwaccel',
-        'desc': 'libavcodec VDPAU hwaccel',
+        'desc': 'libavcodec VDPAU hwaccel (FFmpeg 3.3 API)',
         'deps': [ 'vdpau' ],
-        'func': check_true,
-    }, {
-        'name': '--vdpau-hwaccel-new',
-        'desc': 'libavcodec VDPAU hwaccel (new)',
-        'deps': [ 'vdpau-hwaccel' ],
         'func': check_statement('libavcodec/version.h',
             'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 37, 1) && '
             '       LIBAVCODEC_VERSION_MICRO < 100) ||'
@@ -848,14 +803,6 @@ hwaccel_features = [
             '       LIBAVCODEC_VERSION_MICRO >= 100)'
             '      ? 1 : -1]',
             use='libav'),
-    }, {
-        'name': '--vdpau-hwaccel-old',
-        'desc': 'libavcodec VDPAU hwaccel (old)',
-        'deps': [ 'vdpau' ],
-        'deps_neg': [ 'vdpau-hwaccel-new' ],
-        'func': check_statement('libavcodec/vdpau.h',
-                                'av_vdpau_bind_context(0,0,0,AV_HWACCEL_FLAG_ALLOW_HIGH_DEPTH)',
-                                use='libav'),
     }, {
         'name': '--d3d-hwaccel',
         'desc': 'DXVA2 and D3D11VA hwaccel',
@@ -870,7 +817,7 @@ hwaccel_features = [
     }, {
         'name': 'sse4-intrinsics',
         'desc': 'GCC SSE4 intrinsics for GPU memcpy',
-        'deps_any': [ 'd3d-hwaccel', 'vaapi-hwaccel-old' ],
+        'deps_any': [ 'd3d-hwaccel' ],
         'func': check_cc(fragment=load_fragment('sse.c')),
     }
 ]
@@ -923,7 +870,16 @@ standalone_features = [
         'desc': 'Apple Remote support',
         'deps': [ 'cocoa' ],
         'func': check_true
-    }
+    }, {
+        'name': '--macos-touchbar',
+        'desc': 'macOS Touch Bar support',
+        'deps': [ 'cocoa' ],
+        'func': check_cc(
+            fragment=load_fragment('touchbar.m'),
+            framework_name=['AppKit'],
+            compile_filename='test-touchbar.m',
+            linkflags='-fobjc-arc')
+     }
 ]
 
 _INSTALL_DIRS_LIST = [

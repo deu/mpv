@@ -101,11 +101,14 @@ to the *prefix* after it is compiled.
 Essential dependencies (incomplete list):
 
 - gcc or clang
-- X development headers (xlib, X extensions, libvdpau, libGL, libXv, ...)
+- X development headers (xlib, xrandr, xext, xscrnsaver, xinerama, libvdpau,
+  libGL, GLX, EGL, xv, ...)
 - Audio output development headers (libasound/ALSA, pulseaudio)
 - FFmpeg libraries (libavutil libavcodec libavformat libswscale libavfilter
   and either libswresample or libavresample)
   At least FFmpeg 3.2.2 or Libav 12 is required.
+  For hardware decoding with vaapi and vdpau, FFmpeg 3.3 or Libav git is
+  required.
 - zlib
 - iconv (normally provided by the system libc)
 - libass (OSD, OSC, text subtitles)
@@ -113,6 +116,7 @@ Essential dependencies (incomplete list):
 - libjpeg (optional, used for screenshots only)
 - uchardet (optional, for subtitle charset detection)
 - vdpau and vaapi libraries for hardware decoding on Linux (optional)
+  (FFmpeg 3.3 or Libav git is also required.)
 
 Libass dependencies:
 
@@ -133,12 +137,13 @@ FFmpeg dependencies:
 Most of the above libraries are available in suitable versions on normal
 Linux distributions. However FFmpeg is an exception (distro versions may be
 too old to work at all or work well). For that reason you may want to use
-the separately available build wrapper ([mpv-build][mpv-build]) that first compiles FFmpeg
-libraries and libass, and then compiles the player statically linked against
-those.
+the separately available build wrapper ([mpv-build][mpv-build]) that first
+compiles FFmpeg libraries and libass, and then compiles the player statically
+linked against those.
 
 If you want to build a Windows binary, you either have to use MSYS2 and MinGW,
-or cross-compile from Linux with MinGW. See [Windows compilation][windows_compilation].
+or cross-compile from Linux with MinGW. See
+[Windows compilation][windows_compilation].
 
 
 ## FFmpeg vs. Libav

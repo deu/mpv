@@ -17,16 +17,22 @@
 
 #include <stdio.h>
 #include <pthread.h>
+#include "config.h"
 #include "mpv_talloc.h"
 
 #include "common/msg.h"
 #include "input/input.h"
+#include "player/client.h"
 
 #import "osdep/macosx_application_objc.h"
 #include "osdep/macosx_compat.h"
 #import "osdep/macosx_events_objc.h"
 #include "osdep/threads.h"
 #include "osdep/main-fn.h"
+
+#if HAVE_MACOS_TOUCHBAR
+#import "osdep/macosx_touchbar.h"
+#endif
 
 #define MPV_PROTOCOL @"mpv://"
 
@@ -75,8 +81,8 @@ static void terminate_cocoa_application(void)
 
 - (void)sendEvent:(NSEvent *)event
 {
-    [super sendEvent:event];
-
+    if (![_eventsResponder processKeyEvent:event])
+        [super sendEvent:event];
     [_eventsResponder wakeup];
 }
 
@@ -104,6 +110,39 @@ static void terminate_cocoa_application(void)
     [em removeEventHandlerForEventClass:kCoreEventClass
                              andEventID:kAEQuitApplication];
     [super dealloc];
+}
+
+#if HAVE_MACOS_TOUCHBAR
+- (NSTouchBar *)makeTouchBar
+{
+    TouchBar *tBar = [[TouchBar alloc] init];
+    [tBar setApp:self];
+    tBar.delegate = tBar;
+    tBar.customizationIdentifier = customID;
+    tBar.defaultItemIdentifiers = @[play, previousItem, nextItem, seekBar];
+    tBar.customizationAllowedItemIdentifiers = @[play, seekBar, previousItem,
+        nextItem, previousChapter, nextChapter, cycleAudio, cycleSubtitle,
+        currentPosition, timeLeft];
+    return tBar;
+}
+
+- (void)toggleTouchBarMenu
+{
+    [NSApp toggleTouchBarCustomizationPalette:self];
+}
+#endif
+
+- (void)processEvent:(struct mpv_event *)event
+{
+#if HAVE_MACOS_TOUCHBAR
+    if ([self respondsToSelector:@selector(touchBar)])
+        [(TouchBar *)self.touchBar processEvent:event];
+#endif
+}
+
+- (void)queueCommand:(char *)cmd
+{
+    [_eventsResponder queueCommand:cmd];
 }
 
 #define _R(P, T, E, K) \
@@ -139,6 +178,15 @@ static void terminate_cocoa_application(void)
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Window"];
     _R(menu, @"Minimize", @"m", MPM_MINIMIZE)
     _R(menu, @"Zoom",     @"z", MPM_ZOOM)
+
+#if HAVE_MACOS_TOUCHBAR
+    if ([self respondsToSelector:@selector(touchBar)]) {
+        [menu addItem:[NSMenuItem separatorItem]];
+        [self menuItemWithParent:menu title:@"Customize Touch Bar…"
+                          action:@selector(toggleTouchBarMenu) keyEquivalent: @""];
+    }
+#endif
+
     return [menu autorelease];
 }
 
@@ -322,6 +370,7 @@ int cocoa_main(int argc, char *argv[])
 {
     @autoreleasepool {
         application_instantiated = true;
+        [[EventsResponder sharedInstance] setIsApplication:YES];
 
         struct playback_thread_ctx ctx = {0};
         ctx.argc     = &argc;

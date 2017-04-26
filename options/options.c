@@ -354,6 +354,7 @@ const m_option_t mp_opts[] = {
                ({"no", 0},
                 {"yes", 1},
                 {"always", 2})),
+    OPT_FLAG("keep-open-pause", keep_open_pause, 0),
     OPT_DOUBLE("image-display-duration", image_display_duration,
                M_OPT_RANGE, 0, INFINITY),
 
@@ -493,6 +494,8 @@ const m_option_t mp_opts[] = {
     OPT_FLOATRANGE("sub-gauss", sub_gauss, UPDATE_OSD, 0.0, 3.0),
     OPT_FLAG("sub-gray", sub_gray, UPDATE_OSD),
     OPT_FLAG("sub-ass", ass_enabled, 0),
+    OPT_FLAG("sub-filter-sdh", sub_filter_SDH, 0),
+    OPT_FLAG("sub-filter-sdh-harder", sub_filter_SDH_harder, 0),
     OPT_FLOATRANGE("sub-scale", sub_scale, UPDATE_OSD, 0, 100),
     OPT_FLOATRANGE("sub-ass-line-spacing", ass_line_spacing, UPDATE_OSD, -1000, 1000),
     OPT_FLAG("sub-use-margins", sub_use_margins, UPDATE_OSD),
@@ -606,7 +609,7 @@ const m_option_t mp_opts[] = {
 
     OPT_FLAG("stop-playback-on-init-failure", stop_playback_on_init_failure, 0),
 
-    OPT_CHOICE_OR_INT("loop", loop_times, 0, 1, 10000,
+    OPT_CHOICE_OR_INT("loop-playlist", loop_times, 0, 1, 10000,
                       ({"no", 1},
                        {"inf", -1}, {"yes", -1},
                        {"force", -2})),
@@ -831,6 +834,8 @@ const m_option_t mp_opts[] = {
     OPT_REPLACED("ass-style-override", "sub-ass-style-override"),
     OPT_REPLACED("ass-scale-with-window", "sub-ass-scale-with-window"),
     OPT_REMOVED("fs-black-out-screens", NULL),
+    OPT_REPLACED_MSG("loop", "loop-playlist", "--loop will be changed to map to"
+        " --loop-file in future releases."),
 
     {0}
 };
@@ -908,6 +913,7 @@ const struct MPOpts mp_default_opts = {
     .play_frames = -1,
     .rebase_start_time = 1,
     .keep_open = 0,
+    .keep_open_pause = 1,
     .image_display_duration = 1.0,
     .stream_id = { { [STREAM_AUDIO] = -1,
                      [STREAM_VIDEO] = -1,
@@ -928,7 +934,7 @@ const struct MPOpts mp_default_opts = {
     .movie_aspect = -1.,
     .field_dominance = -1,
     .sub_auto = 0,
-    .audiofile_auto = 0,
+    .audiofile_auto = -1,
     .osd_bar_visible = 1,
 #if HAVE_LIBASS
     .ass_enabled = 1,
@@ -946,6 +952,11 @@ const struct MPOpts mp_default_opts = {
     .hwdec_api = HAVE_RPI ? HWDEC_RPI : 0,
     .hwdec_codecs = "h264,vc1,wmv3,hevc,mpeg2video,vp9",
     .videotoolbox_format = IMGFMT_NV12,
+
+    .audio_output_channels = {
+        .set = 1,
+        .auto_safe = 1,
+    },
 
     .index_mode = 1,
 
