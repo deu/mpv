@@ -177,14 +177,6 @@ main_dependencies = [
         'req': True,
         'deps_any': ['stdatomic', 'gnuc'],
     }, {
-        'name': 'c11-tls',
-        'desc': 'C11 TLS support',
-        'func': check_statement('stddef.h', 'static _Thread_local int x = 0'),
-    }, {
-        'name': 'gcc-tls',
-        'desc': 'GCC TLS support',
-        'func': check_statement('stddef.h', 'static __thread int x = 0'),
-    }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
         'deps': [ 'pthreads' ],
@@ -288,9 +280,10 @@ iconv support use --disable-iconv.",
                                 'struct statfs fs; fstatfs(0, &fs); fs.f_namelen')
     }, {
         'name': '--libsmbclient',
-        'desc': 'Samba support',
+        'desc': 'Samba support (makes mpv GPLv3)',
         'deps': [ 'libdl' ],
         'func': check_pkg_config('smbclient'),
+        'default': 'disable',
         'module': 'input',
     }, {
         'name' : '--lua',
@@ -610,16 +603,13 @@ video_output_features = [
         'desc': 'OpenGL X11 EGL Backend',
         'deps': [ 'x11' ],
         'groups': [ 'gl' ],
-        'func': check_pkg_config('egl', 'gl'),
+        'func': check_pkg_config('egl'),
     } , {
         'name': '--egl-drm',
         'desc': 'OpenGL DRM EGL Backend',
         'deps': [ 'drm', 'gbm' ],
         'groups': [ 'gl' ],
-        'func': compose_checks(
-            check_pkg_config('egl'),
-            check_pkg_config_cflags('gl')
-        )
+        'func': check_pkg_config('egl'),
     } , {
         'name': '--gl-wayland',
         'desc': 'OpenGL Wayland Backend',
@@ -743,7 +733,6 @@ video_output_features = [
         'deps': ['libdl'],
         'func': compose_checks(
             check_cc(lib="EGL"),
-            check_cc(lib="GLESv2"),
             check_statement('EGL/fbdev_window.h', 'struct fbdev_window test'),
             check_statement('linux/fb.h', 'struct fb_var_screeninfo test'),
         ),
@@ -755,7 +744,7 @@ video_output_features = [
                       'plain-gl' ],
         'func': check_true,
         'req': True,
-        'fmsg': "Unable to find OpenGL header files for video output. " +
+        'fmsg': "No OpenGL video output found or enabled. " +
                 "Aborting. If you really mean to compile without OpenGL " +
                 "video outputs use --disable-gl."
     }, {
@@ -856,6 +845,7 @@ radio_and_tv_features = [
         'name': '--dvbin',
         'desc': 'DVB input module',
         'func': check_cc(fragment=load_fragment('dvb.c')),
+        'default': 'disable',
     }
 ]
 

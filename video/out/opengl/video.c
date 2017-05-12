@@ -851,6 +851,15 @@ static void unref_current_image(struct gl_video *p)
     p->image.id = 0;
 }
 
+// If overlay mode is used, make sure to remove the overlay.
+// Be careful with this. Removing the overlay and adding another one will
+// lead to flickering artifacts.
+static void unmap_overlay(struct gl_video *p)
+{
+    if (p->hwdec_active && p->hwdec->driver->overlay_frame)
+        p->hwdec->driver->overlay_frame(p->hwdec, NULL);
+}
+
 static void uninit_video(struct gl_video *p)
 {
     GL *gl = p->gl;
@@ -859,6 +868,7 @@ static void uninit_video(struct gl_video *p)
 
     struct video_image *vimg = &p->image;
 
+    unmap_overlay(p);
     unref_current_image(p);
 
     for (int n = 0; n < p->plane_count; n++) {
@@ -3278,6 +3288,7 @@ bool gl_video_check_format(struct gl_video *p, int mp_format)
 
 void gl_video_config(struct gl_video *p, struct mp_image_params *params)
 {
+    unmap_overlay(p);
     unref_current_image(p);
 
     if (!mp_image_params_equal(&p->real_image_params, params)) {

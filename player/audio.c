@@ -119,6 +119,50 @@ fail:
     mp_notify(mpctx, MP_EVENT_CHANGE_ALL, NULL);
 }
 
+static double db_gain(double db)
+{
+    return pow(10.0, db/20.0);
+}
+
+static float compute_replaygain(struct MPContext *mpctx)
+{
+    struct MPOpts *opts = mpctx->opts;
+    struct ao_chain *ao_c = mpctx->ao_chain;
+
+    float rgain = 1.0;
+
+    struct replaygain_data *rg = ao_c->af->replaygain_data;
+    if (opts->rgain_mode && rg) {
+        MP_VERBOSE(mpctx, "Replaygain: Track=%f/%f Album=%f/%f\n",
+                   rg->track_gain, rg->track_peak,
+                   rg->album_gain, rg->album_peak);
+
+        float gain, peak;
+        if (opts->rgain_mode == 1) {
+            gain = rg->track_gain;
+            peak = rg->track_peak;
+        } else {
+            gain = rg->album_gain;
+            peak = rg->album_peak;
+        }
+
+        gain += opts->rgain_preamp;
+        rgain = db_gain(gain);
+
+        MP_VERBOSE(mpctx, "Applying replay-gain: %f\n", rgain);
+
+        if (!opts->rgain_clip) { // clipping prevention
+            rgain = MPMIN(rgain, 1.0 / peak);
+            MP_VERBOSE(mpctx, "...with clipping prevention: %f\n", rgain);
+        }
+    } else if (opts->rgain_fallback) {
+        rgain = db_gain(opts->rgain_fallback);
+        MP_VERBOSE(mpctx, "Applying fallback gain: %f\n", rgain);
+    }
+
+    return rgain;
+}
+
 // Called when opts->softvol_volume or opts->softvol_mute were changed.
 void audio_update_volume(struct MPContext *mpctx)
 {
@@ -128,6 +172,8 @@ void audio_update_volume(struct MPContext *mpctx)
         return;
 
     float gain = MPMAX(opts->softvol_volume / 100.0, 0);
+    gain = pow(gain, 3);
+    gain *= compute_replaygain(mpctx);
     if (opts->softvol_mute == 1)
         gain = 0.0;
 
