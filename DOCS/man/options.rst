@@ -347,6 +347,10 @@ Playback Control
     Load chapters from this file, instead of using the chapter metadata found
     in the main file.
 
+    This accepts a media file (like mkv) or even a pseudo-format like ffmetadata
+    and uses its chapters to replace the current file's chapters. This doesn't
+    work with OGM or XML chapters directly.
+
 ``--sstep=<sec>``
     Skip <sec> seconds after every frame.
 
@@ -4961,9 +4965,14 @@ Miscellaneous
     setting in ``--title``.
 
 ``--external-file=<filename>``
-    Add all tracks from the given file. Unlike ``--sub-file`` and
-    ``--audio-file``, this includes all tracks, and does not cause default
-    stream selection over the "proper" file.
+    Load a file and add all of its tracks. This is useful to play different
+    files together (for example audio from one file, video from another), or
+    for advanced ``--lavfi-complex`` used (like playing two video files at
+    the same time).
+
+    Unlike ``--sub-file`` and ``--audio-file``, this includes all tracks, and
+    does not cause default stream selection over the "proper" file. This makes
+    it slightly less intrusive.
 
 ``--autoload-files=<yes|no>``
     Automatically load/select external files (default: yes).

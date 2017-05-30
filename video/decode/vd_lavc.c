@@ -556,9 +556,6 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
 
     assert(!ctx->avctx);
 
-    if (strcmp(decoder, "mp-rawvideo") == 0)
-        decoder = "rawvideo";
-
     AVCodec *lavc_codec = avcodec_find_decoder_by_name(decoder);
     if (!lavc_codec)
         return;
@@ -603,6 +600,8 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
             ctx->hwdec_dev = hwdec_create_dev(vd, ctx->hwdec, false);
             if (!ctx->hwdec_dev)
                 goto error;
+            if (ctx->hwdec_dev->restore_device)
+                ctx->hwdec_dev->restore_device(ctx->hwdec_dev);
             if (!ctx->hwdec->set_hwframes) {
 #if HAVE_VDPAU_HWACCEL
                 avctx->hw_device_ctx = av_buffer_ref(ctx->hwdec_dev->av_device_ref);
@@ -751,6 +750,11 @@ int hwdec_setup_hw_frames_ctx(struct lavc_ctx *ctx, AVBufferRef *device_ctx,
     int h = ctx->avctx->coded_height;
     int av_hw_format = imgfmt2pixfmt(ctx->hwdec_fmt);
 
+    if (!device_ctx) {
+        MP_ERR(ctx, "Missing device context.\n");
+        return -1;
+    }
+
     if (ctx->cached_hw_frames_ctx) {
         AVHWFramesContext *fctx = (void *)ctx->cached_hw_frames_ctx->data;
         if (fctx->width != w || fctx->height != h ||
@@ -814,6 +818,9 @@ static int init_generic_hwaccel(struct dec_video *vd)
             break;
         }
     }
+
+    if (hwdec->image_format == IMGFMT_VIDEOTOOLBOX)
+        av_sw_format = imgfmt2pixfmt(vd->opts->videotoolbox_format);
 
     if (av_sw_format == AV_PIX_FMT_NONE) {
         MP_VERBOSE(ctx, "Unsupported hw decoding format: %s\n",
@@ -1214,8 +1221,6 @@ static int control(struct dec_video *vd, int cmd, void *arg)
 static void add_decoders(struct mp_decoder_list *list)
 {
     mp_add_lavc_decoders(list, AVMEDIA_TYPE_VIDEO);
-    mp_add_decoder(list, "lavc", "mp-rawvideo", "mp-rawvideo",
-                   "raw video");
 }
 
 const struct vd_functions mpcodecs_vd_ffmpeg = {

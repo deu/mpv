@@ -62,8 +62,6 @@ typedef enum MONITOR_DPI_TYPE {
 } MONITOR_DPI_TYPE;
 #endif
 
-static __thread struct vo_w32_state *w32_thread_context;
-
 struct w32_api {
     HRESULT (WINAPI *pGetDpiForMonitor)(HMONITOR, MONITOR_DPI_TYPE, UINT*, UINT*);
 };
@@ -426,6 +424,16 @@ static void handle_mouse_up(struct vo_w32_state *w32, int btn)
     mp_input_put_key(w32->input_ctx, btn | MP_KEY_STATE_UP);
 
     ReleaseCapture();
+}
+
+static void handle_mouse_wheel(struct vo_w32_state *w32, bool horiz, int val)
+{
+    int code;
+    if (horiz)
+        code = val > 0 ? MP_AXIS_RIGHT : MP_AXIS_LEFT;
+    else
+        code = val > 0 ? MP_AXIS_UP : MP_AXIS_DOWN;
+    mp_input_put_axis(w32->input_ctx, code | mod_state(w32), abs(val) / 120.);
 }
 
 static void signal_events(struct vo_w32_state *w32, int events)
@@ -864,11 +872,21 @@ static void reinit_window_state(struct vo_w32_state *w32)
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
                                 LPARAM lParam)
 {
-    assert(w32_thread_context);
-    struct vo_w32_state *w32 = w32_thread_context;
-    if (!w32->window)
-        w32->window = hWnd; // can happen during CreateWindow*!
-    assert(w32->window == hWnd);
+    struct vo_w32_state *w32 = (void*)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+    if (!w32) {
+        // WM_NCCREATE is supposed to be the first message that a window
+        // receives. It allows struct vo_w32_state to be passed from
+        // CreateWindow's lpParam to the window procedure. However, as a
+        // longstanding Windows bug, overlapped top-level windows will get a
+        // WM_GETMINMAXINFO before WM_NCCREATE. This can be ignored.
+        if (message != WM_NCCREATE)
+            return DefWindowProcW(hWnd, message, wParam, lParam);
+
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+        w32 = cs->lpCreateParams;
+        w32->window = hWnd;
+        SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)w32);
+    }
 
     switch (message) {
     case WM_USER:
@@ -1077,21 +1095,21 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     case WM_RBUTTONUP:
         handle_mouse_up(w32, MP_MOUSE_BTN2);
         break;
-    case WM_MOUSEWHEEL: {
-        int x = GET_WHEEL_DELTA_WPARAM(wParam);
-        mp_input_put_key(w32->input_ctx,
-                         (x > 0 ? MP_MOUSE_BTN3 : MP_MOUSE_BTN4) |
-                         mod_state(w32));
-        ReleaseCapture();
-        break;
-    }
+    case WM_MOUSEWHEEL:
+        handle_mouse_wheel(w32, false, GET_WHEEL_DELTA_WPARAM(wParam));
+        return 0;
+    case WM_MOUSEHWHEEL:
+        handle_mouse_wheel(w32, true, GET_WHEEL_DELTA_WPARAM(wParam));
+        // Some buggy mouse drivers (SetPoint) stop delivering WM_MOUSEHWHEEL
+        // events when the message loop doesn't return TRUE (even on Windows 7)
+        return TRUE;
     case WM_XBUTTONDOWN:
         handle_mouse_down(w32,
-                          HIWORD(wParam) == 1 ? MP_MOUSE_BTN5 : MP_MOUSE_BTN6,
+                          HIWORD(wParam) == 1 ? MP_MOUSE_BTN7 : MP_MOUSE_BTN8,
                           GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         break;
     case WM_XBUTTONUP:
-        handle_mouse_up(w32, HIWORD(wParam) == 1 ? MP_MOUSE_BTN5 : MP_MOUSE_BTN6);
+        handle_mouse_up(w32, HIWORD(wParam) == 1 ? MP_MOUSE_BTN7 : MP_MOUSE_BTN8);
         break;
     case WM_DISPLAYCHANGE:
         force_update_display_info(w32);
@@ -1311,8 +1329,6 @@ static void *gui_thread(void *ptr)
     w32_api_load(w32);
     thread_disable_ime();
 
-    w32_thread_context = w32;
-
     if (w32->opts->WinID >= 0)
         w32->parent = (HWND)(intptr_t)(w32->opts->WinID);
 
@@ -1320,20 +1336,17 @@ static void *gui_thread(void *ptr)
     if (w32->parent) {
         RECT r;
         GetClientRect(w32->parent, &r);
-        w32->window = CreateWindowExW(WS_EX_NOPARENTNOTIFY,
-                                      (LPWSTR)MAKEINTATOM(cls), L"mpv",
-                                      WS_CHILD | WS_VISIBLE,
-                                      0, 0, r.right, r.bottom,
-                                      w32->parent, 0, HINST_THISCOMPONENT, NULL);
+        CreateWindowExW(WS_EX_NOPARENTNOTIFY, (LPWSTR)MAKEINTATOM(cls), L"mpv",
+                        WS_CHILD | WS_VISIBLE, 0, 0, r.right, r.bottom,
+                        w32->parent, 0, HINST_THISCOMPONENT, w32);
 
         // Install a hook to get notifications when the parent changes size
         if (w32->window)
             install_parent_hook(w32);
     } else {
-        w32->window = CreateWindowExW(0, (LPWSTR)MAKEINTATOM(cls), L"mpv",
-                                      update_style(w32, 0),
-                                      CW_USEDEFAULT, SW_HIDE, 100, 100,
-                                      0, 0, HINST_THISCOMPONENT, NULL);
+        CreateWindowExW(0, (LPWSTR)MAKEINTATOM(cls), L"mpv",
+                        update_style(w32, 0), CW_USEDEFAULT, SW_HIDE, 100, 100,
+                        0, 0, HINST_THISCOMPONENT, w32);
     }
 
     if (!w32->window) {
@@ -1413,8 +1426,6 @@ done:
     if (ole_ok)
         OleUninitialize();
     SetThreadExecutionState(ES_CONTINUOUS);
-
-    w32_thread_context = NULL;
     return NULL;
 }
 
