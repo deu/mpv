@@ -383,9 +383,8 @@ static void build_timeline_loop(struct tl_ctx *ctx,
 
             /* If we're the source or it's a non-ordered edition reference,
              * just add a timeline part from the source. */
-            //if (current_source == j || !linked_m->uid.edition) {
-                uint64_t source_full_length =
-                    demuxer_get_time_length(linked_source) * 1e9;
+            if (current_source == j || !linked_m->uid.edition) {
+                uint64_t source_full_length = linked_source->duration * 1e9;
                 uint64_t source_length = source_full_length - c->start;
                 int64_t join_diff = 0;
 
@@ -420,19 +419,19 @@ static void build_timeline_loop(struct tl_ctx *ctx,
                     info->limit += join_diff;
                     chapter_length += join_diff;
                 }
-            //} else {
-            //    /* We have an ordered edition as the source. Since this
-            //     * can jump around all over the place, we need to build up the
-            //     * timeline parts for each of its chapters, but not add them as
-            //     * chapters. */
-            //    struct inner_timeline_info new_info = {
-            //        .skip = c->start,
-            //        .limit = c->end
-            //    };
-            //    build_timeline_loop(ctx, chapters, &new_info, j);
-            //    // Already handled by the loop call.
-            //    chapter_length = 0;
-            //}
+            } else {
+                /* We have an ordered edition as the source. Since this
+                 * can jump around all over the place, we need to build up the
+                 * timeline parts for each of its chapters, but not add them as
+                 * chapters. */
+                struct inner_timeline_info new_info = {
+                    .skip = c->start,
+                    .limit = c->end
+                };
+                build_timeline_loop(ctx, chapters, &new_info, j);
+                // Already handled by the loop call.
+                chapter_length = 0;
+            }
             ctx->last_end_time = c->end;
             goto found;
         }
