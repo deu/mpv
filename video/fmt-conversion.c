@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <libavutil/pixdesc.h>
@@ -67,10 +67,6 @@ static const struct {
     {IMGFMT_444P,  AV_PIX_FMT_YUVJ444P},
     {IMGFMT_440P,  AV_PIX_FMT_YUVJ440P},
 
-    {IMGFMT_420AP, AV_PIX_FMT_YUVA420P},
-    {IMGFMT_422AP, AV_PIX_FMT_YUVA422P},
-    {IMGFMT_444AP, AV_PIX_FMT_YUVA444P},
-
     {IMGFMT_XYZ12,   AV_PIX_FMT_XYZ12},
 
     {IMGFMT_RGBA64,  AV_PIX_FMT_RGBA64},
@@ -97,7 +93,12 @@ static const struct {
     {IMGFMT_VAAPI, AV_PIX_FMT_VAAPI_VLD},
     {IMGFMT_DXVA2, AV_PIX_FMT_DXVA2_VLD},
 #if HAVE_D3D_HWACCEL
+#if HAVE_D3D_HWACCEL_NEW
+    {IMGFMT_D3D11VA, AV_PIX_FMT_D3D11},
+    {IMGFMT_D3D11NV12, AV_PIX_FMT_D3D11},
+#else
     {IMGFMT_D3D11VA, AV_PIX_FMT_D3D11VA_VLD},
+#endif
 #endif
     {IMGFMT_MMAL, AV_PIX_FMT_MMAL},
 #if HAVE_CUDA_HWACCEL

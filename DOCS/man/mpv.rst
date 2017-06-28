@@ -145,7 +145,7 @@ Ctrl + and Ctrl -
 u
     Switch between applying no style overrides to SSA/ASS subtitles, and
     overriding them almost completely with the normal subtitle style. See
-    ``--sub-ass-style-override`` for more info.
+    ``--sub-ass-override`` for more info.
 
 V
     Toggle subtitle VSFilter aspect compatibility mode. See
@@ -164,9 +164,6 @@ S
 Ctrl s
     Take a screenshot, as the window shows it (with subtitles, OSD, and scaled
     video).
-
-I
-    Show filename on the OSD.
 
 PGUP and PGDWN
     Seek to the beginning of the previous/next chapter. In most cases,
@@ -221,14 +218,9 @@ STOP
 PREVIOUS and NEXT
     Seek backward/forward 1 minute.
 
-(The following keys are only valid if you compiled with TV or DVB input
-support.)
 
-h and k
-    Select previous/next tv-channel.
-
-H and K
-    Select previous/next dvb-channel.
+If you miss some older key bindings, look at ``etc/restore-old-bindings.conf``
+in the mpv git repository.
 
 Mouse Control
 -------------
@@ -769,6 +761,11 @@ PROTOCOLS
     Read data from the given file descriptor (for example 123). This is similar
     to piping data to stdin via ``-``, but can use an arbitrary file descriptor.
 
+``fdclose://123``
+
+    Like ``fd://``, but the file descriptor is closed after use. When using this
+    you need to ensure that the same fd URL will only be used once.
+
 ``edl://[edl specification as in edl-mpv.rst]``
 
     Stitch together parts of multiple files and play them.
@@ -846,6 +843,8 @@ works like in older mpv releases. The profiles are currently defined as follows:
 .. include:: osc.rst
 
 .. include:: lua.rst
+
+.. include:: javascript.rst
 
 .. include:: ipc.rst
 

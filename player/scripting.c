@@ -38,6 +38,7 @@
 
 extern const struct mp_scripting mp_scripting_lua;
 extern const struct mp_scripting mp_scripting_cplugin;
+extern const struct mp_scripting mp_scripting_js;
 
 static const struct mp_scripting *const scripting_backends[] = {
 #if HAVE_LUA
@@ -45,6 +46,9 @@ static const struct mp_scripting *const scripting_backends[] = {
 #endif
 #if HAVE_CPLUGINS
     &mp_scripting_cplugin,
+#endif
+#if HAVE_JAVASCRIPT
+    &mp_scripting_js,
 #endif
     NULL
 };
@@ -215,8 +219,11 @@ void mp_load_scripts(struct MPContext *mpctx)
     // Load scripts from options
     char **files = mpctx->opts->script_files;
     for (int n = 0; files && files[n]; n++) {
-        if (files[n][0])
-            mp_load_script(mpctx, files[n]);
+        if (files[n][0]) {
+            char *path = mp_get_user_path(NULL, mpctx->global, files[n]);
+            mp_load_script(mpctx, path);
+            talloc_free(path);
+        }
     }
     if (!mpctx->opts->auto_load_scripts)
         return;

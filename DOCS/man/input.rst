@@ -1456,11 +1456,11 @@ Property list
     ``video-params/gamma``
         The gamma function in use as string. (Exact values subject to change.)
 
-    ``video-params/nom-peak``
-        The video encoding's nominal peak brightness as float.
-
     ``video-params/sig-peak``
         The video file's tagged signal peak as float.
+
+    ``video-params/light``
+        The light type in use as a string. (Exact values subject to change.)
 
     ``video-params/chroma-location``
         Chroma location as string. (Exact values subject to change.)
@@ -1489,8 +1489,8 @@ Property list
             "colorlevels"       MPV_FORMAT_STRING
             "primaries"         MPV_FORMAT_STRING
             "gamma"             MPV_FORMAT_STRING
-            "nom-peak"          MPV_FORMAT_DOUBLE
             "sig-peak"          MPV_FORMAT_DOUBLE
+            "light"             MPV_FORMAT_STRING
             "chroma-location"   MPV_FORMAT_STRING
             "rotate"            MPV_FORMAT_INT64
             "stereo-in"         MPV_FORMAT_STRING
@@ -2209,6 +2209,14 @@ caveats with some properties (due to historical reasons):
 ``playlist-pos``, ``chapter``
     These properties behave different from the deprecated options with the same
     names.
+
+``profile``, ``include``
+    These are write-only, and will perform actions as they are written to,
+    exactly as if they were used on the mpv CLI commandline. Their only use is
+    when using libmpv before ``mpv_initialize()``, which in turn is probably
+    only useful in encoding mode. Normal libmpv users should use other
+    mechanisms, such as the ``apply-profile`` command, and the
+    ``mpv_load_config_file`` API function. Avoid these properties.
 
 Property Expansion
 ------------------

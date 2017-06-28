@@ -71,18 +71,12 @@ build_options = [
         'name': '--cplugins',
         'desc': 'C plugins',
         'deps': [ 'libdl' ],
-        'default': 'disable',
+        'deps_neg': [ 'os-win32' ],
         'func': check_cc(linkflags=['-rdynamic']),
     }, {
         'name': 'dlopen',
         'desc': 'dlopen',
         'deps_any': [ 'libdl', 'os-win32', 'os-cygwin' ],
-        'func': check_true
-    }, {
-        'name': '--vf-dlopen-filters',
-        'desc': 'compilation of default filters for vf_dlopen',
-        'deps': [ 'dlopen' ],
-        'default': 'disable',
         'func': check_true
     }, {
         'name': '--zsh-comp',
@@ -257,15 +251,8 @@ iconv support use --disable-iconv.",
         'name': 'bsd-thread-name',
         'desc': 'BSD API for setting thread name',
         'deps_neg': [ 'glibc-thread-name', 'osx-thread-name' ],
-        'func': check_statement(['pthread.h', 'pthread_np.h'],
-                                'pthread_set_name_np(pthread_self(), "ducks")',
-                                use=['pthreads']),
-    }, {
-        'name': 'netbsd-thread-name',
-        'desc': 'NetBSD API for setting thread name',
-        'deps_neg': [ 'glibc-thread-name', 'osx-thread-name', 'bsd-thread-name' ],
         'func': check_statement('pthread.h',
-                                'pthread_setname_np(pthread_self(), "%s", (void *)"ducks")',
+                                'pthread_set_name_np(pthread_self(), "ducks")',
                                 use=['pthreads']),
     }, {
         'name': 'bsd-fstatfs',
@@ -289,6 +276,10 @@ iconv support use --disable-iconv.",
         'name' : '--lua',
         'desc' : 'Lua',
         'func': check_lua,
+    }, {
+        'name' : '--javascript',
+        'desc' : 'Javascript (MuJS backend)',
+        'func': check_pkg_config('mujs', '>= 1.0.0'),
     }, {
         'name': '--libass',
         'desc': 'SSA/ASS support',
@@ -451,6 +442,12 @@ FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_
         'func': check_statement('libavutil/imgutils.h',
                                 'av_image_copy_uc_from(0,0,0,0,0,0,0)',
                                 use='libav'),
+    }, {
+        'name': 'avutil-content-light-level',
+        'desc': 'libavutil content light level struct',
+        'func': check_statement('libavutil/frame.h',
+                                'AV_FRAME_DATA_CONTENT_LIGHT_LEVEL',
+                                use='libav'),
     },
 ]
 
@@ -467,35 +464,10 @@ audio_output_features = [
         'func': check_pkg_config('sdl'),
         'default': 'disable'
     }, {
-        'name': 'oss-audio-4front',
-        'desc': 'OSS (implementation from opensound.com)',
-        'func': check_oss_4front,
-        'groups' : [ 'oss-audio' ]
-    }, {
-        'name': 'oss-audio-native',
-        'desc': 'OSS (platform-specific OSS implementation)',
-        'func': check_cc(header_name='sys/soundcard.h',
-                         defines=['PATH_DEV_DSP="/dev/dsp"',
-                                  'PATH_DEV_MIXER="/dev/mixer"'],
-                         fragment=load_fragment('oss_audio.c')),
-        'deps_neg': [ 'oss-audio-4front' ],
-        'groups' : [ 'oss-audio' ]
-    }, {
-        'name': 'oss-audio-sunaudio',
-        'desc': 'OSS (emulation on top of SunAudio)',
-        'func': check_cc(header_name='soundcard.h',
-                         lib='ossaudio',
-                         defines=['PATH_DEV_DSP="/dev/sound"',
-                                  'PATH_DEV_MIXER="/dev/mixer"'],
-                         fragment=load_fragment('oss_audio_sunaudio.c')),
-        'deps_neg': [ 'oss-audio-4front', 'oss-audio-native' ],
-        'groups' : [ 'oss-audio' ]
-    }, {
         'name': '--oss-audio',
-        'desc': 'OSS audio output',
-        'func': check_true,
-        'deps_any': [ 'oss-audio-native', 'oss-audio-sunaudio',
-                      'oss-audio-4front' ]
+        'desc': 'OSS',
+        'func': check_cc(header_name='sys/soundcard.h'),
+        'deps': [ 'posix' ],
     }, {
         'name': '--rsound',
         'desc': 'RSound audio output',
@@ -814,6 +786,17 @@ hwaccel_features = [
         'deps': [ 'win32' ],
         'func': check_true,
     }, {
+        'name': '--d3d-hwaccel-new',
+        'desc': 'DXVA2 and D3D11VA hwaccel (new API)',
+        'func': check_statement('libavcodec/version.h',
+            'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 4, 0) && '
+            '       LIBAVCODEC_VERSION_MICRO < 100) ||'
+            '      (LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 100, 100) && '
+            '       LIBAVCODEC_VERSION_MICRO >= 100)'
+            '      ? 1 : -1]',
+            use='libav'),
+        'deps': [ 'd3d-hwaccel' ],
+    }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',
         'deps': [ 'gl' ],
@@ -823,6 +806,7 @@ hwaccel_features = [
         'name': 'sse4-intrinsics',
         'desc': 'GCC SSE4 intrinsics for GPU memcpy',
         'deps_any': [ 'd3d-hwaccel' ],
+        'deps_neg': [ 'd3d-hwaccel-new' ],
         'func': check_cc(fragment=load_fragment('sse.c')),
     }
 ]
@@ -832,14 +816,17 @@ radio_and_tv_features = [
         'name': '--tv',
         'desc': 'TV interface',
         'func': check_true,
+        'default': 'disable',
     }, {
         'name': 'sys_videoio_h',
         'desc': 'videoio.h',
-        'func': check_cc(header_name=['sys/time.h', 'sys/videoio.h'])
+        'func': check_cc(header_name=['sys/time.h', 'sys/videoio.h']),
+        'deps': [ 'tv' ],
     }, {
         'name': 'videodev',
         'desc': 'videodev2.h',
         'func': check_cc(header_name=['sys/time.h', 'linux/videodev2.h']),
+        'deps': [ 'tv' ],
         'deps_neg': [ 'sys_videoio_h' ],
     }, {
         'name': '--tv-v4l2',
@@ -860,7 +847,7 @@ radio_and_tv_features = [
     } , {
         'name': '--dvbin',
         'desc': 'DVB input module',
-        'func': check_cc(fragment=load_fragment('dvb.c')),
+        'func': check_true,
         'default': 'disable',
     }
 ]
@@ -994,14 +981,6 @@ def configure(ctx):
         ctx.options.enable_lua = True
 
     ctx.parse_dependencies(standalone_features)
-
-    ctx.define('HAVE_SYS_SOUNDCARD_H',
-               '(HAVE_OSS_AUDIO_NATIVE || HAVE_OSS_AUDIO_4FRONT)',
-               quote=False)
-
-    ctx.define('HAVE_SOUNDCARD_H',
-               'HAVE_OSS_AUDIO_SUNAUDIO',
-               quote=False)
 
     ctx.load('generators.headers')
 

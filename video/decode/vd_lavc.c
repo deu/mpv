@@ -13,6 +13,16 @@
  *
  * You should have received a copy of the GNU General Public License along
  * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Almost LGPLv3+.
+ *
+ * The parts potentially making this file LGPL v3 (instead of v2.1 or later) are:
+ * 376e3abf5c7d2 xvmc use get_format for IDCT/MC recognition
+ * c73f0e18bd1d6 Return PIX_FMT_NONE if the video system refuses all other formats.
+ * (iive agreed to LGPL v3+ only. Jeremy agreed to LGPL v2.1 or later.)
+ * Once these changes are not relevant to for copyright anymore (e.g. because
+ * they have been removed), and the core is LGPL, this file will change to
+ * LGPLv2.1+.
  */
 
 #include <stdio.h>
@@ -399,7 +409,7 @@ static int hwdec_probe(struct dec_video *vd, struct vd_lavc_hwdec *hwdec,
         r = hwdec->probe(ctx, hwdec, codec);
     if (hwdec->generic_hwaccel) {
         assert(!hwdec->probe && !hwdec->init && !hwdec->init_decoder &&
-               !hwdec->uninit && !hwdec->allocate_image && !hwdec->process_image);
+               !hwdec->uninit && !hwdec->allocate_image);
         struct mp_hwdec_ctx *dev = hwdec_create_dev(vd, hwdec, autoprobe);
         if (!dev)
             return hwdec->copying ? -1 : HWDEC_ERR_NO_CTX;
@@ -573,7 +583,6 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     AVCodecContext *avctx = ctx->avctx;
     if (!ctx->avctx)
         goto error;
-    avctx->opaque = vd;
     avctx->codec_type = AVMEDIA_TYPE_VIDEO;
     avctx->codec_id = lavc_codec->id;
 
@@ -586,6 +595,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
         goto error;
 
     if (ctx->hwdec) {
+        avctx->opaque = vd;
         avctx->thread_count = 1;
 #if HAVE_VDPAU_HWACCEL
         avctx->hwaccel_flags |= AV_HWACCEL_FLAG_IGNORE_LEVEL;
@@ -711,28 +721,33 @@ static void update_image_params(struct dec_video *vd, AVFrame *frame,
                                 struct mp_image_params *params)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
+    AVFrameSideData *sd;
 
-#if LIBAVCODEC_VERSION_MICRO >= 100
-    // Get the reference peak (for HDR) if available. This is cached into ctx
-    // when it's found, since it's not available on every frame (and seems to
-    // be only available for keyframes)
-    AVFrameSideData *sd = av_frame_get_side_data(frame,
-                          AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+#if HAVE_AVUTIL_CONTENT_LIGHT_LEVEL
+    // Get the content light metadata if available
+    sd = av_frame_get_side_data(frame, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
     if (sd) {
-        AVMasteringDisplayMetadata *mdm = (AVMasteringDisplayMetadata *)sd->data;
-        if (mdm->has_luminance) {
-            double peak = av_q2d(mdm->max_luminance);
-            if (!isnormal(peak) || peak < 10 || peak > 100000) {
-                // Invalid data, ignore it. Sadly necessary
-                MP_WARN(vd, "Invalid HDR reference peak in stream: %f\n", peak);
-            } else {
-                ctx->cached_hdr_peak = peak;
-            }
-        }
+        AVContentLightMetadata *clm = (AVContentLightMetadata *)sd->data;
+        params->color.sig_peak = clm->MaxCLL / MP_REF_WHITE;
     }
 #endif
 
-    params->color.sig_peak = ctx->cached_hdr_peak;
+#if LIBAVCODEC_VERSION_MICRO >= 100
+    // Otherwise, try getting the mastering metadata if available
+    sd = av_frame_get_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+    if (!params->color.sig_peak && sd) {
+        AVMasteringDisplayMetadata *mdm = (AVMasteringDisplayMetadata *)sd->data;
+        if (mdm->has_luminance)
+            params->color.sig_peak = av_q2d(mdm->max_luminance) / MP_REF_WHITE;
+    }
+#endif
+
+    if (params->color.sig_peak) {
+        ctx->cached_sig_peak = params->color.sig_peak;
+    } else {
+        params->color.sig_peak = ctx->cached_sig_peak;
+    }
+
     params->rotate = vd->codec->rotate;
     params->stereo_in = vd->codec->stereo_mode;
 }
@@ -778,6 +793,9 @@ int hwdec_setup_hw_frames_ctx(struct lavc_ctx *ctx, AVBufferRef *device_ctx,
         fctx->height = h;
 
         fctx->initial_pool_size = initial_pool_size;
+
+        if (ctx->hwdec->hwframes_refine)
+            ctx->hwdec->hwframes_refine(ctx, ctx->cached_hw_frames_ctx);
 
         int res = av_hwframe_ctx_init(ctx->cached_hw_frames_ctx);
         if (res < 0) {

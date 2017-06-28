@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef MPLAYER_IMG_FORMAT_H
@@ -130,11 +130,6 @@ enum mp_imgfmt {
     IMGFMT_420P10,
     IMGFMT_420P9,
 
-    // Planar YUV with alpha (4th plane)
-    IMGFMT_444AP,
-    IMGFMT_422AP,
-    IMGFMT_420AP,
-
     // Gray
     IMGFMT_Y8,
     IMGFMT_Y16,
@@ -236,7 +231,7 @@ static inline bool IMGFMT_IS_RGB(int fmt)
 #define IMGFMT_RGB_DEPTH(fmt) (mp_imgfmt_get_desc(fmt).plane_bits)
 #define IMGFMT_IS_HWACCEL(fmt) (mp_imgfmt_get_desc(fmt).flags & MP_IMGFLAG_HWACCEL)
 
-int mp_imgfmt_from_name(bstr name, bool allow_hwaccel);
+int mp_imgfmt_from_name(bstr name);
 char *mp_imgfmt_to_name_buf(char *buf, size_t buf_size, int fmt);
 #define mp_imgfmt_to_name(fmt) mp_imgfmt_to_name_buf((char[16]){0}, 16, (fmt))
 

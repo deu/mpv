@@ -1,18 +1,20 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Parts under HAVE_GPL are licensed under GNU General Public License.
  */
 
 #include <stddef.h>
@@ -177,6 +179,7 @@ void audio_update_volume(struct MPContext *mpctx)
     if (opts->softvol_mute == 1)
         gain = 0.0;
 
+#if HAVE_GPL
     if (!af_control_any_rev(ao_c->af, AF_CONTROL_SET_VOLUME, &gain)) {
         if (gain == 1.0)
             return;
@@ -186,6 +189,7 @@ void audio_update_volume(struct MPContext *mpctx)
               && af_control_any_rev(ao_c->af, AF_CONTROL_SET_VOLUME, &gain)))
             MP_ERR(mpctx, "No volume control available.\n");
     }
+#endif
 }
 
 /* NOTE: Currently the balance code is seriously buggy: it always changes
@@ -233,6 +237,7 @@ static int recreate_audio_filters(struct MPContext *mpctx)
 {
     assert(mpctx->ao_chain);
 
+#if HAVE_GPL
     struct af_stream *afs = mpctx->ao_chain->af;
     if (afs->initialized < 1 && af_init(afs) < 0)
         goto fail;
@@ -240,6 +245,7 @@ static int recreate_audio_filters(struct MPContext *mpctx)
     recreate_speed_filters(mpctx);
     if (afs->initialized < 1 && af_init(afs) < 0)
         goto fail;
+#endif
 
     if (mpctx->opts->softvol == SOFTVOL_NO)
         MP_ERR(mpctx, "--softvol=no is not supported anymore.\n");
@@ -407,6 +413,7 @@ static void reinit_audio_filters_and_output(struct MPContext *mpctx)
         }
     }
 
+#if HAVE_GPL
     // filter input format: same as codec's output format:
     afs->input = in_format;
 
@@ -502,6 +509,7 @@ static void reinit_audio_filters_and_output(struct MPContext *mpctx)
 
     if (recreate_audio_filters(mpctx) < 0)
         goto init_error;
+#endif
 
     update_playback_speed(mpctx);
 
@@ -840,6 +848,7 @@ static int decode_new_frame(struct ao_chain *ao_c)
     }
 }
 
+#if HAVE_GPL
 /* Try to get at least minsamples decoded+filtered samples in outbuf
  * (total length including possible existing data).
  * Return 0 on success, or negative AD_* error code.
@@ -909,6 +918,7 @@ static int filter_audio(struct MPContext *mpctx, struct mp_audio_buffer *outbuf,
 
     return res;
 }
+#endif
 
 void reload_audio_output(struct MPContext *mpctx)
 {

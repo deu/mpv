@@ -1,24 +1,20 @@
 /*
- * GyS-TermIO v2.0 (for GySmail v3)
- * a very small replacement of ncurses library
+ * Based on GyS-TermIO v2.0 (for GySmail v3) (copyright (C) 1999 A'rpi/ESP-team)
  *
- * copyright (C) 1999 A'rpi/ESP-team
+ * This file is part of mpv.
  *
- * This file is part of MPlayer.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- * MPlayer is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * MPlayer is distributed in the hope that it will be useful,
+ * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with MPlayer; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
@@ -478,7 +474,7 @@ void terminal_get_size(int *w, int *h)
     *h = ws.ws_row;
 }
 
-int terminal_init(void)
+void terminal_init(void)
 {
     assert(!getch2_enabled);
     getch2_enabled = 1;
@@ -490,6 +486,4 @@ int terminal_init(void)
     setsigaction(SIGTTOU, SIG_IGN, 0, true);
 
     getch2_poll();
-
-    return 0;
 }

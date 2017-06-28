@@ -73,6 +73,7 @@ typedef struct MPOpts {
     int use_terminal;
     char *dump_stats;
     int verbose;
+    int msg_really_quiet;
     char **msg_levels;
     int msg_color;
     int msg_module;
@@ -337,6 +338,8 @@ typedef struct MPOpts {
     struct angle_opts *angle_opts;
     struct cocoa_opts *cocoa_opts;
     struct dvd_opts *dvd_opts;
+
+    int cuda_device;
 } MPOpts;
 
 struct dvd_opts {

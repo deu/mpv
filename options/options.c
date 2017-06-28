@@ -1,18 +1,20 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Parts under HAVE_GPL are licensed under GNU General Public License.
  */
 
 #ifndef MPLAYER_CFG_MPLAYER_H
@@ -56,22 +58,16 @@
 #include "video/out/opengl/hwdec.h"
 #endif
 
-extern const char mp_help_text[];
-
 static void print_version(struct mp_log *log)
 {
     mp_print_version(log, true);
-}
-
-static void print_help(struct mp_log *log)
-{
-    mp_info(log, "%s", mp_help_text);
 }
 
 extern const struct m_sub_options tv_params_conf;
 extern const struct m_sub_options stream_cdda_conf;
 extern const struct m_sub_options stream_dvb_conf;
 extern const struct m_sub_options stream_lavf_conf;
+extern const struct m_sub_options stream_cache_conf;
 extern const struct m_sub_options sws_conf;
 extern const struct m_sub_options demux_rawaudio_conf;
 extern const struct m_sub_options demux_rawvideo_conf;
@@ -122,34 +118,6 @@ static const struct m_sub_options screenshot_conf = {
     .opts = image_writer_opts,
     .size = sizeof(struct image_writer_opts),
     .defaults = &image_writer_opts_defaults,
-};
-
-#define OPT_BASE_STRUCT struct mp_cache_opts
-
-const struct m_sub_options stream_cache_conf = {
-    .opts = (const struct m_option[]){
-        OPT_CHOICE_OR_INT("cache", size, 0, 32, 0x7fffffff,
-                          ({"no", 0},
-                           {"auto", -1},
-                           {"yes", -2})),
-        OPT_CHOICE_OR_INT("cache-default", def_size, 0, 32, 0x7fffffff,
-                          ({"no", 0})),
-        OPT_INTRANGE("cache-initial", initial, 0, 0, 0x7fffffff),
-        OPT_INTRANGE("cache-seek-min", seek_min, 0, 0, 0x7fffffff),
-        OPT_INTRANGE("cache-backbuffer", back_buffer, 0, 0, 0x7fffffff),
-        OPT_STRING("cache-file", file, M_OPT_FILE),
-        OPT_INTRANGE("cache-file-size", file_max, 0, 0, 0x7fffffff),
-        {0}
-    },
-    .size = sizeof(struct mp_cache_opts),
-    .defaults = &(const struct mp_cache_opts){
-        .size = -1,
-        .def_size = 75000,
-        .initial = 0,
-        .seek_min = 500,
-        .back_buffer = 75000,
-        .file_max = 1024 * 1024,
-    },
 };
 
 #undef OPT_BASE_STRUCT
@@ -261,19 +229,32 @@ const struct m_sub_options dvd_conf = {
 
 const m_option_t mp_opts[] = {
     // handled in command line pre-parser (parse_commandline.c)
-    {"v", CONF_TYPE_STORE, M_OPT_FIXED | CONF_NOCFG, .offset = -1},
+    {"v", &m_option_type_dummy_flag, M_OPT_FIXED | CONF_NOCFG | M_OPT_NOPROP,
+     .offset = -1},
     {"playlist", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_MIN | M_OPT_FIXED | M_OPT_FILE,
      .min = 1, .offset = -1},
-    {"{", CONF_TYPE_STORE, CONF_NOCFG | M_OPT_FIXED, .offset = -1},
-    {"}", CONF_TYPE_STORE, CONF_NOCFG | M_OPT_FIXED, .offset = -1},
+    {"{", &m_option_type_dummy_flag, CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP,
+     .offset = -1},
+    {"}", &m_option_type_dummy_flag, CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP,
+     .offset = -1},
 
     // handled in m_config.c
     { "include", CONF_TYPE_STRING, M_OPT_FILE, .offset = -1},
     { "profile", CONF_TYPE_STRING_LIST, 0, .offset = -1},
-    { "show-profile", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_FIXED, .offset = -1},
-    { "list-options", CONF_TYPE_STORE, CONF_NOCFG | M_OPT_FIXED, .offset = -1},
+    { "show-profile", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP,
+      .offset = -1},
+    { "list-options", &m_option_type_dummy_flag, CONF_NOCFG | M_OPT_FIXED |
+      M_OPT_NOPROP, .offset = -1},
     OPT_FLAG("list-properties", property_print_help,
              CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP),
+    { "help", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP |
+              M_OPT_OPTIONAL_PARAM, .offset = -1},
+    { "h", CONF_TYPE_STRING, CONF_NOCFG | M_OPT_FIXED | M_OPT_NOPROP |
+           M_OPT_OPTIONAL_PARAM, .offset = -1},
+
+    OPT_PRINT("list-protocols", stream_print_proto_list),
+    OPT_PRINT("version", print_version),
+    OPT_PRINT("V", print_version),
 
     OPT_CHOICE("player-operation-mode", operation_mode,
                M_OPT_FIXED | M_OPT_PRE_PARSE | M_OPT_NOPROP,
@@ -283,8 +264,7 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- common options --------------------
     OPT_FLAG("quiet", quiet, 0),
-    OPT_FLAG_STORE("really-quiet", verbose,
-                   M_OPT_FIXED | CONF_PRE_PARSE | M_OPT_NOPROP, -10),
+    OPT_FLAG("really-quiet", msg_really_quiet, CONF_PRE_PARSE | UPDATE_TERM),
     OPT_FLAG("terminal", use_terminal, CONF_PRE_PARSE | UPDATE_TERM),
     OPT_GENERAL(char**, "msg-level", msg_levels, CONF_PRE_PARSE | UPDATE_TERM,
                 .type = &m_option_type_msglevels),
@@ -293,7 +273,7 @@ const m_option_t mp_opts[] = {
     OPT_STRING("log-file", log_file, CONF_PRE_PARSE | M_OPT_FILE | UPDATE_TERM),
     OPT_FLAG("msg-module", msg_module, UPDATE_TERM),
     OPT_FLAG("msg-time", msg_time, UPDATE_TERM),
-#ifdef _WIN32
+#if defined(_WIN32) && HAVE_GPL
     OPT_CHOICE("priority", w32_priority, UPDATE_PRIORITY,
                ({"no",          0},
                 {"realtime",    REALTIME_PRIORITY_CLASS},
@@ -308,14 +288,16 @@ const m_option_t mp_opts[] = {
                M_OPT_FIXED | CONF_NOCFG | CONF_PRE_PARSE | M_OPT_FILE),
     OPT_STRINGLIST("reset-on-next-file", reset_options, 0),
 
-#if HAVE_LUA
+#if HAVE_LUA || HAVE_JAVASCRIPT
     OPT_STRINGLIST("script", script_files, M_OPT_FIXED | M_OPT_FILE),
     OPT_KEYVALUELIST("script-opts", script_opts, 0),
+    OPT_FLAG("load-scripts", auto_load_scripts, 0),
+#endif
+#if HAVE_LUA
     OPT_FLAG("osc", lua_load_osc, UPDATE_BUILTIN_SCRIPTS),
     OPT_FLAG("ytdl", lua_load_ytdl, UPDATE_BUILTIN_SCRIPTS),
     OPT_STRING("ytdl-format", lua_ytdl_format, 0),
     OPT_KEYVALUELIST("ytdl-raw-options", lua_ytdl_raw_options, 0),
-    OPT_FLAG("load-scripts", auto_load_scripts, 0),
 #endif
 
 // ------------------------- stream options --------------------
@@ -335,7 +317,10 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- demuxer options --------------------
 
+#if HAVE_GPL
+    // Possibly GPL due to d8fd7131bbcde029ab41799fd3162050b43f6848.
     OPT_CHOICE_OR_INT("frames", play_frames, 0, 0, INT_MAX, ({"all", -1})),
+#endif
 
     OPT_REL_TIME("start", play_start, 0),
     OPT_REL_TIME("end", play_end, 0),
@@ -383,7 +368,7 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE_OR_INT("hls-bitrate", hls_bitrate, 0, 0, INT_MAX,
                       ({"no", -1}, {"min", 0}, {"max", INT_MAX})),
 
-    OPT_STRINGLIST("display-tags*", display_tags, 0),
+    OPT_STRINGLIST("display-tags", display_tags, 0),
 
 #if HAVE_CDDA
     OPT_SUBSTRUCT("cdda", stream_cdda_opts, stream_cdda_conf, 0),
@@ -430,9 +415,9 @@ const m_option_t mp_opts[] = {
 // ------------------------- codec/vfilter options --------------------
 
     OPT_SETTINGSLIST("af-defaults", af_defs, 0, &af_obj_list, ),
-    OPT_SETTINGSLIST("af*", af_settings, 0, &af_obj_list, ),
+    OPT_SETTINGSLIST("af", af_settings, 0, &af_obj_list, ),
     OPT_SETTINGSLIST("vf-defaults", vf_defs, 0, &vf_obj_list, ),
-    OPT_SETTINGSLIST("vf*", vf_settings, 0, &vf_obj_list, ),
+    OPT_SETTINGSLIST("vf", vf_settings, 0, &vf_obj_list, ),
 
     OPT_CHOICE("deinterlace", deinterlace, 0,
                ({"auto", -1},
@@ -459,8 +444,11 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE("video-aspect-method", aspect_method, UPDATE_IMGPAR,
                ({"hybrid", 0}, {"bitstream", 1}, {"container", 2})),
 
+#if HAVE_GPL
     OPT_CHOICE("field-dominance", field_dominance, UPDATE_IMGPAR,
-               ({"auto", -1}, {"top", 0}, {"bottom", 1})),
+               ({"auto", -1}, {"top", 0}, {"bottom", 1}),
+               .deprecation_message = "use --vf=setfield=bff or tff"),
+#endif
 
     OPT_SUBSTRUCT("vd-lavc", vd_lavc_params, vd_lavc_conf, 0),
     OPT_SUBSTRUCT("ad-lavc", ad_lavc_params, ad_lavc_conf, 0),
@@ -512,8 +500,8 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE("sub-ass-shaper", ass_shaper, UPDATE_OSD,
                ({"simple", 0}, {"complex", 1})),
     OPT_FLAG("sub-ass-justify", ass_justify, 0),
-    OPT_CHOICE("sub-ass-style-override", ass_style_override, UPDATE_OSD,
-               ({"no", 0}, {"yes", 1}, {"force", 3}, {"signfs", 4}, {"strip", 5})),
+    OPT_CHOICE("sub-ass-override", ass_style_override, UPDATE_OSD,
+               ({"no", 0}, {"yes", 1}, {"force", 3}, {"scale", 4}, {"strip", 5})),
     OPT_FLAG("sub-scale-by-window", sub_scale_by_window, UPDATE_OSD),
     OPT_FLAG("sub-scale-with-window", sub_scale_with_window, UPDATE_OSD),
     OPT_FLAG("sub-ass-scale-with-window", ass_scale_with_window, UPDATE_OSD),
@@ -584,6 +572,7 @@ const m_option_t mp_opts[] = {
                .deprecation_message = "use Lua scripting instead"),
     OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
 
+#if HAVE_GPL
     OPT_INTRANGE("brightness", gamma_brightness, 0, -100, 100),
     OPT_INTRANGE("saturation", gamma_saturation, 0, -100, 100),
     OPT_INTRANGE("contrast", gamma_contrast, 0, -100, 100),
@@ -591,6 +580,7 @@ const m_option_t mp_opts[] = {
     OPT_INTRANGE("gamma", gamma_gamma, 0, -100, 100),
     OPT_CHOICE_C("video-output-levels", video_output_levels, 0,
                  mp_csp_levels_names),
+#endif
 
     OPT_FLAG("use-filedir-conf", use_filedir_conf, 0),
     OPT_CHOICE("osd-level", osd_level, 0,
@@ -703,12 +693,6 @@ const m_option_t mp_opts[] = {
 
     OPT_SUBSTRUCT("", input_opts, input_config, 0),
 
-    OPT_PRINT("list-protocols", stream_print_proto_list),
-    OPT_PRINT("help", print_help),
-    OPT_PRINT("h", print_help),
-    OPT_PRINT("version", print_version),
-    OPT_PRINT("V", print_version),
-
     OPT_SUBSTRUCT("", vo, vo_sub_opts, 0),
     OPT_SUBSTRUCT("", demux_opts, demux_conf, 0),
 
@@ -727,6 +711,11 @@ const m_option_t mp_opts[] = {
 #if HAVE_GL_WIN32
     OPT_CHOICE("opengl-dwmflush", wingl_dwm_flush, 0,
                ({"no", -1}, {"auto", 0}, {"windowed", 1}, {"yes", 2})),
+#endif
+
+#if HAVE_CUDA_HWACCEL
+    OPT_CHOICE_OR_INT("cuda-decode-device", cuda_device, 0,
+                      0, INT_MAX, ({"auto", -1})),
 #endif
 
 #if HAVE_ENCODING
@@ -840,6 +829,7 @@ const m_option_t mp_opts[] = {
     OPT_REPLACED("ass-shaper", "sub-ass-shaper"),
     OPT_REPLACED("ass-style-override", "sub-ass-style-override"),
     OPT_REPLACED("ass-scale-with-window", "sub-ass-scale-with-window"),
+    OPT_REPLACED("sub-ass-style-override", "sub-ass-override"),
     OPT_REMOVED("fs-black-out-screens", NULL),
     OPT_REPLACED_MSG("loop", "loop-playlist", "--loop will be changed to map to"
         " --loop-file in future releases."),
@@ -939,6 +929,7 @@ const struct MPOpts mp_default_opts = {
     .playback_speed = 1.,
     .pitch_correction = 1,
     .movie_aspect = -1.,
+    .aspect_method = 1,
     .field_dominance = -1,
     .sub_auto = 0,
     .audiofile_auto = -1,
@@ -953,7 +944,6 @@ const struct MPOpts mp_default_opts = {
     .ass_style_override = 1,
     .ass_shaper = 1,
     .use_embedded_fonts = 1,
-    .sub_fix_timing = 1,
     .screenshot_template = "mpv-shot%n",
 
     .hwdec_api = HAVE_RPI ? HWDEC_RPI : 0,
@@ -974,6 +964,8 @@ const struct MPOpts mp_default_opts = {
         "Performer", "Title", "Track", "icy-title", "service_name",
         NULL
     },
+
+    .cuda_device = -1,
 };
 
 #endif /* MPLAYER_CFG_MPLAYER_H */

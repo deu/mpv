@@ -25,6 +25,19 @@ Interface changes
     - introduce --replaygain... options, which replace the same functionality
       provided by the deprecated --af=volume:replaygain... mechanism.
     - drop the internal "mp-rawvideo" codec (used by --demuxer=rawvideo)
+    - rename --sub-ass-style-override to --sub-ass-override, and rename the
+      `--sub-ass-override=signfs` setting to `--sub-ass-override=scale`.
+    - change default of --video-aspect-method to "bitstream". The "hybrid"
+      method (old default) is deprecated.
+    - remove property "video-params/nom-peak"
+    - remove option --target-brightness
+    - replace vf_format's `peak` suboption by `sig-peak`, which is relative to
+      the reference white level instead of in cd/m^2
+    - renamed the TRCs `st2084` and `std-b67` to `pq` and `hlg` respectively
+    - the "osd" command is deprecated (use "cycle osd-level")
+    - --field-dominance is deprecated (use --vf=setfield=bff or tff)
+    - --really-quiet subtle behavior change
+    - the deprecated handling of setting "no-" options via client API is dropped
  --- mpv 0.25.0 ---
     - remove opengl-cb dxva2 dummy hwdec interop
       (see git "vo_opengl: remove dxva2 dummy hwdec backend")

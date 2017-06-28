@@ -1,18 +1,20 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Parts under HAVE_GPL are licensed under GNU General Public License.
  */
 
 #include <stdlib.h>
@@ -348,15 +350,16 @@ static char *format_delay(double time)
 int mp_on_set_option(void *ctx, struct m_config_option *co, void *data, int flags)
 {
     struct MPContext *mpctx = ctx;
-
-    // Normalize "vf*" to "vf"
+    struct command_ctx *cmd = mpctx->command_ctx;
     const char *name = co->name;
-    bstr bname = bstr0(name);
-    char tmp[50];
-    if (bstr_eatend0(&bname, "*")) {
-        snprintf(tmp, sizeof(tmp), "%.*s", BSTR_P(bname));
-        name = tmp;
-    }
+
+    // Skip going through mp_property_generic_option (typically), because the
+    // property implementation is trivial, and can break some obscure features
+    // like --profile and --include if non-trivial flags are involved (which
+    // the bridge would drop).
+    struct m_property *prop = m_property_list_find(cmd->properties, name);
+    if (prop && prop->is_option)
+        goto direct_option;
 
     struct m_option type = {0};
 
@@ -402,14 +405,14 @@ static int mp_property_generic_option(void *ctx, struct m_property *prop,
     if (!opt)
         return M_PROPERTY_UNKNOWN;
 
-    void *valptr = opt->data;
-
     switch (action) {
     case M_PROPERTY_GET_TYPE:
         *(struct m_option *)arg = *(opt->opt);
         return M_PROPERTY_OK;
     case M_PROPERTY_GET:
-        m_option_copy(opt->opt, arg, valptr);
+        if (!opt->data)
+            return M_PROPERTY_NOT_IMPLEMENTED;
+        m_option_copy(opt->opt, arg, opt->data);
         return M_PROPERTY_OK;
     case M_PROPERTY_SET:
         if (m_config_set_option_raw_direct(mpctx->mconfig, opt, arg, flags) < 0)
@@ -417,17 +420,6 @@ static int mp_property_generic_option(void *ctx, struct m_property *prop,
         return M_PROPERTY_OK;
     }
     return M_PROPERTY_NOT_IMPLEMENTED;
-}
-
-// Dumb special-case: the option name ends in a "*".
-static int mp_property_generic_option_star(void *ctx, struct m_property *prop,
-                                           int action, void *arg)
-{
-    struct m_property prop2 = *prop;
-    char name[80];
-    snprintf(name, sizeof(name), "%s*", prop->name);
-    prop2.name = name;
-    return mp_property_generic_option(ctx, &prop2, action, arg);
 }
 
 /// Playback speed (RW)
@@ -2361,7 +2353,7 @@ static int mp_property_program(void *ctx, struct m_property *prop,
                                int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    demux_program_t prog;
+    demux_program_t prog = {0};
 
     struct demuxer *demuxer = mpctx->demuxer;
     if (!demuxer || !mpctx->playback_initialized)
@@ -2375,7 +2367,7 @@ static int mp_property_program(void *ctx, struct m_property *prop,
         else
             prog.progid = -1;
         if (demux_control(demuxer, DEMUXER_CTRL_IDENTIFY_PROGRAM, &prog) ==
-            DEMUXER_CTRL_NOTIMPL)
+            CONTROL_UNKNOWN)
             return M_PROPERTY_ERROR;
 
         if (prog.aid < 0 && prog.vid < 0) {
@@ -2477,6 +2469,8 @@ static int mp_property_hwdec_interop(void *ctx, struct m_property *prop,
     return m_property_strdup_ro(action, arg, name);
 }
 
+#if HAVE_GPL
+// Possibly GPL due to 7b25afd7423e9056782993cbd1b32ead64ac1462.
 static int mp_property_deinterlace(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
@@ -2496,6 +2490,7 @@ static int mp_property_deinterlace(void *ctx, struct m_property *prop,
     }
     return mp_property_generic_option(mpctx, prop, action, arg);
 }
+#endif
 
 /// Helper to set vo flags.
 /** \ingroup PropertyImplHelper
@@ -2606,6 +2601,7 @@ static int mp_property_frame_count(void *ctx, struct m_property *prop,
     return m_property_int_ro(action, arg, frames);
 }
 
+#if HAVE_GPL
 static int mp_property_video_color(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
@@ -2632,6 +2628,7 @@ static int mp_property_video_color(void *ctx, struct m_property *prop,
     }
     return mp_property_generic_option(mpctx, prop, action, arg);
 }
+#endif
 
 /// Video codec tag (RO)
 static int mp_property_video_format(void *ctx, struct m_property *prop,
@@ -2686,8 +2683,9 @@ static int property_imgparams(struct mp_image_params p, int action, void *arg)
             SUB_PROP_STR(m_opt_choice_str(mp_csp_prim_names, p.color.primaries))},
         {"gamma",
             SUB_PROP_STR(m_opt_choice_str(mp_csp_trc_names, p.color.gamma))},
-        {"nom-peak", SUB_PROP_FLOAT(p.color.nom_peak)},
         {"sig-peak", SUB_PROP_FLOAT(p.color.sig_peak)},
+        {"light",
+            SUB_PROP_STR(m_opt_choice_str(mp_csp_light_names, p.color.light))},
         {"chroma-location",
             SUB_PROP_STR(m_opt_choice_str(mp_chroma_names, p.chroma_location))},
         {"stereo-in",
@@ -3949,11 +3947,14 @@ static const struct m_property mp_properties_base[] = {
 
     // Video
     {"fullscreen", mp_property_fullscreen},
+#if HAVE_GPL
     {"deinterlace", mp_property_deinterlace},
+#endif
     {"taskbar-progress", mp_property_taskbar_progress},
     {"ontop", mp_property_ontop},
     {"border", mp_property_border},
     {"on-all-workspaces", mp_property_all_workspaces},
+#if HAVE_GPL
     {"gamma", mp_property_video_color},
     {"brightness", mp_property_video_color},
     {"contrast", mp_property_video_color},
@@ -3961,6 +3962,7 @@ static const struct m_property mp_properties_base[] = {
     {"hue", mp_property_video_color},
     {"video-output-levels", mp_property_video_color,
      .priv = (void *)"output-levels"},
+#endif
     {"video-out-params", mp_property_vo_imgparams},
     {"video-dec-params", mp_property_dec_imgparams},
     {"video-params", mp_property_vd_imgparams},
@@ -4334,7 +4336,7 @@ static const struct property_osd_display {
     { "sub-forced-only", "Forced sub only" },
     { "sub-scale", "Sub Scale"},
     { "sub-ass-vsfilter-aspect-compat", "Subtitle VSFilter aspect compat"},
-    { "sub-ass-style-override", "ASS subtitle style override"},
+    { "sub-ass-override", "ASS subtitle style override"},
     { "vf", "Video filters", .msg = "Video filters:\n${vf}"},
     { "af", "Audio filters", .msg = "Audio filters:\n${af}"},
     { "tv-brightness", "Brightness", .osd_progbar = OSD_BRIGHTNESS },
@@ -4935,6 +4937,8 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         break;
     }
 
+#if HAVE_GPL
+    // Possibly GPL due to 7a71da01d64374ce22b430590f3df32c881288bd.
     case MP_CMD_ADD:
     case MP_CMD_CYCLE:
     {
@@ -4971,6 +4975,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         }
         break;
     }
+#endif
 
     case MP_CMD_MULTIPLY: {
         char *property = cmd->args[0].v.s;
@@ -5113,8 +5118,13 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         break;
     }
 
+#if HAVE_GPL
+    // Potentially GPL due to 8d190244d21a4d40bb9e8f7d51aa09ca1888de09.
     case MP_CMD_OSD: {
+        MP_WARN(mpctx, "The 'osd' command is deprecated. "
+                       "Use 'cycle osd-level' instead.\n");
         int v = cmd->args[0].v.i;
+#define MAX_OSD_LEVEL 3
         if (opts->osd_level > MAX_OSD_LEVEL)
             opts->osd_level = MAX_OSD_LEVEL;
         if (v < 0)
@@ -5128,6 +5138,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         mp_wakeup_core(mpctx);
         break;
     }
+#endif
 
     case MP_CMD_PRINT_TEXT: {
         MP_INFO(mpctx, "%s\n", cmd->args[0].v.s);
@@ -5276,6 +5287,8 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         break;
     }
 
+#if HAVE_GPL
+    // Possibly GPL due to 2f376d1b39913e8ff4c4499e7cf7148ec331d4db.
     case MP_CMD_SUB_ADD:
     case MP_CMD_AUDIO_ADD: {
         if (!mpctx->playing)
@@ -5327,6 +5340,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
             print_track_list(mpctx, "Track removed:");
         break;
     }
+#endif
 
     case MP_CMD_SUB_RELOAD:
     case MP_CMD_AUDIO_RELOAD: {
@@ -5672,18 +5686,7 @@ void command_init(struct MPContext *mpctx)
 
         struct m_property prop = {0};
 
-        if (co->data) {
-            prop = (struct m_property){
-                .name = co->name,
-                .call = mp_property_generic_option,
-            };
-
-            bstr bname = bstr0(prop.name);
-            if (bstr_eatend0(&bname, "*")) {
-                prop.name = bstrto0(ctx, bname);
-                prop.call = mp_property_generic_option_star;
-            }
-        } else if (co->opt->type == &m_option_type_alias) {
+        if (co->opt->type == &m_option_type_alias) {
             const char *alias = (const char *)co->opt->priv;
 
             prop = (struct m_property){
@@ -5691,6 +5694,13 @@ void command_init(struct MPContext *mpctx)
                 .call = co->opt->deprecation_message ?
                             mp_property_deprecated_alias : mp_property_alias,
                 .priv = (void *)alias,
+                .is_option = true,
+            };
+        } else {
+            prop = (struct m_property){
+                .name = co->name,
+                .call = mp_property_generic_option,
+                .is_option = true,
             };
         }
 
@@ -5747,7 +5757,7 @@ void mp_notify(struct MPContext *mpctx, int event, void *arg)
 
 static void update_priority(struct MPContext *mpctx)
 {
-#ifdef _WIN32
+#if defined(_WIN32) && HAVE_GPL
     struct MPOpts *opts = mpctx->opts;
     if (opts->w32_priority > 0)
         SetPriorityClass(GetCurrentProcess(), opts->w32_priority);

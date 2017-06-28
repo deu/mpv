@@ -1,18 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <assert.h>
@@ -41,24 +41,7 @@ static const struct mp_imgfmt_entry mp_imgfmt_list[] = {
     // FFmpeg names have an annoying "_vld" suffix
     {"videotoolbox",    IMGFMT_VIDEOTOOLBOX},
     {"vaapi",           IMGFMT_VAAPI},
-    // names below this are not preferred over the FFmpeg names
-    // the "none" entry makes mp_imgfmt_to_name prefer FFmpeg names
     {"none",            0},
-    // endian-specific aliases (not in FFmpeg)
-    {"rgb32",           IMGFMT_RGB32},
-    {"bgr32",           IMGFMT_BGR32},
-    // old names we keep around
-    {"y8",              IMGFMT_Y8},
-    {"420p",            IMGFMT_420P},
-    {"yv12",            IMGFMT_420P},
-    {"420p16",          IMGFMT_420P16},
-    {"420p10",          IMGFMT_420P10},
-    {"444p",            IMGFMT_444P},
-    {"444p9",           IMGFMT_444P9},
-    {"444p10",          IMGFMT_444P10},
-    {"422p",            IMGFMT_422P},
-    {"422p9",           IMGFMT_422P9},
-    {"422p10",          IMGFMT_422P10},
     {0}
 };
 
@@ -69,13 +52,13 @@ char **mp_imgfmt_name_list(void)
     int num = 0;
     for (int n = IMGFMT_START; n < IMGFMT_END; n++) {
         const char *name = mp_imgfmt_to_name(n);
-        if (strcmp(name, "none") != 0 && strcmp(name, "unknown") != 0)
+        if (strcmp(name, "unknown") != 0)
             list[num++] = talloc_strdup(list, name);
     }
     return list;
 }
 
-int mp_imgfmt_from_name(bstr name, bool allow_hwaccel)
+int mp_imgfmt_from_name(bstr name)
 {
     int img_fmt = 0;
     for (const struct mp_imgfmt_entry *p = mp_imgfmt_list; p->name; ++p) {
@@ -89,8 +72,6 @@ int mp_imgfmt_from_name(bstr name, bool allow_hwaccel)
         img_fmt = pixfmt2imgfmt(av_get_pix_fmt(t));
         talloc_free(t);
     }
-    if (!allow_hwaccel && IMGFMT_IS_HWACCEL(img_fmt))
-        return 0;
     return img_fmt;
 }
 

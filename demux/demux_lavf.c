@@ -15,6 +15,8 @@
  *
  * You should have received a copy of the GNU General Public License along
  * with mpv.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Almost LGPL.
  */
 
 #include <stdlib.h>
@@ -149,7 +151,7 @@ static const struct format_hack format_hacks[] = {
     {"mp3", "audio/mpeg", 24, 0.5},
     {"mp3", NULL,         24, .max_probe = true},
 
-    {"hls", .no_stream = true, .clear_filepos = true, .skipinfo = true},
+    {"hls", .no_stream = true, .clear_filepos = true},
     {"mpeg", .use_stream_ids = true},
     {"mpegts", .use_stream_ids = true},
 
@@ -477,7 +479,8 @@ static int lavf_check_file(demuxer_t *demuxer, enum demux_check check)
         priv->format_hack.image_format = true;
     }
 
-    priv->avif_flags = priv->avif->flags | priv->format_hack.if_flags;
+    if (lavfdopts->hacks)
+        priv->avif_flags = priv->avif->flags | priv->format_hack.if_flags;
 
     demuxer->filetype = priv->avif->name;
 
@@ -936,6 +939,26 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
 
     demuxer->fully_read = priv->format_hack.fully_read;
 
+    if (priv->avfc->duration > 0) {
+        demuxer->duration = (double)priv->avfc->duration / AV_TIME_BASE;
+    } else {
+        double total_duration = 0;
+        double av_duration = 0;
+        for (int n = 0; n < priv->avfc->nb_streams; n++) {
+            AVStream *st = priv->avfc->streams[n];
+            if (st->duration <= 0)
+                continue;
+            double f_duration = st->duration * av_q2d(st->time_base);
+            total_duration = MPMAX(total_duration, f_duration);
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
+                st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                av_duration = MPMAX(av_duration, f_duration);
+        }
+        double duration = av_duration > 0 ? av_duration : total_duration;
+        if (duration > 0)
+            demuxer->duration = duration;
+    }
+
     return 0;
 }
 
@@ -1042,34 +1065,10 @@ static int demux_lavf_control(demuxer_t *demuxer, int cmd, void *arg)
     lavf_priv_t *priv = demuxer->priv;
 
     switch (cmd) {
-    case DEMUXER_CTRL_GET_TIME_LENGTH:
-        if (priv->avfc->duration <= 0) {
-            double total_duration = 0;
-            double av_duration = 0;
-            for (int n = 0; n < priv->avfc->nb_streams; n++) {
-                AVStream *st = priv->avfc->streams[n];
-                if (st->duration <= 0)
-                    continue;
-                double f_duration = st->duration * av_q2d(st->time_base);
-                total_duration = MPMAX(total_duration, f_duration);
-                if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
-                    st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
-                    av_duration = MPMAX(av_duration, f_duration);
-            }
-            double duration = av_duration > 0 ? av_duration : total_duration;
-            if (duration <= 0)
-                return DEMUXER_CTRL_DONTKNOW;
-            *(double *)arg = duration;
-            return DEMUXER_CTRL_OK;
-        }
-
-        *((double *)arg) = (double)priv->avfc->duration / AV_TIME_BASE;
-        return DEMUXER_CTRL_OK;
-
     case DEMUXER_CTRL_SWITCHED_TRACKS:
     {
         select_tracks(demuxer, 0);
-        return DEMUXER_CTRL_OK;
+        return CONTROL_OK;
     }
     case DEMUXER_CTRL_IDENTIFY_PROGRAM:
     {
@@ -1082,7 +1081,7 @@ static int demux_lavf_control(demuxer_t *demuxer, int cmd, void *arg)
 
         prog->vid = prog->aid = prog->sid = -2;
         if (priv->avfc->nb_programs < 1)
-            return DEMUXER_CTRL_DONTKNOW;
+            return CONTROL_FALSE;
 
         if (prog->progid == -1) {
             p = 0;
@@ -1094,7 +1093,7 @@ static int demux_lavf_control(demuxer_t *demuxer, int cmd, void *arg)
                 if (priv->avfc->programs[i]->id == prog->progid)
                     break;
             if (i == priv->avfc->nb_programs)
-                return DEMUXER_CTRL_DONTKNOW;
+                return CONTROL_FALSE;
             p = i;
         }
         start = p;
@@ -1123,7 +1122,7 @@ redo:
         if (prog->progid == -1 && prog->vid == -2 && prog->aid == -2) {
             p = (p + 1) % priv->avfc->nb_programs;
             if (p == start)
-                return DEMUXER_CTRL_DONTKNOW;
+                return CONTROL_FALSE;
             goto redo;
         }
         priv->cur_program = prog->progid = program->id;
@@ -1133,7 +1132,7 @@ redo:
         // Enforce metadata update even if no explicit METADATA_UPDATED since we switched program.
         demux_changed(demuxer, DEMUX_EVENT_METADATA);
 
-        return DEMUXER_CTRL_OK;
+        return CONTROL_OK;
     }
     case DEMUXER_CTRL_RESYNC:
         /* NOTE:
@@ -1154,15 +1153,15 @@ redo:
         priv->avfc->pb->pos = stream_tell(priv->stream);
         av_seek_frame(priv->avfc, 0, stream_tell(priv->stream),
                       AVSEEK_FLAG_BYTE);
-        return DEMUXER_CTRL_OK;
+        return CONTROL_OK;
     case DEMUXER_CTRL_REPLACE_STREAM:
         if (priv->own_stream)
             free_stream(priv->stream);
         priv->own_stream = false;
         priv->stream = demuxer->stream;
-        return DEMUXER_CTRL_OK;
+        return CONTROL_OK;
     default:
-        return DEMUXER_CTRL_NOTIMPL;
+        return CONTROL_UNKNOWN;
     }
 }
 
@@ -1170,10 +1169,9 @@ static void demux_close_lavf(demuxer_t *demuxer)
 {
     lavf_priv_t *priv = demuxer->priv;
     if (priv) {
-        if (priv->avfc) {
+        if (priv->avfc)
             av_freep(&priv->avfc->key);
-            avformat_close_input(&priv->avfc);
-        }
+        avformat_close_input(&priv->avfc);
         if (priv->pb)
             av_freep(&priv->pb->buffer);
         av_freep(&priv->pb);

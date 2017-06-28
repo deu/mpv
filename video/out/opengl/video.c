@@ -44,10 +44,6 @@
 #include "video/out/dither.h"
 #include "video/out/vo.h"
 
-// Maximal number of saved textures (for user script purposes)
-#define MAX_TEXTURE_HOOKS 16
-#define MAX_SAVED_TEXTURES 32
-
 // scale/cscale arguments that map directly to shader filter routines.
 // Note that the convolution filters are not included in this list.
 static const char *const fixed_scale_filters[] = {
@@ -244,11 +240,11 @@ struct gl_video {
     float user_gamma;
 
     // hooks and saved textures
-    struct saved_tex saved_tex[MAX_SAVED_TEXTURES];
+    struct saved_tex saved_tex[SHADER_MAX_SAVED];
     int saved_tex_num;
-    struct tex_hook tex_hooks[MAX_TEXTURE_HOOKS];
+    struct tex_hook tex_hooks[SHADER_MAX_HOOKS];
     int tex_hook_num;
-    struct fbotex hook_fbos[MAX_SAVED_TEXTURES];
+    struct fbotex hook_fbos[SHADER_MAX_SAVED];
     int hook_fbo_num;
 
     int frames_uploaded;
@@ -290,8 +286,7 @@ static const struct gl_video_opts gl_video_opts_def = {
     .alpha_mode = ALPHA_BLEND_TILES,
     .background = {0, 0, 0, 255},
     .gamma = 1.0f,
-    .target_brightness = 250,
-    .hdr_tone_mapping = TONE_MAPPING_HABLE,
+    .hdr_tone_mapping = TONE_MAPPING_MOBIUS,
     .tone_mapping_param = NAN,
     .early_flush = -1,
 };
@@ -325,9 +320,9 @@ const struct m_sub_options gl_video_conf = {
         OPT_FLAG("gamma-auto", gamma_auto, 0),
         OPT_CHOICE_C("target-prim", target_prim, 0, mp_csp_prim_names),
         OPT_CHOICE_C("target-trc", target_trc, 0, mp_csp_trc_names),
-        OPT_INTRANGE("target-brightness", target_brightness, 0, 1, 100000),
         OPT_CHOICE("hdr-tone-mapping", hdr_tone_mapping, 0,
                    ({"clip",     TONE_MAPPING_CLIP},
+                    {"mobius",   TONE_MAPPING_MOBIUS},
                     {"reinhard", TONE_MAPPING_REINHARD},
                     {"hable",    TONE_MAPPING_HABLE},
                     {"gamma",    TONE_MAPPING_GAMMA},
@@ -509,7 +504,7 @@ static void uninit_rendering(struct gl_video *p)
     for (int n = 0; n < FBOSURFACES_MAX; n++)
         fbotex_uninit(&p->surfaces[n].fbotex);
 
-    for (int n = 0; n < MAX_SAVED_TEXTURES; n++)
+    for (int n = 0; n < SHADER_MAX_SAVED; n++)
         fbotex_uninit(&p->hook_fbos[n]);
 
     for (int n = 0; n < 2; n++)
@@ -1089,7 +1084,7 @@ static void saved_tex_store(struct gl_video *p, const char *name,
         }
     }
 
-    assert(p->saved_tex_num < MAX_SAVED_TEXTURES);
+    assert(p->saved_tex_num < SHADER_MAX_SAVED);
     p->saved_tex[p->saved_tex_num++] = (struct saved_tex) {
         .name = name,
         .tex = tex
@@ -1160,7 +1155,7 @@ static struct img_tex pass_hook(struct gl_video *p, const char *name,
         int w = lroundf(fabs(sz.x1 - sz.x0));
         int h = lroundf(fabs(sz.y1 - sz.y0));
 
-        assert(p->hook_fbo_num < MAX_SAVED_TEXTURES);
+        assert(p->hook_fbo_num < SHADER_MAX_SAVED);
         struct fbotex *fbo = &p->hook_fbos[p->hook_fbo_num++];
         finish_pass_fbo(p, fbo, w, h, 0);
 
@@ -1217,7 +1212,7 @@ static void pass_opt_hook_point(struct gl_video *p, const char *name,
     return;
 
 found:
-    assert(p->hook_fbo_num < MAX_SAVED_TEXTURES);
+    assert(p->hook_fbo_num < SHADER_MAX_SAVED);
     struct fbotex *fbo = &p->hook_fbos[p->hook_fbo_num++];
     finish_pass_fbo(p, fbo, p->texture_w, p->texture_h, 0);
 
@@ -1480,10 +1475,10 @@ static bool img_tex_equiv(struct img_tex a, struct img_tex b)
 
 static void pass_add_hook(struct gl_video *p, struct tex_hook hook)
 {
-    if (p->tex_hook_num < MAX_TEXTURE_HOOKS) {
+    if (p->tex_hook_num < SHADER_MAX_HOOKS) {
         p->tex_hooks[p->tex_hook_num++] = hook;
     } else {
-        MP_ERR(p, "Too many hooks! Limit is %d.\n", MAX_TEXTURE_HOOKS);
+        MP_ERR(p, "Too many hooks! Limit is %d.\n", SHADER_MAX_HOOKS);
 
         if (hook.free)
             hook.free(&hook);
@@ -2052,17 +2047,12 @@ static void pass_scale_main(struct gl_video *p)
 // by previous passes (i.e. linear scaling)
 static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool osd)
 {
-    struct mp_colorspace ref = src;
-
-    if (p->use_linear && !osd)
-        src.gamma = MP_CSP_TRC_LINEAR;
-
     // Figure out the target color space from the options, or auto-guess if
     // none were set
     struct mp_colorspace dst = {
         .gamma = p->opts.target_trc,
         .primaries = p->opts.target_prim,
-        .nom_peak = mp_csp_trc_nom_peak(p->opts.target_trc, p->opts.target_brightness),
+        .light = MP_CSP_LIGHT_DISPLAY,
     };
 
     if (p->use_lut_3d) {
@@ -2076,12 +2066,8 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool 
         // limitation reasons, so we use a gamma 2.2 input curve here instead.
         // We could pick any value we want here, the difference is just coding
         // efficiency.
-        if (trc_orig == MP_CSP_TRC_SMPTE_ST2084 ||
-            trc_orig == MP_CSP_TRC_ARIB_STD_B67 ||
-            trc_orig == MP_CSP_TRC_V_LOG)
-        {
+        if (mp_trc_is_hdr(trc_orig))
             trc_orig = MP_CSP_TRC_GAMMA22;
-        }
 
         if (gl_video_get_lut3d(p, prim_orig, trc_orig)) {
             dst.primaries = prim_orig;
@@ -2094,14 +2080,14 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool 
         // this as the default output color space.
         dst.primaries = MP_CSP_PRIM_BT_709;
 
-        if (ref.primaries == MP_CSP_PRIM_BT_601_525 ||
-            ref.primaries == MP_CSP_PRIM_BT_601_625)
+        if (src.primaries == MP_CSP_PRIM_BT_601_525 ||
+            src.primaries == MP_CSP_PRIM_BT_601_625)
         {
             // Since we auto-pick BT.601 and BT.709 based on the dimensions,
             // combined with the fact that they're very similar to begin with,
             // and to avoid confusing the average user, just don't adapt BT.601
             // content automatically at all.
-            dst.primaries = ref.primaries;
+            dst.primaries = src.primaries;
         }
     }
 
@@ -2111,7 +2097,7 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool 
         // altogether by default. The only exceptions to this rule apply to
         // very unusual TRCs, which even hardcode technoluddites would probably
         // not enjoy viewing unaltered.
-        dst.gamma = ref.gamma;
+        dst.gamma = src.gamma;
 
         // Avoid outputting linear light or HDR content "by default". For these
         // just pick gamma 2.2 as a default, since it's a good estimate for
@@ -2120,30 +2106,9 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool 
             dst.gamma = MP_CSP_TRC_GAMMA22;
     }
 
-    // For the src peaks, the correct brightness metadata may be present for
-    // sig_peak, nom_peak, both, or neither. To handle everything in a generic
-    // way, it's important to never automatically infer a sig_peak that is
-    // below the nom_peak (since we don't know what bits the image contains,
-    // doing so would potentially badly clip). The only time in which this
-    // may be the case is when the mastering metadata explicitly says so, i.e.
-    // the sig_peak was already set. So to simplify the logic as much as
-    // possible, make sure the nom_peak is present and correct first, and just
-    // set sig_peak = nom_peak if missing.
-    if (!src.nom_peak) {
-        // For display-referred colorspaces, we treat it as relative to
-        // target_brightness
-        src.nom_peak = mp_csp_trc_nom_peak(src.gamma, p->opts.target_brightness);
-    }
-
-    if (!src.sig_peak)
-        src.sig_peak = src.nom_peak;
-
-    MP_DBG(p, "HDR src nom: %f sig: %f, dst: %f\n",
-           src.nom_peak, src.sig_peak, dst.nom_peak);
-
     // Adapt from src to dst as necessary
     pass_color_map(p->sc, src, dst, p->opts.hdr_tone_mapping,
-                   p->opts.tone_mapping_param);
+                   p->opts.tone_mapping_param, p->use_linear && !osd);
 
     if (p->use_lut_3d) {
         gl_sc_uniform_tex(p->sc, "lut_3d", GL_TEXTURE_3D, p->lut_3d_texture);
@@ -2169,11 +2134,11 @@ static void pass_dither(struct gl_video *p)
     if (!p->dither_texture) {
         MP_VERBOSE(p, "Dither to %d.\n", dst_depth);
 
-        int tex_size;
-        void *tex_data;
+        int tex_size = 0;
+        void *tex_data = NULL;
         GLint tex_iformat = 0;
         GLint tex_format = 0;
-        GLenum tex_type;
+        GLenum tex_type = 0;
         unsigned char temp[256];
 
         if (p->opts.dither_algo == DITHER_FRUIT) {
@@ -2191,14 +2156,19 @@ static void pass_dither(struct gl_video *p)
             const struct gl_format *fmt = gl_find_unorm_format(gl, 2, 1);
             if (!fmt || gl->es)
                 fmt = gl_find_float16_format(gl, 1);
-            tex_size = size;
             if (fmt) {
+                tex_size = size;
                 tex_iformat = fmt->internal_format;
                 tex_format = fmt->format;
+                tex_type = GL_FLOAT;
+                tex_data = p->last_dither_matrix;
+            } else {
+                MP_VERBOSE(p, "GL too old. Falling back to ordered dither.\n");
+                p->opts.dither_algo = DITHER_ORDERED;
             }
-            tex_type = GL_FLOAT;
-            tex_data = p->last_dither_matrix;
-        } else {
+        }
+
+        if (p->opts.dither_algo == DITHER_ORDERED) {
             assert(sizeof(temp) >= 8 * 8);
             mp_make_ordered_dither_matrix(temp, 8);
 
@@ -2292,6 +2262,7 @@ static void pass_draw_osd(struct gl_video *p, int draw_flags, double pts,
             static const struct mp_colorspace csp_srgb = {
                 .primaries = MP_CSP_PRIM_BT_709,
                 .gamma = MP_CSP_TRC_SRGB,
+                .light = MP_CSP_LIGHT_DISPLAY,
             };
 
             pass_colormanage(p, csp_srgb, true);
@@ -3083,7 +3054,6 @@ static void check_gl_features(struct gl_video *p)
             .temporal_dither_period = p->opts.temporal_dither_period,
             .tex_pad_x = p->opts.tex_pad_x,
             .tex_pad_y = p->opts.tex_pad_y,
-            .target_brightness = p->opts.target_brightness,
             .hdr_tone_mapping = p->opts.hdr_tone_mapping,
             .tone_mapping_param = p->opts.tone_mapping_param,
             .early_flush = p->opts.early_flush,

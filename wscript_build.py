@@ -92,6 +92,12 @@ def build(ctx):
             target = os.path.splitext(fn)[0] + ".inc",
         )
 
+    ctx(
+        features = "file2string",
+        source = "player/javascript/defaults.js",
+        target = "player/javascript/defaults.js.inc",
+    )
+
     ctx(features = "ebml_header", target = "ebml_types.h")
     ctx(features = "ebml_definitions", target = "ebml_defs.c")
 
@@ -237,6 +243,7 @@ def build(ctx):
         ( "player/misc.c" ),
         ( "player/lavfi.c" ),
         ( "player/lua.c",                        "lua" ),
+        ( "player/javascript.c",                 "javascript" ),
         ( "player/osd.c" ),
         ( "player/playloop.c" ),
         ( "player/screenshot.c" ),
@@ -317,7 +324,6 @@ def build(ctx):
         ( "video/filter/vf_buffer.c" ),
         ( "video/filter/vf_crop.c" ),
         ( "video/filter/vf_d3d11vpp.c",          "d3d-hwaccel" ),
-        ( "video/filter/vf_dlopen.c",            "dlopen" ),
         ( "video/filter/vf_dsize.c" ),
         ( "video/filter/vf_eq.c" ),
         ( "video/filter/vf_expand.c" ),
@@ -590,17 +596,6 @@ def build(ctx):
             ctx.install_as(ctx.env.INCDIR + '/mpv/' + f, 'libmpv/' + f)
 
         ctx.install_as(ctx.env.LIBDIR + '/pkgconfig/mpv.pc', 'libmpv/mpv.pc')
-
-    if ctx.dependency_satisfied("vf-dlopen-filters"):
-        dlfilters = "telecine tile rectangle framestep ildetect".split()
-        for dlfilter in dlfilters:
-            ctx(
-                target       = dlfilter,
-                source       = ['TOOLS/vf_dlopen/'+dlfilter+'.c',
-                                'TOOLS/vf_dlopen/filterutils.c'],
-                includes     = [ctx.srcnode.abspath() + '/video/filter'],
-                features     = 'c cshlib',
-                install_path = ctx.env.LIBDIR + '/mpv' )
 
     if ctx.dependency_satisfied('html-build'):
         _build_html(ctx)

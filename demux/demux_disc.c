@@ -338,6 +338,10 @@ static int d_open(demuxer_t *demuxer, enum demux_check check)
     add_streams(demuxer);
     add_stream_chapters(demuxer);
 
+    double len;
+    if (stream_control(demuxer->stream, STREAM_CTRL_GET_TIME_LENGTH, &len) >= 1)
+        demuxer->duration = len;
+
     return 0;
 }
 
@@ -352,19 +356,12 @@ static int d_control(demuxer_t *demuxer, int cmd, void *arg)
     struct priv *p = demuxer->priv;
 
     switch (cmd) {
-    case DEMUXER_CTRL_GET_TIME_LENGTH: {
-        double len;
-        if (stream_control(demuxer->stream, STREAM_CTRL_GET_TIME_LENGTH, &len) < 1)
-            break;
-        *(double *)arg = len;
-        return DEMUXER_CTRL_OK;
-    }
     case DEMUXER_CTRL_RESYNC:
         demux_flush(p->slave);
         break; // relay to slave demuxer
     case DEMUXER_CTRL_SWITCHED_TRACKS:
         reselect_streams(demuxer);
-        return DEMUXER_CTRL_OK;
+        return CONTROL_OK;
     }
     return demux_control(p->slave, cmd, arg);
 }

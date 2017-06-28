@@ -835,12 +835,13 @@ Video
 
     :hybrid:    Prefer the container aspect ratio. If the bitstream aspect
                 switches mid-stream, switch to preferring the bitstream aspect.
-                This is the default behavior in mpv and mplayer2.
+                This was the default in older mpv and mplayer2. Deprecated.
     :container: Strictly prefer the container aspect ratio. This is apparently
                 the default behavior with VLC, at least with Matroska.
     :bitstream: Strictly prefer the bitstream aspect ratio, unless the bitstream
                 aspect ratio is not set. This is apparently the default behavior
-                with XBMC/kodi, at least with Matroska.
+                with XBMC/kodi, at least with Matroska, and the current default
+                for mpv.
 
     Normally you should not set this. Try the ``container`` and ``bitstream``
     choices if you encounter video that has the wrong aspect ratio in mpv,
@@ -1493,7 +1494,7 @@ Subtitles
     Changing styling and position does not work with all subtitles. Image-based
     subtitles (DVD, Bluray/PGS, DVB) cannot changed for fundamental reasons.
     Subtitles in ASS format are normally not changed intentionally, but
-    overriding them can be controlled with ``--sub-ass-style-override``.
+    overriding them can be controlled with ``--sub-ass-override``.
 
     Previously some options working on text subtitles were called
     ``--sub-text-*``, they are now named ``--sub-*``, and those specifically
@@ -1570,8 +1571,8 @@ Subtitles
     scales with the approximate window size, while the other option disables
     this scaling.
 
-    Affects plain text subtitles only (or ASS if ``--sub-ass-style-override`` is
-    set high enough).
+    Affects plain text subtitles only (or ASS if ``--sub-ass-override`` is set
+    high enough).
 
 ``--sub-ass-scale-with-window=<yes|no>``
     Like ``--sub-scale-with-window``, but affects subtitles in ASS format only.
@@ -1650,16 +1651,19 @@ Subtitles
 
         Using this option may lead to incorrect subtitle rendering.
 
-``--sub-ass-style-override=<yes|no|force|signfs|strip>``
-    Control whether user style overrides should be applied.
+``--sub-ass-override=<yes|no|force|scale|strip>``
+    Control whether user style overrides should be applied. Note that all of
+    these overrides try to be somewhat smart about figuring out whether or not
+    a subtitle is considered a "sign".
 
-    :yes:   Apply all the ``--sub-ass-*`` style override options. Changing the default
-            for any of these options can lead to incorrect subtitle rendering
-            (default).
-    :signfs: like ``yes``, but apply ``--sub-scale`` only to signs
-    :no:    Render subtitles as forced by subtitle scripts.
-    :force: Try to force the font style as defined by the ``--sub-*``
-            options. Can break rendering easily.
+    :no:    Render subtitles as specified by the subtitle scripts, without
+            overrides.
+    :yes:   Apply all the ``--sub-ass-*`` style override options. Changing the
+            default for any of these options can lead to incorrect subtitle
+            rendering (default).
+    :force: Like ``yes``, but also force all ``--sub-*`` options. Can break
+            rendering easily.
+    :scale: Like ``yes``, but also apply ``--sub-scale``.
     :strip: Radically strip all ASS tags and styles from the subtitle. This
             is equivalent to the old ``--no-ass`` / ``--no-sub-ass`` options.
 
@@ -1672,7 +1676,7 @@ Subtitles
 ``--sub-use-margins``
     Enables placing toptitles and subtitles in black borders when they are
     available, if the subtitles are in a plain text format  (or ASS if
-    ``--sub-ass-style-override`` is set high enough).
+    ``--sub-ass-override`` is set high enough).
 
     Default: yes.
 
@@ -1727,7 +1731,7 @@ Subtitles
 
     Choosing anything other than ``no`` will make the subtitle color depend on
     the video color space, and it's for example in theory not possible to reuse
-    a subtitle script with another video file. The ``--sub-ass-style-override``
+    a subtitle script with another video file. The ``--sub-ass-override``
     option doesn't affect how this option is interpreted.
 
 ``--stretch-dvd-subs=<yes|no>``
@@ -1767,9 +1771,9 @@ Subtitles
 
     .. note::
 
-        This has been deprecated by ``--sub-ass-style-override=strip``. You also
+        This has been deprecated by ``--sub-ass-override=strip``. You also
         may need ``--embeddedfonts=no`` to get the same behavior. Also,
-        using ``--sub-ass-style-override=force`` should give better results
+        using ``--sub-ass-override=style`` should give better results
         without breaking subtitles too much.
 
     If ``--no-sub-ass`` is specified, all tags and style declarations are
@@ -1820,10 +1824,10 @@ Subtitles
     removed in mpv 0.24.0.
 
 
-``--sub-fix-timing``, ``--no-sub-fix-timing``
-    By default, subtitle timing is adjusted to remove minor gaps or overlaps
-    between subtitles (if the difference is smaller than 210 ms, the gap or
-    overlap is removed).
+``--sub-fix-timing=<yes|no>``
+    Adjust subtitle timing is to remove minor gaps or overlaps between
+    subtitles (if the difference is smaller than 210 ms, the gap or overlap
+    is removed).
 
 ``--sub-forced-only``
     Display only forced subtitles for the DVD subtitle stream selected by e.g.
@@ -1900,7 +1904,7 @@ Subtitles
     .. admonition:: Examples
 
         - ``--sub-font='Bitstream Vera Sans'``
-        - ``--sub-font='MS Comic Sans'``
+        - ``--sub-font='Comic Sans MS'``
 
     .. note::
 
@@ -2012,7 +2016,7 @@ Subtitles
 
 ``--sub-ass-justify=<yes|no>``
     Applies justification as defined by ``--sub-justify`` on ASS subtitles
-    if ``--sub-ass-style-override`` is not set to ``no``.
+    if ``--sub-ass-override`` is not set to ``no``.
     Default: ``no``.
 
 ``--sub-shadow-color=<color>``
@@ -3000,7 +3004,7 @@ OSD
     .. admonition:: Examples
 
         - ``--osd-font='Bitstream Vera Sans'``
-        - ``--osd-font='MS Comic Sans'``
+        - ``--osd-font='Comic Sans MS'``
 
 ``--osd-font-size=<size>``
     Specify the OSD font size. See ``--sub-font-size`` for details.
@@ -4480,7 +4484,7 @@ The following video options are currently all specific to ``--vo=opengl`` and
     buffer before rendering a new frame to it. For this reason, Microsoft
     recommends at least 4.
 
-    Windows 8+ with ANGLE only.
+    Windows with ANGLE only.
 
 ``--cocoa-force-dedicated-gpu=<yes|no>``
     Deactivates the automatic graphics switching and forces the dedicated GPU.
@@ -4605,6 +4609,8 @@ The following video options are currently all specific to ``--vo=opengl`` and
         DCI-P3 (Digital Cinema Colorspace), SMPTE RP431-2
     v-gamut
         Panasonic V-Gamut (VARICAM) primaries
+    s-gamut
+        Sony S-Gamut (S-Log) primaries
 
 ``--target-trc=<value>``
     Specifies the transfer characteristics (gamma) of the display. Video colors
@@ -4627,12 +4633,16 @@ The following video options are currently all specific to ``--vo=opengl`` and
         Pure power curve (gamma 2.8), also used for BT.470-BG
     prophoto
         ProPhoto RGB (ROMM)
-    st2084
-        SMPTE ST2084 (HDR) curve, PQ OETF
-    std-b67
-        ARIB STD-B67 (Hybrid Log-gamma) curve, also known as BBC/NHK HDR
+    pq
+        ITU-R BT.2100 PQ (Perceptual quantizer) curve, aka SMPTE ST2084
+    hlg
+        ITU-R BT.2100 HLG (Hybrid Log-gamma) curve, aka ARIB STD-B67
     v-log
         Panasonic V-Log (VARICAM) curve
+    s-log1
+        Sony S-Log1 curve
+    s-log2
+        Sony S-Log2 curve
 
     .. note::
 
@@ -4642,25 +4652,32 @@ The following video options are currently all specific to ``--vo=opengl`` and
         The user should independently guarantee this before using these signal
         formats for display.
 
-``--target-brightness=<1..100000>``
-    Specifies the display's approximate brightness in cd/m^2. When playing HDR
-    content on a SDR display (or SDR content on an HDR display), video colors
-    will be tone mapped to this target brightness using the algorithm specified
-    by ``--hdr-tone-mapping``. The default of 250 cd/m^2 corresponds to a
-    typical consumer display.
-
 ``--hdr-tone-mapping=<value>``
     Specifies the algorithm used for tone-mapping HDR images onto the target
     display. Valid values are:
 
     clip
-        Hard-clip any out-of-range values.
+        Hard-clip any out-of-range values. Use this when you care about
+        perfect color accuracy for in-range values at the cost of completely
+        distorting out-of-range values. Not generally recommended.
+    mobius
+        Generalization of Reinhard to a Möbius transform with linear section.
+        Smoothly maps out-of-range values while retaining contrast and colors
+        for in-range material as much as possible. Use this when you care about
+        color accuracy more than detail preservation. This is somewhere in
+        between ``clip`` and ``reinhard``, depending on the value of
+        ``--tone-mapping-param``. (default)
     reinhard
         Reinhard tone mapping algorithm. Very simple continuous curve.
-        Preserves dynamic range and peak but uses nonlinear contrast.
+        Preserves overall image brightness but uses nonlinear contrast, which
+        results in flattening of details and degradation in color accuracy.
     hable
-        Similar to ``reinhard`` but preserves dark contrast better (slightly
-        sigmoidal). Developed by John Hable for use in video games. (default)
+        Similar to ``reinhard`` but preserves both dark and bright details
+        better (slightly sigmoidal), at the cost of slightly darkening
+        everything. Developed by John Hable for use in video games. Use this
+        when you care about detail preservation more than color/brightness
+        accuracy. This is roughly equivalent to
+        ``--hdr-tone-mapping=reinhard --tone-mapping-param=0.24``.
     gamma
         Fits a logarithmic transfer between the tone curves.
     linear
@@ -4671,6 +4688,12 @@ The following video options are currently all specific to ``--vo=opengl`` and
     Set tone mapping parameters. Ignored if the tone mapping algorithm is not
     tunable. This affects the following tone mapping algorithms:
 
+    mobius
+        Specifies the transition point from linear to mobius transform. Every
+        value below this point is guaranteed to be mapped 1:1. The higher the
+        value, the more accurate the result will be, at the cost of losing
+        bright details. Defaults to 0.3, which due to the steep initial slope
+        still preserves in-range colors fairly accurately.
     reinhard
         Specifies the local contrast coefficient at the display peak. Defaults
         to 0.5, which means that in-gamut values will be about half as bright
@@ -4813,6 +4836,16 @@ The following video options are currently all specific to ``--vo=opengl`` and
 
     This option might be silently removed in the future, if ANGLE fixes shader
     compilation speed.
+
+``--cuda-decode-device=<auto|0..>``
+    Choose the GPU device used for decoding when using the ``cuda`` hwdec.
+
+    By default, the device that is being used to provide OpenGL output will
+    also be used for decoding (and in the vast majority of cases, only one
+    GPU will be present).
+
+    Note that when using the ``cuda-copy`` hwdec, a different option must be
+    passed: ``--vd-lavc-o=gpu=<0..>``.
 
 Miscellaneous
 -------------
