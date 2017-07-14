@@ -168,7 +168,7 @@ static const m_option_t mp_vo_opt_list[] = {
     OPT_CHOICE("x11-bypass-compositor", x11_bypass_compositor, 0,
                ({"no", 0}, {"yes", 1}, {"fs-only", 2}, {"never", 3})),
 #endif
-#if HAVE_WIN32
+#if HAVE_WIN32_DESKTOP
     OPT_STRING("vo-mmcss-profile", mmcss_profile, 0),
 #endif
 #if HAVE_DRM
@@ -273,7 +273,7 @@ const m_option_t mp_opts[] = {
     OPT_STRING("log-file", log_file, CONF_PRE_PARSE | M_OPT_FILE | UPDATE_TERM),
     OPT_FLAG("msg-module", msg_module, UPDATE_TERM),
     OPT_FLAG("msg-time", msg_time, UPDATE_TERM),
-#if defined(_WIN32) && HAVE_GPL
+#if HAVE_WIN32_DESKTOP && HAVE_GPL
     OPT_CHOICE("priority", w32_priority, UPDATE_PRIORITY,
                ({"no",          0},
                 {"realtime",    REALTIME_PRIORITY_CLASS},
@@ -289,7 +289,8 @@ const m_option_t mp_opts[] = {
     OPT_STRINGLIST("reset-on-next-file", reset_options, 0),
 
 #if HAVE_LUA || HAVE_JAVASCRIPT
-    OPT_STRINGLIST("script", script_files, M_OPT_FIXED | M_OPT_FILE),
+    OPT_PATHLIST("scripts", script_files, M_OPT_FIXED),
+    OPT_CLI_ALIAS("script", "scripts-append"),
     OPT_KEYVALUELIST("script-opts", script_opts, 0),
     OPT_FLAG("load-scripts", auto_load_scripts, 0),
 #endif
@@ -376,7 +377,8 @@ const m_option_t mp_opts[] = {
 #endif
 
     // demuxer.c - select audio/sub file/demuxer
-    OPT_STRING_APPEND_LIST("audio-file", audio_files, M_OPT_FILE),
+    OPT_PATHLIST("audio-files", audio_files, 0),
+    OPT_CLI_ALIAS("audio-file", "audio-files-append"),
     OPT_STRING("demuxer", demuxer_name, 0),
     OPT_STRING("audio-demuxer", audio_demuxer_name, 0),
     OPT_STRING("sub-demuxer", sub_demuxer_name, 0),
@@ -460,10 +462,12 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- subtitles options --------------------
 
-    OPT_STRING_APPEND_LIST("sub-file", sub_name, M_OPT_FILE),
-    OPT_PATHLIST("sub-paths", sub_paths, 0),
+    OPT_PATHLIST("sub-files", sub_name, 0),
+    OPT_CLI_ALIAS("sub-file", "sub-files-append"),
+    OPT_PATHLIST("sub-file-paths", sub_paths, 0),
     OPT_PATHLIST("audio-file-paths", audiofile_paths, 0),
-    OPT_STRING_APPEND_LIST("external-file", external_files, M_OPT_FILE),
+    OPT_PATHLIST("external-files", external_files, 0),
+    OPT_CLI_ALIAS("external-file", "external-file-append"),
     OPT_FLAG("autoload-files", autoload_files, 0),
     OPT_FLOAT("sub-delay", sub_delay, UPDATE_OSD),
     OPT_FLOAT("sub-fps", sub_fps, UPDATE_OSD),
@@ -700,7 +704,7 @@ const m_option_t mp_opts[] = {
     OPT_SUBSTRUCT("", gl_video_opts, gl_video_conf, 0),
 #endif
 
-#if HAVE_EGL_ANGLE
+#if HAVE_EGL_ANGLE_WIN32
     OPT_SUBSTRUCT("", angle_opts, angle_conf, 0),
 #endif
 
@@ -833,6 +837,7 @@ const m_option_t mp_opts[] = {
     OPT_REMOVED("fs-black-out-screens", NULL),
     OPT_REPLACED_MSG("loop", "loop-playlist", "--loop will be changed to map to"
         " --loop-file in future releases."),
+    OPT_REPLACED("sub-paths", "sub-file-paths"),
 
     {0}
 };
@@ -929,7 +934,7 @@ const struct MPOpts mp_default_opts = {
     .playback_speed = 1.,
     .pitch_correction = 1,
     .movie_aspect = -1.,
-    .aspect_method = 1,
+    .aspect_method = 2,
     .field_dominance = -1,
     .sub_auto = 0,
     .audiofile_auto = -1,

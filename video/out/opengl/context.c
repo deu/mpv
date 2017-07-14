@@ -56,7 +56,7 @@ static const struct mpgl_driver *const backends[] = {
 #if HAVE_GL_COCOA
     &mpgl_driver_cocoa,
 #endif
-#if HAVE_EGL_ANGLE
+#if HAVE_EGL_ANGLE_WIN32
     &mpgl_driver_angle,
 #endif
 #if HAVE_GL_WIN32
@@ -92,6 +92,7 @@ static const struct mpgl_driver *const backends[] = {
 // 0-terminated list of desktop GL versions a backend should try to
 // initialize. The first entry is the most preferred version.
 const int mpgl_preferred_gl_versions[] = {
+    400,
     330,
     320,
     310,

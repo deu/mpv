@@ -67,7 +67,6 @@ char *m_option_strerror(int code)
         return "parameter is outside values allowed for option";
     case M_OPT_DISALLOW_PARAM:
         return "option doesn't take a parameter";
-    case M_OPT_PARSER_ERR:
     default:
         return "parser error";
     }
@@ -1109,8 +1108,6 @@ static void free_str_list(void *dst)
 
 static int str_list_add(char **add, int n, void *dst, int pre)
 {
-    if (!dst)
-        return M_OPT_PARSER_ERR;
     char **lst = VAL(dst);
 
     int ln;
@@ -1140,8 +1137,6 @@ static int str_list_del(struct mp_log *log, char **del, int n, void *dst)
     int i, ln, s;
     long idx;
 
-    if (!dst)
-        return M_OPT_PARSER_ERR;
     lst = VAL(dst);
 
     for (ln = 0; lst && lst[ln]; ln++)
@@ -1216,7 +1211,7 @@ static int parse_str_list_impl(struct mp_log *log, const m_option_t *opt,
 
     if (bstr_endswith0(name, "-add")) {
         op = OP_ADD;
-    } else if (bstr_endswith0(name, "-add-str")) {
+    } else if (bstr_endswith0(name, "-append")) {
         op = OP_ADD_STR;
     } else if (bstr_endswith0(name, "-pre")) {
         op = OP_PRE;
@@ -1252,9 +1247,7 @@ static int parse_str_list_impl(struct mp_log *log, const m_option_t *opt,
         return 1;
     }
 
-    // custom type for "profile" calls this but uses ->priv for something else
-    char separator = opt->type == &m_option_type_string_list && opt->priv ?
-                     *(char *)opt->priv : OPTION_LIST_SEPARATOR;
+    char separator = opt->priv ? *(char *)opt->priv : OPTION_LIST_SEPARATOR;
     int n = 0;
     struct bstr str = param;
     while (str.len) {
@@ -1286,6 +1279,11 @@ static int parse_str_list_impl(struct mp_log *log, const m_option_t *opt,
     }
     res[n] = NULL;
     talloc_free(ptr);
+
+    if (op != OP_NONE && n > 1) {
+        mp_warn(log, "Passing multiple arguments to %.*s is deprecated!\n",
+                BSTR_P(name));
+    }
 
     switch (op) {
     case OP_ADD:
@@ -1400,33 +1398,7 @@ const m_option_type_t m_option_type_string_list = {
     .set   = str_list_set,
     .actions = (const struct m_option_action[]){
         {"add"},
-        {"add-str"},
-        {"clr",         M_OPT_TYPE_OPTIONAL_PARAM},
-        {"del"},
-        {"pre"},
-        {"set"},
-        {0}
-    },
-};
-
-static int parse_str_append_list(struct mp_log *log, const m_option_t *opt,
-                                 struct bstr name, struct bstr param, void *dst)
-{
-    return parse_str_list_impl(log, opt, name, param, dst, OP_ADD_STR);
-}
-
-const m_option_type_t m_option_type_string_append_list = {
-    .name  = "String list (append by default)",
-    .size  = sizeof(char **),
-    .parse = parse_str_append_list,
-    .print = print_str_list,
-    .copy  = copy_str_list,
-    .free  = free_str_list,
-    .get   = str_list_get,
-    .set   = str_list_set,
-    .actions = (const struct m_option_action[]){
-        {"add"},
-        {"add-str"},
+        {"append"},
         {"clr",         M_OPT_TYPE_OPTIONAL_PARAM},
         {"del"},
         {"pre"},
@@ -2621,7 +2593,7 @@ static int get_obj_param(struct mp_log *log, bstr opt_name, bstr obj_name,
     // If it's just "name", and the associated option exists and is a flag,
     // don't accept it as positional argument.
     if (val.start || m_config_option_requires_param(config, name) == 0 || nopos) {
-        r = m_config_set_option_ext(config, name, val, flags);
+        r = m_config_set_option_cli(config, name, val, flags);
         if (r < 0) {
             if (r == M_OPT_UNKNOWN) {
                 mp_err(log, "Option %.*s: %.*s doesn't have a %.*s parameter.\n",
@@ -2652,7 +2624,7 @@ static int get_obj_param(struct mp_log *log, bstr opt_name, bstr obj_name,
                    BSTR_P(opt_name), BSTR_P(obj_name), *nold, *nold);
             return M_OPT_OUT_OF_RANGE;
         }
-        r = m_config_set_option_ext(config, bstr0(opt), val, flags);
+        r = m_config_set_option_cli(config, bstr0(opt), val, flags);
         if (r < 0) {
             if (r != M_OPT_EXIT)
                 mp_err(log, "Option %.*s: "
@@ -3005,6 +2977,11 @@ static int parse_obj_settings_list(struct mp_log *log, const m_option_t *opt,
                 }
             }
         }
+    }
+
+    if (op != OP_NONE && res && res[0].name && res[1].name) {
+        mp_warn(log, "Passing more than 1 argument to %.*s is deprecated!\n",
+                BSTR_P(name));
     }
 
     if (dst) {
@@ -3375,6 +3352,9 @@ const m_option_type_t m_option_type_node = {
 
 // Special-cased by m_config.c.
 const m_option_type_t m_option_type_alias = {
+    .name  = "alias",
+};
+const m_option_type_t m_option_type_cli_alias = {
     .name  = "alias",
 };
 const m_option_type_t m_option_type_removed = {

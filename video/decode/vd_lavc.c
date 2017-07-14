@@ -265,8 +265,11 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #endif
 #if HAVE_D3D_HWACCEL
     &mp_vd_lavc_d3d11va,
+
+ #if HAVE_D3D9_HWACCEL
     &mp_vd_lavc_dxva2,
     &mp_vd_lavc_dxva2_copy,
+ #endif
     &mp_vd_lavc_d3d11va_copy,
 #endif
 #if HAVE_ANDROID
@@ -305,42 +308,6 @@ static bool hwdec_codec_allowed(struct dec_video *vd, const char *codec)
     return false;
 }
 
-// Find the correct profile entry for the current codec and profile.
-// Assumes the table has higher profiles first (for each codec).
-const struct hwdec_profile_entry *hwdec_find_profile(
-    struct lavc_ctx *ctx, const struct hwdec_profile_entry *table)
-{
-    assert(AV_CODEC_ID_NONE == 0);
-    struct vd_lavc_params *lavc_param = ctx->opts->vd_lavc_params;
-    enum AVCodecID codec = ctx->avctx->codec_id;
-    int profile = ctx->avctx->profile;
-    // Assume nobody cares about these aspects of the profile
-    if (codec == AV_CODEC_ID_H264) {
-        if (profile == FF_PROFILE_H264_CONSTRAINED_BASELINE)
-            profile = FF_PROFILE_H264_MAIN;
-    }
-    for (int n = 0; table[n].av_codec; n++) {
-        if (table[n].av_codec == codec) {
-            if (table[n].ff_profile == profile ||
-                !lavc_param->check_hw_profile)
-                return &table[n];
-        }
-    }
-    return NULL;
-}
-
-// Check codec support, without checking the profile.
-bool hwdec_check_codec_support(const char *codec,
-                               const struct hwdec_profile_entry *table)
-{
-    enum AVCodecID codecid = mp_codec_to_av_codec_id(codec);
-    for (int n = 0; table[n].av_codec; n++) {
-        if (table[n].av_codec == codecid)
-            return true;
-    }
-    return false;
-}
-
 int hwdec_get_max_refs(struct lavc_ctx *ctx)
 {
     switch (ctx->avctx->codec_id) {
@@ -360,7 +327,7 @@ int hwdec_get_max_refs(struct lavc_ctx *ctx)
 // hwdec_find_decoder("h264", "_mmal").
 // Just concatenating the two names will not always work due to inconsistencies
 // (e.g. "mpeg2video" vs. "mpeg2").
-const char *hwdec_find_decoder(const char *codec, const char *suffix)
+static const char *hwdec_find_decoder(const char *codec, const char *suffix)
 {
     enum AVCodecID codec_id = mp_codec_to_av_codec_id(codec);
     if (codec_id == AV_CODEC_ID_NONE)
@@ -600,6 +567,10 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
 #if HAVE_VDPAU_HWACCEL
         avctx->hwaccel_flags |= AV_HWACCEL_FLAG_IGNORE_LEVEL;
 #endif
+#ifdef AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH
+        if (!lavc_param->check_hw_profile)
+            avctx->hwaccel_flags |= AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH;
+#endif
         if (ctx->hwdec->image_format)
             avctx->get_format = get_format_hwdec;
         if (ctx->hwdec->allocate_image)
@@ -693,23 +664,17 @@ static void uninit_avctx(struct dec_video *vd)
     av_frame_free(&ctx->pic);
     av_buffer_unref(&ctx->cached_hw_frames_ctx);
 
-    if (ctx->avctx) {
-        if (avcodec_close(ctx->avctx) < 0)
-            MP_ERR(vd, "Could not close codec.\n");
-        av_freep(&ctx->avctx->extradata);
-    }
-
-    if (ctx->hwdec_dev && ctx->hwdec && ctx->hwdec->generic_hwaccel &&
-        ctx->hwdec_dev->destroy)
-        ctx->hwdec_dev->destroy(ctx->hwdec_dev);
-    ctx->hwdec_dev = NULL;
-
     if (ctx->hwdec && ctx->hwdec->uninit)
         ctx->hwdec->uninit(ctx);
     ctx->hwdec = NULL;
     assert(ctx->hwdec_priv == NULL);
 
-    av_freep(&ctx->avctx);
+    avcodec_free_context(&ctx->avctx);
+
+    if (ctx->hwdec_dev && ctx->hwdec && ctx->hwdec->generic_hwaccel &&
+        ctx->hwdec_dev->destroy)
+        ctx->hwdec_dev->destroy(ctx->hwdec_dev);
+    ctx->hwdec_dev = NULL;
 
     ctx->hwdec_failed = false;
     ctx->hwdec_fail_count = 0;

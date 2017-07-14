@@ -107,15 +107,29 @@ static const struct d3dva_mode d3dva_modes[] = {
 #endif
 
 HMODULE d3d11_dll, d3d9_dll, dxva2_dll;
+PFN_D3D11_CREATE_DEVICE d3d11_D3D11CreateDevice;
 
 static pthread_once_t d3d_load_once = PTHREAD_ONCE_INIT;
 
+#if !HAVE_UWP
 static void d3d_do_load(void)
 {
     d3d11_dll = LoadLibrary(L"d3d11.dll");
     d3d9_dll  = LoadLibrary(L"d3d9.dll");
     dxva2_dll = LoadLibrary(L"dxva2.dll");
+
+    if (d3d11_dll) {
+        d3d11_D3D11CreateDevice =
+            (void *)GetProcAddress(d3d11_dll, "D3D11CreateDevice");
+    }
 }
+#else
+static void d3d_do_load(void)
+{
+
+    d3d11_D3D11CreateDevice = D3D11CreateDevice;
+}
+#endif
 
 void d3d_load_dlls(void)
 {
@@ -377,8 +391,11 @@ AVBufferRef *d3d9_wrap_device_ref(struct IDirect3DDevice9 *device) { return NULL
 #else /* !HAVE_D3D_HWACCEL_NEW */
 
 #include <libavutil/hwcontext.h>
-#include <libavutil/hwcontext_dxva2.h>
 #include <libavutil/hwcontext_d3d11va.h>
+
+#if HAVE_D3D9_HWACCEL
+#include <libavutil/hwcontext_dxva2.h>
+#endif
 
 void d3d_hwframes_refine(struct lavc_ctx *ctx, AVBufferRef *hw_frames_ctx)
 {
@@ -400,11 +417,13 @@ void d3d_hwframes_refine(struct lavc_ctx *ctx, AVBufferRef *hw_frames_ctx)
     fctx->width  = FFALIGN(fctx->width,  alignment);
     fctx->height = FFALIGN(fctx->height, alignment);
 
+#if HAVE_D3D9_HWACCEL
     if (fctx->format == AV_PIX_FMT_DXVA2_VLD) {
         AVDXVA2FramesContext *hwctx = fctx->hwctx;
 
         hwctx->surface_type = DXVA2_VideoDecoderRenderTarget;
     }
+#endif
 
     if (fctx->format == AV_PIX_FMT_D3D11) {
         AVD3D11VAFramesContext *hwctx = fctx->hwctx;

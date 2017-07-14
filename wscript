@@ -12,6 +12,19 @@ from waftools.checks.custom import *
 c_preproc.go_absolute=True # enable system folders
 c_preproc.standard_includes.append('/usr/local/include')
 
+"""
+Dependency identifiers (for win32 vs. Unix):
+    wscript / C source      meaning
+    --------------------------------------------------------------------------
+    posix / HAVE_POSIX:                 defined on Linux, OSX, Cygwin
+                                        (Cygwin emulates POSIX APIs on Windows)
+    mingw / __MINGW32__:                defined if posix is not defined
+                                        (Windows without Cygwin)
+    os-win32 / _WIN32:                  defined if basic windows.h API is available
+    win32-desktop / HAVE_WIN32_DESKTOP: defined if desktop windows.h API is available
+    uwp / HAVE_UWP:                     defined if building for UWP (basic Windows only)
+"""
+
 build_options = [
     {
         'name': '--cplayer',
@@ -74,11 +87,6 @@ build_options = [
         'deps_neg': [ 'os-win32' ],
         'func': check_cc(linkflags=['-rdynamic']),
     }, {
-        'name': 'dlopen',
-        'desc': 'dlopen',
-        'deps_any': [ 'libdl', 'os-win32', 'os-cygwin' ],
-        'func': check_true
-    }, {
         'name': '--zsh-comp',
         'desc': 'zsh completion',
         'func': check_ctx_vars('BIN_PERL'),
@@ -137,15 +145,23 @@ main_dependencies = [
         'fmsg': 'Unable to find either POSIX or MinGW-w64 environment, ' \
                 'or compiler does not work.',
     }, {
-        'name': 'win32',
-        'desc': 'win32',
+        'name': '--uwp',
+        'desc': 'Universal Windows Platform',
+        'default': 'disable',
+        'deps': [ 'os-win32', 'mingw' ],
+        'deps_neg': [ 'cplayer' ],
+        'func': check_cc(lib=['windowsapp']),
+    }, {
+        'name': 'win32-desktop',
+        'desc': 'win32 desktop APIs',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
+        'deps_neg': [ 'uwp' ],
         'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt', 'dwmapi']),
     }, {
         'name': '--win32-internal-pthreads',
         'desc': 'internal pthread wrapper for win32 (Vista+)',
         'deps_neg': [ 'posix' ],
-        'deps': [ 'win32' ],
+        'deps': [ 'os-win32' ],
         'func': check_true,
     }, {
         'name': 'pthreads',
@@ -208,18 +224,15 @@ iconv support use --disable-iconv.",
             'posix_spawnp(0,0,0,0,0,0); kill(0,0)'),
         'deps_neg': ['mingw'],
     }, {
-        'name': 'subprocess',
-        'desc': 'posix_spawnp() or MinGW',
+        'name': 'win32-pipes',
+        'desc': 'Windows pipe support',
         'func': check_true,
-        'deps_any': ['posix-spawn', 'mingw'],
+        'deps': [ 'win32-desktop' ],
+        'deps_neg': [ 'posix' ],
     }, {
-        'name': 'glob',
-        'desc': 'glob()',
-        'func': check_statement('glob.h', 'glob("filename", 0, 0, 0)')
-    }, {
-        'name': 'glob-win32-replacement',
+        'name': 'glob-win32',
         'desc': 'glob() win32 replacement',
-        'deps_neg': [ 'glob' ],
+        'deps_neg': [ 'posix' ],
         'deps_any': [ 'os-win32', 'os-cygwin' ],
         'func': check_true
     }, {
@@ -299,7 +312,7 @@ iconv support use --disable-iconv.",
         'deps_neg': [ 'libass-osd' ],
         'func': check_true,
     } , {
-        'name': 'zlib',
+        'name': '--zlib',
         'desc': 'zlib',
         'func': check_libs(['z'],
                     check_statement('zlib.h', 'inflate(0, Z_NO_FLUSH)')),
@@ -515,7 +528,7 @@ audio_output_features = [
     }, {
         'name': '--wasapi',
         'desc': 'WASAPI audio output',
-        'deps': ['win32'],
+        'deps': ['os-win32'],
         'func': check_cc(fragment=load_fragment('wasapi.c')),
     }
 ]
@@ -592,7 +605,7 @@ video_output_features = [
     } , {
         'name': '--gl-win32',
         'desc': 'OpenGL Win32 Backend',
-        'deps': [ 'win32' ],
+        'deps': [ 'win32-desktop' ],
         'groups': [ 'gl' ],
         'func': check_statement('windows.h', 'wglCreateContext(0)',
                                 lib='opengl32')
@@ -606,7 +619,7 @@ video_output_features = [
             check_statement('d3d9.h', 'IDirect3D9Ex *d'))
     } , {
         'name': '--egl-angle',
-        'desc': 'OpenGL Win32 ANGLE Backend',
+        'desc': 'OpenGL ANGLE headers',
         'deps_any': [ 'os-win32', 'os-cygwin' ],
         'groups': [ 'gl' ],
         'func': check_statement(['EGL/egl.h', 'EGL/eglext.h'],
@@ -622,6 +635,12 @@ video_output_features = [
                                         '-DANGLE_NO_ALIASES', '-DANGLE_EXPORT='],
                                 lib=['EGL', 'GLESv2', 'dxguid', 'd3d9',
                                      'gdi32', 'stdc++'])
+    }, {
+        'name': '--egl-angle-win32',
+        'desc': 'OpenGL Win32 ANGLE Backend',
+        'deps': [ 'egl-angle', 'win32-desktop' ],
+        'groups': [ 'gl' ],
+        'func': check_true,
     } , {
         'name': '--vdpau',
         'desc': 'VDPAU acceleration',
@@ -680,7 +699,7 @@ video_output_features = [
     }, {
         'name': '--direct3d',
         'desc': 'Direct3D support',
-        'deps': [ 'win32' ],
+        'deps': [ 'win32-desktop' ],
         'func': check_cc(header_name='d3d9.h'),
     }, {
         'name': '--android',
@@ -723,7 +742,7 @@ video_output_features = [
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
         'deps_any': [ 'egl-x11', 'mali-fbdev', 'rpi', 'gl-wayland', 'egl-drm',
-                      'egl-angle' ],
+                      'egl-angle-win32' ],
         'func': check_true
     }
 ]
@@ -781,13 +800,14 @@ hwaccel_features = [
             '      ? 1 : -1]',
             use='libav'),
     }, {
+        # (conflated with ANGLE for easier deps)
         'name': '--d3d-hwaccel',
-        'desc': 'DXVA2 and D3D11VA hwaccel',
-        'deps': [ 'win32' ],
+        'desc': 'D3D11VA hwaccel (plus ANGLE)',
+        'deps': [ 'os-win32', 'egl-angle' ],
         'func': check_true,
     }, {
         'name': '--d3d-hwaccel-new',
-        'desc': 'DXVA2 and D3D11VA hwaccel (new API)',
+        'desc': 'D3D11VA hwaccel (new API)',
         'func': check_statement('libavcodec/version.h',
             'int x[(LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 4, 0) && '
             '       LIBAVCODEC_VERSION_MICRO < 100) ||'
@@ -796,6 +816,17 @@ hwaccel_features = [
             '      ? 1 : -1]',
             use='libav'),
         'deps': [ 'd3d-hwaccel' ],
+    }, {
+        'name': '--d3d9-hwaccel',
+        'desc': 'DXVA2 hwaccel (plus ANGLE)',
+        'deps': [ 'd3d-hwaccel', 'egl-angle-win32' ],
+        'func': check_true,
+    }, {
+        'name': '--gl-dxinterop-d3d9',
+        'desc': 'OpenGL/DirectX Interop Backend DXVA2 interop',
+        'deps': [ 'gl-dxinterop', 'd3d9-hwaccel' ],
+        'groups': [ 'gl' ],
+        'func': check_true,
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',

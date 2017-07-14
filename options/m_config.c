@@ -243,7 +243,7 @@ static int m_config_set_obj_params(struct m_config *config, struct mp_log *log,
     for (int n = 0; args && args[n * 2 + 0]; n++) {
         bstr opt = bstr0(args[n * 2 + 0]);
         bstr val = bstr0(args[n * 2 + 1]);
-        if (m_config_set_option(config, opt, val) < 0)
+        if (m_config_set_option_cli(config, opt, val, 0) < 0)
             return -1;
     }
 
@@ -566,6 +566,9 @@ struct m_config_option *m_config_get_co(const struct m_config *config,
             co->warning_was_printed = true;
         }
         return m_config_get_co(config, bstr0(alias));
+    } else if (co->opt->type == &m_option_type_cli_alias) {
+        // Pretend it does not exist.
+        return NULL;
     } else if (co->opt->type == &m_option_type_removed) {
         if (!co->warning_was_printed) {
             char *msg = co->opt->priv;
@@ -755,7 +758,7 @@ int m_config_set_option_raw_direct(struct m_config *config,
     return 0;
 }
 
-// Similar to m_config_set_option_ext(), but set as data in its native format.
+// Similar to m_config_set_option_cli(), but set as data in its native format.
 // This takes care of some details like sending change notifications.
 // The type data points to is as in: co->opt
 int m_config_set_option_raw(struct m_config *config, struct m_config_option *co,
@@ -806,8 +809,13 @@ static struct m_config_option *m_config_mogrify_cli_opt(struct m_config *config,
         return co;
     }
 
+    // Resolve CLI alias. (We don't allow you to combine them with "--no-".)
+    co = m_config_get_co_raw(config, *name);
+    if (co && co->opt->type == &m_option_type_cli_alias)
+        *name = bstr0((char *)co->opt->priv);
+
     // Might be a suffix "action", like "--vf-add". Expensively check for
-    // matches. (Also, we don't allow you to combine them with "--no-".)
+    // matches. (We don't allow you to combine them with "--no-".)
     for (int n = 0; n < config->num_opts; n++) {
         co = &config->opts[n];
         const struct m_option_type *type = co->opt->type;
@@ -833,21 +841,30 @@ static struct m_config_option *m_config_mogrify_cli_opt(struct m_config *config,
     return NULL;
 }
 
-static int m_config_parse_option(struct m_config *config, struct bstr name,
-                                 struct bstr param, int flags)
+// Set the named option to the given string. This is for command line and config
+// file use only.
+// flags: combination of M_SETOPT_* flags (0 for normal operation)
+// Returns >= 0 on success, otherwise see OptionParserReturn.
+int m_config_set_option_cli(struct m_config *config, struct bstr name,
+                            struct bstr param, int flags)
 {
+    int r;
     assert(config != NULL);
 
     bool negate;
     struct m_config_option *co =
         m_config_mogrify_cli_opt(config, &name, &negate, &(int){0});
 
-    if (!co)
-        return M_OPT_UNKNOWN;
+    if (!co) {
+        r = M_OPT_UNKNOWN;
+        goto done;
+    }
 
     if (negate) {
-        if (param.len)
-            return M_OPT_DISALLOW_PARAM;
+        if (param.len) {
+            r = M_OPT_DISALLOW_PARAM;
+            goto done;
+        }
 
         param = bstr0("no");
     }
@@ -855,12 +872,11 @@ static int m_config_parse_option(struct m_config *config, struct bstr name,
     // This is the only mandatory function
     assert(co->opt->type->parse);
 
-    int r = handle_set_opt_flags(config, co, flags);
+    r = handle_set_opt_flags(config, co, flags);
     if (r <= 0)
-        return r;
-    bool set = r == 2;
+        goto done;
 
-    if (set) {
+    if (r == 2) {
         MP_VERBOSE(config, "Setting option '%.*s' = '%.*s' (flags = %d)\n",
                    BSTR_P(name), BSTR_P(param), flags);
     }
@@ -879,13 +895,7 @@ static int m_config_parse_option(struct m_config *config, struct bstr name,
 
     m_option_free(co->opt, &val);
 
-    return r;
-}
-
-int m_config_set_option_ext(struct m_config *config, struct bstr name,
-                            struct bstr param, int flags)
-{
-    int r = m_config_parse_option(config, name, param, flags);
+done:
     if (r < 0 && r != M_OPT_EXIT) {
         MP_ERR(config, "Error parsing option %.*s (%s)\n",
                BSTR_P(name), m_option_strerror(r));
@@ -894,20 +904,25 @@ int m_config_set_option_ext(struct m_config *config, struct bstr name,
     return r;
 }
 
-int m_config_set_option(struct m_config *config, struct bstr name,
-                                 struct bstr param)
-{
-    return m_config_set_option_ext(config, name, param, 0);
-}
-
 int m_config_set_option_node(struct m_config *config, bstr name,
                              struct mpv_node *data, int flags)
 {
     int r;
 
     struct m_config_option *co = m_config_get_co(config, name);
-    if (!co)
-        return M_OPT_UNKNOWN;
+    if (!co) {
+        co = m_config_get_co_raw(config, name);
+        if (co && co->opt->type == &m_option_type_cli_alias) {
+            /*bstr old_name = name;
+            co = m_config_mogrify_cli_opt(config, &name, &(bool){0}, &(int){0});
+            */
+            name = bstr0((char *)co->opt->priv);
+            MP_WARN(config, "Setting %.*s via API is deprecated, set %s instead.\n",
+                    BSTR_P(name), co->opt->name);
+        } else {
+            return M_OPT_UNKNOWN;
+        }
+    }
 
     // Do this on an "empty" type to make setting the option strictly overwrite
     // the old value, as opposed to e.g. appending to lists.
@@ -1009,6 +1024,10 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
             MP_INFO(config, " [file]");
         if (opt->flags & M_OPT_FIXED)
             MP_INFO(config, " [no runtime changes]");
+        if (opt->type == &m_option_type_alias)
+            MP_INFO(config, " for %s", (char *)opt->priv);
+        if (opt->type == &m_option_type_cli_alias)
+            MP_INFO(config, " for %s (CLI/config files only)", (char *)opt->priv);
         MP_INFO(config, "\n");
         for (int n = 0; opt->type->actions && opt->type->actions[n].name; n++) {
             const struct m_option_action *action = &opt->type->actions[n];
@@ -1076,7 +1095,7 @@ void m_profile_set_desc(struct m_profile *p, bstr desc)
 int m_config_set_profile_option(struct m_config *config, struct m_profile *p,
                                 bstr name, bstr val)
 {
-    int i = m_config_set_option_ext(config, name, val,
+    int i = m_config_set_option_cli(config, name, val,
                                     M_SETOPT_CHECK_ONLY |
                                     M_SETOPT_FROM_CONFIG_FILE);
     if (i < 0)
@@ -1103,7 +1122,7 @@ int m_config_set_profile(struct m_config *config, char *name, int flags)
     }
     config->profile_depth++;
     for (int i = 0; i < p->num_opts; i++) {
-        m_config_set_option_ext(config,
+        m_config_set_option_cli(config,
                                 bstr0(p->opts[2 * i]),
                                 bstr0(p->opts[2 * i + 1]),
                                 flags | M_SETOPT_FROM_CONFIG_FILE);

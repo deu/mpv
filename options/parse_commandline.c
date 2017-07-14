@@ -103,7 +103,7 @@ static bool split_opt(struct parse_state *p)
     return false;
 }
 
-#if defined(__MINGW32__) && (HAVE_GLOB || HAVE_GLOB_WIN32_REPLACEMENT)
+#ifdef __MINGW32__
 static void process_non_option(struct playlist *files, const char *arg)
 {
     glob_t gg;
@@ -146,7 +146,7 @@ int m_config_parse_mp_command_line(m_config_t *config, struct playlist *files,
             int flags = M_SETOPT_FROM_CMDLINE;
             if (mode == LOCAL)
                 flags |= M_SETOPT_BACKUP | M_SETOPT_CHECK_ONLY;
-            int r = m_config_set_option_ext(config, p.arg, p.param, flags);
+            int r = m_config_set_option_cli(config, p.arg, p.param, flags);
             if (r == M_OPT_EXIT) {
                 ret = r;
                 goto err_out;
@@ -291,7 +291,7 @@ void m_config_preparse_command_line(m_config_t *config, struct mpv_global *globa
             // Ignore non-pre-parse options. They will be set later.
             // Option parsing errors will be handled later as well.
             int flags = M_SETOPT_FROM_CMDLINE | M_SETOPT_PRE_PARSE_ONLY;
-            m_config_set_option_ext(config, p.arg, p.param, flags);
+            m_config_set_option_cli(config, p.arg, p.param, flags);
             if (bstrcmp0(p.arg, "v") == 0)
                 opts->verbose++;
         }

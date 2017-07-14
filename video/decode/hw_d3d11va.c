@@ -607,22 +607,14 @@ static struct mp_hwdec_ctx *d3d11_create_dev(struct mpv_global *global,
     HRESULT hr;
 
     d3d_load_dlls();
-    if (!d3d11_dll) {
+    if (!d3d11_D3D11CreateDevice) {
         mp_err(plog, "Failed to load D3D11 library\n");
         return NULL;
     }
 
-    PFN_D3D11_CREATE_DEVICE CreateDevice =
-        (void *)GetProcAddress(d3d11_dll, "D3D11CreateDevice");
-    if (!CreateDevice) {
-        mp_err(plog, "Failed to get D3D11CreateDevice symbol from DLL: %s\n",
-               mp_LastError_to_str());
-        return NULL;
-    }
-
-    hr = CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
-                      D3D11_CREATE_DEVICE_VIDEO_SUPPORT, NULL, 0,
-                      D3D11_SDK_VERSION, &device, NULL, NULL);
+    hr = d3d11_D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
+                                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT, NULL, 0,
+                                 D3D11_SDK_VERSION, &device, NULL, NULL);
     if (FAILED(hr)) {
         mp_err(plog, "Failed to create D3D11 Device: %s\n",
                mp_HRESULT_to_str(hr));
@@ -666,6 +658,7 @@ const struct vd_lavc_hwdec mp_vd_lavc_d3d11va = {
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P10, AV_PIX_FMT_P010},
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_NV12},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_NV12},
         {AV_PIX_FMT_NONE}
     },
 };
@@ -682,6 +675,7 @@ const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy = {
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P10, AV_PIX_FMT_P010},
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_NV12},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_NV12},
         {AV_PIX_FMT_NONE}
     },
     .delay_queue = HWDEC_DELAY_QUEUE_COUNT,

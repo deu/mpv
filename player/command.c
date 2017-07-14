@@ -64,6 +64,7 @@
 #include "video/out/bitmap_packer.h"
 #include "options/path.h"
 #include "screenshot.h"
+#include "misc/node.h"
 
 #include "osdep/io.h"
 #include "osdep/subprocess.h"
@@ -2913,8 +2914,41 @@ static int mp_property_vo_configured(void *ctx, struct m_property *prop,
                         mpctx->video_out && mpctx->video_out->config_ok);
 }
 
-static int mp_property_vo_performance(void *ctx, struct m_property *prop,
-                                      int action, void *arg)
+static void get_frame_perf(struct mpv_node *node, struct mp_frame_perf *perf)
+{
+    for (int i = 0; i < perf->count; i++) {
+        struct mp_pass_perf *data = &perf->perf[i];
+        struct mpv_node *pass = node_array_add(node, MPV_FORMAT_NODE_MAP);
+
+        node_map_add_string(pass, "desc", perf->desc[i]);
+        node_map_add(pass, "last", MPV_FORMAT_INT64)->u.int64 = data->last;
+        node_map_add(pass, "avg", MPV_FORMAT_INT64)->u.int64 = data->avg;
+        node_map_add(pass, "peak", MPV_FORMAT_INT64)->u.int64 = data->peak;
+        node_map_add(pass, "count", MPV_FORMAT_INT64)->u.int64 = data->count;
+        struct mpv_node *samples = node_map_add(pass, "samples", MPV_FORMAT_NODE_ARRAY);
+
+        int idx = data->index;
+        for (int n = 0; n < data->count; n++) {
+            node_array_add(samples, MPV_FORMAT_INT64)->u.int64 = data->samples[idx];
+            idx = (idx + 1) % PERF_SAMPLE_COUNT;
+        }
+    }
+}
+
+static char *asprint_perf(char *res, struct mp_frame_perf *perf)
+{
+    for (int i = 0; i < perf->count; i++) {
+        struct mp_pass_perf *pass = &perf->perf[i];
+        res = talloc_asprintf_append(res,
+                  "- %s: last %dus avg %dus peak %dus\n", perf->desc[i],
+                  (int)pass->last/1000, (int)pass->avg/1000, (int)pass->peak/1000);
+    }
+
+    return res;
+}
+
+static int mp_property_vo_passes(void *ctx, struct m_property *prop,
+                                 int action, void *arg)
 {
     MPContext *mpctx = ctx;
     if (!mpctx->video_out)
@@ -2931,19 +2965,30 @@ static int mp_property_vo_performance(void *ctx, struct m_property *prop,
     if (vo_control(mpctx->video_out, VOCTRL_PERFORMANCE_DATA, &data) <= 0)
         return M_PROPERTY_UNAVAILABLE;
 
-#define SUB_PROP_PERFDATA(N) \
-    {#N "-last", SUB_PROP_INT64(data.N.last)}, \
-    {#N "-avg",  SUB_PROP_INT64(data.N.avg)},  \
-    {#N "-peak", SUB_PROP_INT64(data.N.peak)}
+    switch (action) {
+    case M_PROPERTY_PRINT: {
+        char *res = NULL;
+        res = talloc_asprintf_append(res, "fresh:\n");
+        res = asprint_perf(res, &data.fresh);
+        res = talloc_asprintf_append(res, "\nredraw:\n");
+        res = asprint_perf(res, &data.redraw);
+        *(char **)arg = res;
+        return M_PROPERTY_OK;
+    }
 
-    struct m_sub_property props[] = {
-        SUB_PROP_PERFDATA(upload),
-        SUB_PROP_PERFDATA(render),
-        SUB_PROP_PERFDATA(present),
-        {0}
-    };
+    case M_PROPERTY_GET: {
+        struct mpv_node node;
+        node_init(&node, MPV_FORMAT_NODE_MAP, NULL);
+        struct mpv_node *fresh = node_map_add(&node, "fresh", MPV_FORMAT_NODE_ARRAY);
+        struct mpv_node *redraw = node_map_add(&node, "redraw", MPV_FORMAT_NODE_ARRAY);
+        get_frame_perf(fresh, &data.fresh);
+        get_frame_perf(redraw, &data.redraw);
+        *(struct mpv_node *)arg = node;
+        return M_PROPERTY_OK;
+    }
+    }
 
-    return m_property_read_sub(props, action, arg);
+    return M_PROPERTY_NOT_IMPLEMENTED;
 }
 
 static int mp_property_vo(void *ctx, struct m_property *p, int action, void *arg)
@@ -3672,6 +3717,37 @@ done:
     return mp_property_do(real_property, action, arg, ctx);
 }
 
+static int mp_property_shitfuck(void *ctx, struct m_property *prop,
+                                int action, void *arg)
+{
+    MPContext *mpctx = ctx;
+    int flags = M_SETOPT_RUNTIME;
+    const char *rname = prop->priv;
+
+    MP_WARN(mpctx, "Do not use %s, use %s, bug reports will be ignored.\n",
+            prop->name, rname);
+
+    struct m_config_option *co = m_config_get_co_raw(mpctx->mconfig, bstr0(rname));
+    if (!co)
+        return M_PROPERTY_UNKNOWN;
+
+    switch (action) {
+    case M_PROPERTY_GET_TYPE:
+        *(struct m_option *)arg = *(co->opt);
+        return M_PROPERTY_OK;
+    case M_PROPERTY_GET:
+        if (!co->data)
+            return M_PROPERTY_NOT_IMPLEMENTED;
+        m_option_copy(co->opt, arg, co->data);
+        return M_PROPERTY_OK;
+    case M_PROPERTY_SET:
+        if (m_config_set_option_raw_direct(mpctx->mconfig, co, arg, flags) < 0)
+            return M_PROPERTY_ERROR;
+        return M_PROPERTY_OK;
+    }
+    return M_PROPERTY_NOT_IMPLEMENTED;
+}
+
 static int access_options(struct m_property_action_arg *ka, bool local,
                           MPContext *mpctx)
 {
@@ -3975,7 +4051,7 @@ static const struct m_property mp_properties_base[] = {
     M_PROPERTY_ALIAS("height", "video-params/h"),
     {"window-scale", mp_property_window_scale},
     {"vo-configured", mp_property_vo_configured},
-    {"vo-performance", mp_property_vo_performance},
+    {"vo-passes", mp_property_vo_passes},
     {"current-vo", mp_property_vo},
     {"container-fps", mp_property_fps},
     {"estimated-vf-fps", mp_property_vf_fps},
@@ -5262,6 +5338,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
 
     case MP_CMD_PLAYLIST_SHUFFLE: {
         playlist_shuffle(mpctx->playlist);
+        mp_notify(mpctx, MP_EVENT_CHANGE_PLAYLIST, NULL);
         break;
     }
 
@@ -5643,7 +5720,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
 
     case MP_CMD_LOAD_SCRIPT: {
         char *script = cmd->args[0].v.s;
-        if (mp_load_script(mpctx, script) < 0)
+        if (mp_load_user_script(mpctx, script) < 0)
             return -1;
         break;
     }
@@ -5681,7 +5758,8 @@ void command_init(struct MPContext *mpctx)
     for (int n = 0; n < num_opts; n++) {
         struct m_config_option *co = m_config_get_co_index(mpctx->mconfig, n);
         assert(co->name[0]);
-        if (co->opt->flags & M_OPT_NOPROP)
+        if ((co->opt->flags & M_OPT_NOPROP) &&
+            co->opt->type != &m_option_type_cli_alias)
             continue;
 
         struct m_property prop = {0};
@@ -5694,6 +5772,21 @@ void command_init(struct MPContext *mpctx)
                 .call = co->opt->deprecation_message ?
                             mp_property_deprecated_alias : mp_property_alias,
                 .priv = (void *)alias,
+                .is_option = true,
+            };
+        } else if (co->opt->type == &m_option_type_cli_alias) {
+            bstr rname = bstr0(co->opt->priv);
+            for (int i = rname.len - 1; i >= 0; i--) {
+                if (rname.start[i] == '-') {
+                    rname.len = i;
+                    break;
+                }
+            }
+
+            prop = (struct m_property){
+                .name = co->name,
+                .call = mp_property_shitfuck,
+                .priv = bstrto0(ctx, rname),
                 .is_option = true,
             };
         } else {
@@ -5757,7 +5850,7 @@ void mp_notify(struct MPContext *mpctx, int event, void *arg)
 
 static void update_priority(struct MPContext *mpctx)
 {
-#if defined(_WIN32) && HAVE_GPL
+#if HAVE_WIN32_DESKTOP && HAVE_GPL
     struct MPOpts *opts = mpctx->opts;
     if (opts->w32_priority > 0)
         SetPriorityClass(GetCurrentProcess(), opts->w32_priority);

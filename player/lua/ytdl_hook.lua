@@ -1,9 +1,16 @@
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
+local options = require 'mp.options'
+
+local o = {
+    exclude = ""
+}
+options.read_options(o)
 
 local ytdl = {
     path = "youtube-dl",
-    searched = false
+    searched = false,
+    blacklisted = {}
 }
 
 local chapter_list = {}
@@ -91,6 +98,28 @@ local function extract_chapters(data, video_length)
     end
     table.sort(ret, function(a, b) return a.time < b.time end)
     return ret
+end
+
+local function is_blacklisted(url)
+    if o.exclude == "" then return false end
+    if #ytdl.blacklisted == 0 then
+        local joined = o.exclude
+        while joined:match('%|?[^|]+') do
+            local _, e, substring = joined:find('%|?([^|]+)')
+            table.insert(ytdl.blacklisted, substring)
+            joined = joined:sub(e+1)
+        end
+    end
+    if #ytdl.blacklisted > 0 then
+        url = url:match('https?://(.+)')
+        for _, exclude in ipairs(ytdl.blacklisted) do
+            if url:match(exclude) then
+                msg.verbose('URL matches excluded substring. Skipping.')
+                return true
+            end
+        end
+    end
+    return false
 end
 
 local function edl_track_joined(fragments, protocol, is_live)
@@ -193,8 +222,18 @@ local function add_single_video(json)
         end
     end
 
-    -- add chapters from description
-    if not (json.description == nil) and not (json.duration == nil) then
+    -- add chapters
+    if json.chapters then
+        msg.debug("Adding pre-parsed chapters")
+        for i = 1, #json.chapters do
+            local chapter = json.chapters[i]
+            local title = chapter.title or ""
+            if title == "" then
+                title = string.format('Chapter %02d', i)
+            end
+            table.insert(chapter_list, {time=chapter.start_time, title=title})
+        end
+    elseif not (json.description == nil) and not (json.duration == nil) then
         chapter_list = extract_chapters(json.description, json.duration)
     end
 
@@ -233,9 +272,9 @@ end
 
 mp.add_hook("on_load", 10, function ()
     local url = mp.get_property("stream-open-filename")
-
-    if (url:find("http://") == 1) or (url:find("https://") == 1)
-        or (url:find("ytdl://") == 1) then
+    local start_time = os.clock()
+    if (url:find("ytdl://") == 1) or
+        ((url:find("https?://") == 1) and not is_blacklisted(url)) then
 
         -- check for youtube-dl in mpv's config dir
         if not (ytdl.searched) then
@@ -309,6 +348,7 @@ mp.add_hook("on_load", 10, function ()
         end
 
         msg.verbose("youtube-dl succeeded!")
+        msg.debug('ytdl parsing took '..os.clock()-start_time..' seconds')
 
         -- what did we get?
         if not (json["direct"] == nil) and (json["direct"] == true) then
@@ -414,12 +454,13 @@ mp.add_hook("on_load", 10, function ()
             add_single_video(json)
         end
     end
+    msg.debug('script running time: '..os.clock()-start_time..' seconds')
 end)
 
 
 mp.add_hook("on_preloaded", 10, function ()
     if next(chapter_list) ~= nil then
-        msg.verbose("Setting chapters from video's description")
+        msg.verbose("Setting chapters")
 
         mp.set_property_native("chapter-list", chapter_list)
         chapter_list = {}
