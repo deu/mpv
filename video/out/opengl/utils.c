@@ -232,7 +232,7 @@ void gl_vao_draw_data(struct gl_vao *vao, GLenum prim, void *ptr, size_t num)
 
     if (ptr) {
         gl->BindBuffer(GL_ARRAY_BUFFER, vao->buffer);
-        gl->BufferData(GL_ARRAY_BUFFER, num * vao->stride, ptr, GL_DYNAMIC_DRAW);
+        gl->BufferData(GL_ARRAY_BUFFER, num * vao->stride, ptr, GL_STREAM_DRAW);
         gl->BindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
@@ -1310,56 +1310,52 @@ void gl_pbo_upload_tex(struct gl_pbo_upload *pbo, GL *gl, bool use_pbo,
     assert(x >= 0 && y >= 0 && w >= 0 && h >= 0);
     assert(x + w <= tex_w && y + h <= tex_h);
 
-    if (!use_pbo || !gl->MapBufferRange)
-        goto no_pbo;
+    if (!use_pbo) {
+        gl_upload_tex(gl, target, format, type, dataptr, stride, x, y, w, h);
+        return;
+    }
 
-    size_t pix_stride = gl_bytes_per_pixel(format, type);
-    size_t buffer_size = pix_stride * tex_w * tex_h;
-    size_t needed_size = pix_stride * w * h;
+    // We align the buffer size to 4096 to avoid possible subregion
+    // dependencies. This is not a strict requirement (the spec requires no
+    // alignment), but a good precaution for performance reasons
+    size_t needed_size = stride * h;
+    size_t buffer_size = MP_ALIGN_UP(needed_size, 4096);
 
     if (buffer_size != pbo->buffer_size)
         gl_pbo_upload_uninit(pbo);
 
-    if (!pbo->buffers[0]) {
+    if (!pbo->buffer) {
         pbo->gl = gl;
         pbo->buffer_size = buffer_size;
-        gl->GenBuffers(NUM_PBO_BUFFERS, &pbo->buffers[0]);
-        for (int n = 0; n < NUM_PBO_BUFFERS; n++) {
-            gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffers[n]);
-            gl->BufferData(GL_PIXEL_UNPACK_BUFFER, buffer_size, NULL,
-                           GL_DYNAMIC_COPY);
-        }
+        gl->GenBuffers(1, &pbo->buffer);
+        gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffer);
+        // Magic time: Because we memcpy once from RAM to the buffer, and then
+        // the GPU needs to read from this anyway, we actually *don't* want
+        // this buffer to be allocated in RAM. If we allocate it in VRAM
+        // instead, we can reduce this to a single copy: from RAM into VRAM.
+        // Unfortunately, drivers e.g. nvidia will think GL_STREAM_DRAW is best
+        // allocated on host memory instead of device memory, so we lie about
+        // the usage to fool the driver into giving us a buffer in VRAM instead
+        // of RAM, which can be significantly faster for our use case.
+        // Seriously, fuck OpenGL.
+        gl->BufferData(GL_PIXEL_UNPACK_BUFFER, NUM_PBO_BUFFERS * buffer_size,
+                       NULL, GL_STREAM_COPY);
     }
 
+    uintptr_t offset = buffer_size * pbo->index;
     pbo->index = (pbo->index + 1) % NUM_PBO_BUFFERS;
 
-    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffers[pbo->index]);
-    void *data = gl->MapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, needed_size,
-                                    GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
-    if (!data)
-        goto no_pbo;
-
-    memcpy_pic(data, dataptr, pix_stride * w,  h, pix_stride * w, stride);
-
-    if (!gl->UnmapBuffer(GL_PIXEL_UNPACK_BUFFER)) {
-        gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        goto no_pbo;
-    }
-
-    gl_upload_tex(gl, target, format, type, NULL, pix_stride * w, x, y, w, h);
-
+    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo->buffer);
+    gl->BufferSubData(GL_PIXEL_UNPACK_BUFFER, offset, needed_size, dataptr);
+    gl_upload_tex(gl, target, format, type, (void *)offset, stride, x, y, w, h);
     gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-    return;
-
-no_pbo:
-    gl_upload_tex(gl, target, format, type, dataptr, stride, x, y, w, h);
 }
 
 void gl_pbo_upload_uninit(struct gl_pbo_upload *pbo)
 {
     if (pbo->gl)
-        pbo->gl->DeleteBuffers(NUM_PBO_BUFFERS, &pbo->buffers[0]);
+        pbo->gl->DeleteBuffers(1, &pbo->buffer);
+
     *pbo = (struct gl_pbo_upload){0};
 }
 
