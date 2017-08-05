@@ -54,6 +54,9 @@ enum {
     MPGL_CAP_EXT16              = (1 << 18),    // GL_EXT_texture_norm16
     MPGL_CAP_ARB_FLOAT          = (1 << 19),    // GL_ARB_texture_float
     MPGL_CAP_EXT_CR_HFLOAT      = (1 << 20),    // GL_EXT_color_buffer_half_float
+    MPGL_CAP_SSBO               = (1 << 21),    // GL_ARB_shader_storage_buffer_object
+    MPGL_CAP_COMPUTE_SHADER     = (1 << 22),    // GL_ARB_compute_shader & GL_ARB_shader_image_load_store
+    MPGL_CAP_NESTED_ARRAY       = (1 << 23),    // GL_ARB_arrays_of_arrays
 
     MPGL_CAP_SW                 = (1 << 30),    // indirect or sw renderer
 };
@@ -84,6 +87,7 @@ struct GL {
     int glsl_version;           // e.g. 130 for GLSL 1.30
     char *extensions;           // Equivalent to GL_EXTENSIONS
     int mpgl_caps;              // Bitfield of MPGL_CAP_* constants
+    int max_shmem;              // Maximum shared memory for compute shaders
     bool debug_context;         // use of e.g. GLX_CONTEXT_DEBUG_BIT_ARB
 
     // Use mpgl_get_native_display() instead. Also, this is set to use the
@@ -163,6 +167,11 @@ struct GL {
                                         void *);
     void (GLAPIENTRY *ProgramBinary)(GLuint, GLenum, const void *, GLsizei);
 
+    void (GLAPIENTRY *DispatchCompute)(GLuint, GLuint, GLuint);
+    void (GLAPIENTRY *BindImageTexture)(GLuint, GLuint, GLint, GLboolean,
+                                        GLint, GLenum, GLenum);
+    void (GLAPIENTRY *MemoryBarrier)(GLbitfield);
+
     const GLubyte* (GLAPIENTRY *GetStringi)(GLenum, GLuint);
     void (GLAPIENTRY *BindAttribLocation)(GLuint, GLuint, const GLchar *);
     void (GLAPIENTRY *BindFramebuffer)(GLenum, GLuint);
@@ -191,6 +200,8 @@ struct GL {
     GLsync (GLAPIENTRY *FenceSync)(GLenum, GLbitfield);
     GLenum (GLAPIENTRY *ClientWaitSync)(GLsync, GLbitfield, GLuint64);
     void (GLAPIENTRY *DeleteSync)(GLsync sync);
+
+    void (GLAPIENTRY *BufferStorage)(GLenum, intptr_t, const GLvoid *, GLenum);
 
     void (GLAPIENTRY *GenQueries)(GLsizei, GLuint *);
     void (GLAPIENTRY *DeleteQueries)(GLsizei, const GLuint *);

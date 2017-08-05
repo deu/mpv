@@ -137,6 +137,10 @@ main_dependencies = [
         'func': check_statement(['poll.h', 'unistd.h', 'sys/mman.h'],
             'struct pollfd pfd; poll(&pfd, 1, 0); fork(); int f[2]; pipe(f); munmap(f,0)'),
     }, {
+        'name': '--android',
+        'desc': 'Android environment',
+        'func': check_statement('android/api-level.h', '(void)__ANDROID__'),  # arbitrary android-specific header
+    }, {
         'name': 'posix-or-mingw',
         'desc': 'development environment',
         'deps_any': [ 'posix', 'mingw' ],
@@ -230,11 +234,21 @@ iconv support use --disable-iconv.",
         'deps': [ 'win32-desktop' ],
         'deps_neg': [ 'posix' ],
     }, {
+        'name': 'glob-posix',
+        'desc': 'glob() POSIX support',
+        'deps_neg': [ 'os-win32', 'os-cygwin' ],
+        'func': check_statement('glob.h', 'glob("filename", 0, 0, 0)'),
+    }, {
         'name': 'glob-win32',
         'desc': 'glob() win32 replacement',
         'deps_neg': [ 'posix' ],
         'deps_any': [ 'os-win32', 'os-cygwin' ],
         'func': check_true
+    }, {
+        'name': 'glob',
+        'desc': 'any glob() support',
+        'deps_any': [ 'glob-posix', 'glob-win32' ],
+        'func': check_true,
     }, {
         'name': 'fchmod',
         'desc': 'fchmod()',
@@ -460,6 +474,12 @@ FFmpeg/Libav libraries. You need at least {0}. Aborting.".format(libav_versions_
         'desc': 'libavutil content light level struct',
         'func': check_statement('libavutil/frame.h',
                                 'AV_FRAME_DATA_CONTENT_LIGHT_LEVEL',
+                                use='libav'),
+    }, {
+        'name': 'avutil-icc-profile',
+        'desc': 'libavutil ICC profile side data',
+        'func': check_statement('libavutil/frame.h',
+                                'AV_FRAME_DATA_ICC_PROFILE',
                                 use='libav'),
     },
 ]
@@ -701,10 +721,6 @@ video_output_features = [
         'desc': 'Direct3D support',
         'deps': [ 'win32-desktop' ],
         'func': check_cc(header_name='d3d9.h'),
-    }, {
-        'name': '--android',
-        'desc': 'Android support',
-        'func': check_statement('android/api-level.h', '(void)__ANDROID__'),  # arbitrary android-specific header
     }, {
         'name': '--rpi',
         'desc': 'Raspberry Pi support',

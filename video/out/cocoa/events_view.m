@@ -15,8 +15,6 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <libavutil/common.h>
-
 #include "input/input.h"
 #include "input/keycodes.h"
 
@@ -246,7 +244,7 @@
     CGFloat delta;
     int cmd;
 
-    if (FFABS([event deltaY]) >= FFABS([event deltaX])) {
+    if (fabs([event deltaY]) >= fabs([event deltaX])) {
         delta = [event deltaY] * 0.1;
         cmd   = delta > 0 ? MP_AXIS_UP : MP_AXIS_DOWN;
     } else {
@@ -254,7 +252,7 @@
         cmd   = delta > 0 ? MP_AXIS_RIGHT : MP_AXIS_LEFT;
     }
 
-    [self.adapter putAxis:cmd delta:FFABS(delta)];
+    [self.adapter putAxis:cmd delta:fabs(delta)];
 }
 
 - (void)scrollWheel:(NSEvent *)event
@@ -268,8 +266,18 @@
         [self preciseScroll:event];
     } else {
         const int modifiers = [event modifierFlags];
-        const int mpkey = ([event deltaX] + [event deltaY]) > 0 ?
-                            MP_MOUSE_BTN3 : MP_MOUSE_BTN4;
+        const float deltaX = (modifiers & NSEventModifierFlagShift) ?
+                             [event scrollingDeltaY] : [event scrollingDeltaX];
+        const float deltaY = (modifiers & NSEventModifierFlagShift) ?
+                             [event scrollingDeltaX] : [event scrollingDeltaY];
+        int mpkey;
+
+        if (fabs(deltaY) >= fabs(deltaX)) {
+            mpkey = deltaY > 0 ? MP_MOUSE_BTN3 : MP_MOUSE_BTN4;
+        } else {
+            mpkey = deltaX > 0 ? MP_MOUSE_BTN5 : MP_MOUSE_BTN6;
+        }
+
         [self.adapter putKey:mpkey withModifiers:modifiers];
     }
 }

@@ -24,7 +24,9 @@
 #include "sub/osd.h"
 #include "common.h"
 #include "utils.h"
+#include "gl_utils.h"
 #include "lcms.h"
+#include "shader_cache.h"
 #include "video/out/filter_kernels.h"
 
 // Assume we have this many texture units for sourcing additional passes.
@@ -53,8 +55,7 @@ struct scaler {
     double scale_factor;
     bool initialized;
     struct filter_kernel *kernel;
-    GLuint gl_lut;
-    GLenum gl_target;
+    struct ra_tex *lut;
     struct fbotex sep_fbo;
     bool insufficient;
     int lut_size;
@@ -99,6 +100,9 @@ enum tone_mapping {
     TONE_MAPPING_LINEAR,
 };
 
+// How many frames to average over for HDR peak detection
+#define PEAK_DETECT_FRAMES 100
+
 struct gl_video_opts {
     int dumb_mode;
     struct scaler_config scaler[4];
@@ -108,7 +112,8 @@ struct gl_video_opts {
     int target_prim;
     int target_trc;
     int target_brightness;
-    int hdr_tone_mapping;
+    int tone_mapping;
+    int compute_hdr_peak;
     float tone_mapping_param;
     float tone_mapping_desat;
     int linear_scaling;
@@ -123,7 +128,7 @@ struct gl_video_opts {
     int dither_size;
     int temporal_dither;
     int temporal_dither_period;
-    int fbo_format;
+    char *fbo_format;
     int alpha_mode;
     int use_rectangle;
     struct m_color background;
@@ -171,8 +176,6 @@ bool gl_video_icc_auto_enabled(struct gl_video *p);
 bool gl_video_gamma_auto_enabled(struct gl_video *p);
 struct mp_colorspace gl_video_get_output_colorspace(struct gl_video *p);
 
-void gl_video_set_gl_state(struct gl_video *p);
-void gl_video_unset_gl_state(struct gl_video *p);
 void gl_video_reset(struct gl_video *p);
 bool gl_video_showing_interpolated_frame(struct gl_video *p);
 
@@ -181,5 +184,8 @@ void gl_video_set_hwdec(struct gl_video *p, struct gl_hwdec *hwdec);
 
 struct vo;
 void gl_video_configure_queue(struct gl_video *p, struct vo *vo);
+
+void *gl_video_dr_alloc_buffer(struct gl_video *p, size_t size);
+void gl_video_dr_free_buffer(struct gl_video *p, void *ptr);
 
 #endif

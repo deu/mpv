@@ -32,6 +32,8 @@ void pass_sample_separated_gen(struct gl_shader_cache *sc, struct scaler *scaler
                                int d_x, int d_y);
 void pass_sample_polar(struct gl_shader_cache *sc, struct scaler *scaler,
                        int components, int glsl_version);
+void pass_compute_polar(struct gl_shader_cache *sc, struct scaler *scaler,
+                        int components, int bw, int bh, int iw, int ih);
 void pass_sample_bicubic_fast(struct gl_shader_cache *sc);
 void pass_sample_oversample(struct gl_shader_cache *sc, struct scaler *scaler,
                             int w, int h);
@@ -44,7 +46,8 @@ void pass_inverse_ootf(struct gl_shader_cache *sc, enum mp_csp_light light, floa
 void pass_color_map(struct gl_shader_cache *sc,
                     struct mp_colorspace src, struct mp_colorspace dst,
                     enum tone_mapping algo, float tone_mapping_param,
-                    float tone_mapping_desat, bool is_linear);
+                    float tone_mapping_desat, bool use_detected_peak,
+                    bool is_linear);
 
 void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
                         AVLFG *lfg);

@@ -273,7 +273,7 @@ const m_option_t mp_opts[] = {
     OPT_STRING("log-file", log_file, CONF_PRE_PARSE | M_OPT_FILE | UPDATE_TERM),
     OPT_FLAG("msg-module", msg_module, UPDATE_TERM),
     OPT_FLAG("msg-time", msg_time, UPDATE_TERM),
-#if HAVE_WIN32_DESKTOP && HAVE_GPL
+#if HAVE_WIN32_DESKTOP
     OPT_CHOICE("priority", w32_priority, UPDATE_PRIORITY,
                ({"no",          0},
                 {"realtime",    REALTIME_PRIORITY_CLASS},
@@ -444,13 +444,7 @@ const m_option_t mp_opts[] = {
     //  0 means square pixels
     OPT_ASPECT("video-aspect", movie_aspect, UPDATE_IMGPAR, -1.0, 10.0),
     OPT_CHOICE("video-aspect-method", aspect_method, UPDATE_IMGPAR,
-               ({"hybrid", 0}, {"bitstream", 1}, {"container", 2})),
-
-#if HAVE_GPL
-    OPT_CHOICE("field-dominance", field_dominance, UPDATE_IMGPAR,
-               ({"auto", -1}, {"top", 0}, {"bottom", 1}),
-               .deprecation_message = "use --vf=setfield=bff or tff"),
-#endif
+               ({"bitstream", 1}, {"container", 2})),
 
     OPT_SUBSTRUCT("vd-lavc", vd_lavc_params, vd_lavc_conf, 0),
     OPT_SUBSTRUCT("ad-lavc", ad_lavc_params, ad_lavc_conf, 0),
@@ -467,7 +461,7 @@ const m_option_t mp_opts[] = {
     OPT_PATHLIST("sub-file-paths", sub_paths, 0),
     OPT_PATHLIST("audio-file-paths", audiofile_paths, 0),
     OPT_PATHLIST("external-files", external_files, 0),
-    OPT_CLI_ALIAS("external-file", "external-file-append"),
+    OPT_CLI_ALIAS("external-file", "external-files-append"),
     OPT_FLAG("autoload-files", autoload_files, 0),
     OPT_FLOAT("sub-delay", sub_delay, UPDATE_OSD),
     OPT_FLOAT("sub-fps", sub_fps, UPDATE_OSD),
@@ -935,7 +929,6 @@ const struct MPOpts mp_default_opts = {
     .pitch_correction = 1,
     .movie_aspect = -1.,
     .aspect_method = 2,
-    .field_dominance = -1,
     .sub_auto = 0,
     .audiofile_auto = -1,
     .osd_bar_visible = 1,
