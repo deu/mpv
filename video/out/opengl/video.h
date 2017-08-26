@@ -22,11 +22,10 @@
 
 #include "options/m_option.h"
 #include "sub/osd.h"
-#include "common.h"
 #include "utils.h"
-#include "gl_utils.h"
 #include "lcms.h"
 #include "shader_cache.h"
+#include "video/csputils.h"
 #include "video/out/filter_kernels.h"
 
 // Assume we have this many texture units for sourcing additional passes.
@@ -150,23 +149,26 @@ extern const struct m_sub_options gl_video_conf;
 struct gl_video;
 struct vo_frame;
 
-struct gl_video *gl_video_init(GL *gl, struct mp_log *log, struct mpv_global *g);
+struct gl_video *gl_video_init(struct ra *ra, struct mp_log *log,
+                               struct mpv_global *g);
 void gl_video_uninit(struct gl_video *p);
 void gl_video_set_osd_source(struct gl_video *p, struct osd_state *osd);
 void gl_video_update_options(struct gl_video *p);
 bool gl_video_check_format(struct gl_video *p, int mp_format);
 void gl_video_config(struct gl_video *p, struct mp_image_params *params);
 void gl_video_set_output_depth(struct gl_video *p, int r, int g, int b);
-void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame, int fbo);
-void gl_video_resize(struct gl_video *p, int vp_w, int vp_h,
+void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
+                           struct fbodst target);
+void gl_video_resize(struct gl_video *p,
                      struct mp_rect *src, struct mp_rect *dst,
                      struct mp_osd_res *osd);
+void gl_video_set_fb_depth(struct gl_video *p, int fb_depth);
+struct voctrl_performance_data;
 void gl_video_perfdata(struct gl_video *p, struct voctrl_performance_data *out);
-struct mp_csp_equalizer;
-struct mp_csp_equalizer *gl_video_eq_ptr(struct gl_video *p);
-void gl_video_eq_update(struct gl_video *p);
-
-void gl_video_set_debug(struct gl_video *p, bool enable);
+void gl_video_set_clear_color(struct gl_video *p, struct m_color color);
+void gl_video_set_osd_pts(struct gl_video *p, double pts);
+bool gl_video_check_osd_change(struct gl_video *p, struct mp_osd_res *osd,
+                               double pts);
 
 float gl_video_scale_ambient_lux(float lmin, float lmax,
                                  float rmin, float rmax, float lux);
@@ -179,13 +181,14 @@ struct mp_colorspace gl_video_get_output_colorspace(struct gl_video *p);
 void gl_video_reset(struct gl_video *p);
 bool gl_video_showing_interpolated_frame(struct gl_video *p);
 
-struct gl_hwdec;
-void gl_video_set_hwdec(struct gl_video *p, struct gl_hwdec *hwdec);
+struct ra_hwdec;
+void gl_video_set_hwdec(struct gl_video *p, struct ra_hwdec *hwdec);
 
 struct vo;
 void gl_video_configure_queue(struct gl_video *p, struct vo *vo);
 
-void *gl_video_dr_alloc_buffer(struct gl_video *p, size_t size);
-void gl_video_dr_free_buffer(struct gl_video *p, void *ptr);
+struct mp_image *gl_video_get_image(struct gl_video *p, int imgfmt, int w, int h,
+                                    int stride_align);
+
 
 #endif

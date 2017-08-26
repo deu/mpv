@@ -21,7 +21,10 @@
 
 #include <libavutil/common.h>
 
-#include "formats.h"
+#include "common/common.h"
+#include "common/msg.h"
+#include "video/csputils.h"
+#include "video/mp_image.h"
 #include "osd.h"
 
 #define GLSL(x) gl_sc_add(sc, #x "\n");
@@ -66,7 +69,7 @@ struct mpgl_osd {
     struct mpgl_osd_part *parts[MAX_OSD_PARTS];
     const struct ra_format *fmt_table[SUBBITMAP_COUNT];
     bool formats[SUBBITMAP_COUNT];
-    int64_t change_counter;
+    bool change_flag; // for reporting to API user only
     // temporary
     int stereo_mode;
     struct mp_osd_res osd_res;
@@ -81,6 +84,7 @@ struct mpgl_osd *mpgl_osd_init(struct ra *ra, struct mp_log *log,
         .log = log,
         .osd = osd,
         .ra = ra,
+        .change_flag = true,
         .scratch = talloc_zero_size(ctx, 1),
     };
 
@@ -157,18 +161,22 @@ static bool upload_osd(struct mpgl_osd *ctx, struct mpgl_osd_part *osd,
             .format = fmt,
             .render_src = true,
             .src_linear = true,
+            .host_mutable = true,
         };
         osd->texture = ra_tex_create(ra, &params);
         if (!osd->texture)
             goto done;
     }
 
-    struct mp_rect rc = {0, 0, imgs->packed_w, imgs->packed_h};
-    ra->fns->tex_upload(ra, osd->texture, imgs->packed->planes[0],
-                        imgs->packed->stride[0], &rc, RA_TEX_UPLOAD_DISCARD,
-                        NULL);
+    struct ra_tex_upload_params params = {
+        .tex = osd->texture,
+        .src = imgs->packed->planes[0],
+        .invalidate = true,
+        .rc = &(struct mp_rect){0, 0, imgs->packed_w, imgs->packed_h},
+        .stride = imgs->packed->stride[0],
+    };
 
-    ok = true;
+    ok = ra->fns->tex_upload(ra, &params);
 
 done:
     return ok;
@@ -189,7 +197,7 @@ static void gen_osd_cb(void *pctx, struct sub_bitmaps *imgs)
             ok = false;
 
         osd->change_id = imgs->change_id;
-        ctx->change_counter += 1;
+        ctx->change_flag = true;
     }
     osd->num_subparts = ok ? imgs->num_parts : 0;
 
@@ -282,8 +290,8 @@ static void get_3d_side_by_side(int stereo_mode, int div[2])
     }
 }
 
-void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int vp_w, int vp_h, int index,
-                          struct gl_shader_cache *sc, struct ra_tex *target)
+void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int index,
+                          struct gl_shader_cache *sc, struct fbodst target)
 {
     struct mpgl_osd_part *part = ctx->parts[index];
 
@@ -295,7 +303,7 @@ void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int vp_w, int vp_h, int index,
     for (int x = 0; x < div[0]; x++) {
         for (int y = 0; y < div[1]; y++) {
             struct gl_transform t;
-            gl_transform_ortho(&t, 0, vp_w, 0, vp_h);
+            gl_transform_ortho_fbodst(&t, target);
 
             float a_x = ctx->osd_res.w * x;
             float a_y = ctx->osd_res.h * y;
@@ -309,7 +317,7 @@ void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int vp_w, int vp_h, int index,
     const int *factors = &blend_factors[part->format][0];
     gl_sc_blend(sc, factors[0], factors[1], factors[2], factors[3]);
 
-    gl_sc_dispatch_draw(sc, target, part->vertices, part->num_vertices);
+    gl_sc_dispatch_draw(sc, target.tex, part->vertices, part->num_vertices);
 }
 
 static void set_res(struct mpgl_osd *ctx, struct mp_osd_res res, int stereo_mode)
@@ -338,7 +346,7 @@ void mpgl_osd_generate(struct mpgl_osd *ctx, struct mp_osd_res res, double pts,
     for (int n = 0; n < MAX_OSD_PARTS; n++) {
         struct mpgl_osd_part *part = ctx->parts[n];
         if (part->num_subparts !=  part->prev_num_subparts)
-            ctx->change_counter += 1;
+            ctx->change_flag = true;
         part->prev_num_subparts = part->num_subparts;
     }
 }
@@ -350,7 +358,10 @@ void mpgl_osd_resize(struct mpgl_osd *ctx, struct mp_osd_res res, int stereo_mod
     osd_resize(ctx->osd, ctx->osd_res);
 }
 
-int64_t mpgl_get_change_counter(struct mpgl_osd *ctx)
+bool mpgl_osd_check_change(struct mpgl_osd *ctx, struct mp_osd_res *res,
+                           double pts)
 {
-    return ctx->change_counter;
+    ctx->change_flag = false;
+    mpgl_osd_generate(ctx, *res, pts, 0, 0);
+    return ctx->change_flag;
 }

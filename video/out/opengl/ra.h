@@ -21,23 +21,30 @@ struct ra {
     // at init time.
     int max_texture_wh;
 
+    // Maximum shared memory for compute shaders. Set by the RA backend at init
+    // time.
+    size_t max_shmem;
+
     // Set of supported texture formats. Must be added by RA backend at init time.
+    // If there are equivalent formats with different caveats, the preferred
+    // formats should have a lower index. (E.g. GLES3 should put rg8 before la.)
     struct ra_format **formats;
     int num_formats;
 
-    // GL-specific: if set, accelerate texture upload by using an additional
-    // buffer (i.e. uses more memory). Does not affect uploads done by
-    // ra_tex_create (if initial_data is set). Set by the RA user.
+    // Accelerate texture uploads via an extra PBO even when
+    // RA_CAP_DIRECT_UPLOAD is supported. This is basically only relevant for
+    // OpenGL. Set by the RA user.
     bool use_pbo;
 };
 
 enum {
-    RA_CAP_TEX_1D = 1 << 0,     // supports 1D textures (as shader source textures)
-    RA_CAP_TEX_3D = 1 << 1,     // supports 3D textures (as shader source textures)
-    RA_CAP_BLIT   = 1 << 2,     // supports ra_fns.blit
-    RA_CAP_COMPUTE = 1 << 3,    // supports compute shaders
-    RA_CAP_PBO    = 1 << 4,     // supports ra.use_pbo
-    RA_CAP_NESTED_ARRAY = 1 << 5,
+    RA_CAP_TEX_1D         = 1 << 0, // supports 1D textures (as shader inputs)
+    RA_CAP_TEX_3D         = 1 << 1, // supports 3D textures (as shader inputs)
+    RA_CAP_BLIT           = 1 << 2, // supports ra_fns.blit
+    RA_CAP_COMPUTE        = 1 << 3, // supports compute shaders
+    RA_CAP_DIRECT_UPLOAD  = 1 << 4, // supports tex_upload without ra_buf
+    RA_CAP_BUF_RW         = 1 << 5, // supports RA_VARTYPE_BUF_RW
+    RA_CAP_NESTED_ARRAY   = 1 << 6, // supports nested arrays
 };
 
 enum ra_ctype {
@@ -55,6 +62,9 @@ struct ra_format {
     const char *name;       // symbolic name for user interaction/debugging
     void *priv;
     enum ra_ctype ctype;    // data type of each component
+    bool ordered;           // components are sequential in memory, and returned
+                            // by the shader in memory order (the shader can
+                            // return arbitrary values for unused components)
     int num_components;     // component count, 0 if not applicable, max. 4
     int component_size[4];  // in bits, all entries 0 if not applicable
     int component_depth[4]; // bits in use for each component, 0 if not applicable
@@ -80,7 +90,9 @@ struct ra_tex_params {
     const struct ra_format *format;
     bool render_src;        // must be useable as source texture in a shader
     bool render_dst;        // must be useable as target texture in a shader
-                            // this requires creation of a FBO
+    bool blit_src;          // must be usable as a blit source
+    bool blit_dst;          // must be usable as a blit destination
+    bool host_mutable;      // texture may be updated with tex_upload
     // When used as render source texture.
     bool src_linear;        // if false, use nearest sampling (whether this can
                             // be true depends on ra_format.linear_filter)
@@ -89,8 +101,9 @@ struct ra_tex_params {
     bool non_normalized;    // hack for GL_TEXTURE_RECTANGLE OSX idiocy
                             // always set to false, except in OSX code
     bool external_oes;      // hack for GL_TEXTURE_EXTERNAL_OES idiocy
-    // If non-NULL, the texture will be created with these contents, and is
-    // considered immutable afterwards (no upload, mapping, or rendering to it).
+    // If non-NULL, the texture will be created with these contents. Using
+    // this does *not* require setting host_mutable. Otherwise, the initial
+    // data is undefined.
     void *initial_data;
 };
 
@@ -107,13 +120,44 @@ struct ra_tex {
     void *priv;
 };
 
-// A persistent mapping, which can be used for texture upload.
-struct ra_mapped_buffer {
-    // All fields are read-only after creation. The data is read/write, but
-    // requires explicit fence usage.
+struct ra_tex_upload_params {
+    struct ra_tex *tex; // Texture to upload to
+    bool invalidate;    // Discard pre-existing data not in the region uploaded
+    // Uploading from buffer:
+    struct ra_buf *buf; // Buffer to upload from (mutually exclusive with `src`)
+    size_t buf_offset;  // Start of data within buffer (bytes)
+    // Uploading directly: (requires RA_CAP_DIRECT_UPLOAD)
+    const void *src;    // Address of data
+    // For 2D textures only:
+    struct mp_rect *rc; // Region to upload. NULL means entire image
+    ptrdiff_t stride;   // The size of a horizontal line in bytes (*not* texels!)
+};
+
+// Buffer type hint. Setting this may result in more or less efficient
+// operation, although it shouldn't technically prohibit anything
+enum ra_buf_type {
+    RA_BUF_TYPE_INVALID,
+    RA_BUF_TYPE_TEX_UPLOAD, // texture upload buffer (pixel buffer object)
+    RA_BUF_TYPE_SHADER_STORAGE // shader buffer, used for RA_VARTYPE_BUF_RW
+};
+
+struct ra_buf_params {
+    enum ra_buf_type type;
+    size_t size;
+    bool host_mapped;  // create a read-writable persistent mapping (ra_buf.data)
+    bool host_mutable; // contents may be updated via buf_update()
+    // If non-NULL, the buffer will be created with these contents. Otherwise,
+    // the initial data is undefined.
+    void *initial_data;
+};
+
+// A generic buffer, which can be used for many purposes (texture upload,
+// storage buffer, uniform buffer, etc.)
+struct ra_buf {
+    // All fields are read-only after creation.
+    struct ra_buf_params params;
+    void *data; // for persistently mapped buffers, points to the first byte
     void *priv;
-    void *data;             // pointer to first usable byte
-    size_t size;            // total size of the mapping, starting at data
 };
 
 // Type of a shader uniform variable, or a vertex attribute. In all cases,
@@ -127,7 +171,7 @@ enum ra_vartype {
     RA_VARTYPE_IMG_W,           // C: ra_tex*, GLSL: various image types
                                 // write-only (W) image for compute shaders
     RA_VARTYPE_BYTE_UNORM,      // C: uint8_t, GLSL: int, vec* (vertex data only)
-    RA_VARTYPE_SSBO,            // a hack for GL
+    RA_VARTYPE_BUF_RW,          // C: ra_buf*, GLSL: buffer block
 };
 
 // Represents a uniform, texture input parameter, and similar things.
@@ -140,7 +184,7 @@ struct ra_renderpass_input {
     // Vertex data: byte offset of the attribute into the vertex struct
     // RA_VARTYPE_TEX: texture unit
     // RA_VARTYPE_IMG_W: image unit
-    // RA_VARTYPE_SSBO: whatever?
+    // RA_VARTYPE_BUF_* buffer binding point
     // Other uniforms: unused
     int binding;
 };
@@ -259,10 +303,9 @@ struct ra_renderpass_run_params {
     int compute_groups[3];
 };
 
-enum {
-    // Flags for the texture_upload flags parameter.
-    RA_TEX_UPLOAD_DISCARD = 1 << 0, // discard pre-existing data not in the region
-};
+// This is an opaque type provided by the implementation, but we want to at
+// least give it a saner name than void* for code readability purposes.
+typedef void ra_timer;
 
 // Rendering API entrypoints. (Note: there are some additional hidden features
 // you need to take care of. For example, hwdec mapping will be provided
@@ -278,42 +321,34 @@ struct ra_fns {
 
     void (*tex_destroy)(struct ra *ra, struct ra_tex *tex);
 
-    // Copy from CPU RAM to the texture. The image dimensions are as specified
-    // in tex->params.
-    // This is an extremely common operation.
-    // Unlike with OpenGL, the src data has to have exactly the same format as
-    // the texture, and no conversion is supported.
-    // region can be NULL - if it's not NULL, then the provided pointer only
-    // contains data for the given region. Only part of the texture data is
-    // updated, and ptr points to the first pixel in the region. If
-    // RA_TEX_UPLOAD_DISCARD is set, data outside of the region can return to
-    // an uninitialized state. The region is always strictly within the texture
-    // and has a size >0 in both dimensions. 2D textures only.
-    // For 1D textures, stride is ignored, and region must be NULL.
-    // For 3D textures, stride is not supported. All data is fully packed with
-    // no padding, and stride is ignored, and region must be NULL.
-    // If buf is not NULL, then src must be within the provided buffer. The
-    // operation is implied to have dramatically better performance, but
-    // requires correct flushing and fencing operations by the caller to deal
-    // with asynchronous host/GPU behavior. If any of these conditions are not
-    // met, undefined behavior will result.
-    void (*tex_upload)(struct ra *ra, struct ra_tex *tex,
-                       const void *src, ptrdiff_t stride,
-                       struct mp_rect *region, uint64_t flags,
-                       struct ra_mapped_buffer *buf);
+    // Copy the contents of a buffer to a texture. This is an extremely common
+    // operation. The contents of the buffer must exactly match the format of
+    // the image - conversions between bit depth etc. are not supported.
+    // The buffer *may* be marked as "in use" while this operation is going on,
+    // and the contents must not be touched again by the API user until
+    // buf_poll returns true. Returns whether successful.
+    bool (*tex_upload)(struct ra *ra, const struct ra_tex_upload_params *params);
 
-    // Create a persistently mapped buffer for tex_upload.
-    // Optional, can be NULL or return NULL if unavailable.
-    struct ra_mapped_buffer *(*create_mapped_buffer)(struct ra *ra, size_t size);
+    // Create a buffer. This can be used as a persistently mapped buffer,
+    // a uniform buffer, a shader storage buffer or possibly others.
+    // Not all usage types must be supported; may return NULL if unavailable.
+    struct ra_buf *(*buf_create)(struct ra *ra,
+                                 const struct ra_buf_params *params);
 
-    void (*destroy_mapped_buffer)(struct ra *ra, struct ra_mapped_buffer *buf);
+    void (*buf_destroy)(struct ra *ra, struct ra_buf *buf);
 
-    // Essentially a fence: once the GPU uses the mapping for read-access (e.g.
-    // by starting a texture upload), the host must not write to the mapped
-    // data until an internal object has been signalled. This call returns
-    // whether it was signalled yet. If true, write accesses are allowed again.
-    // Optional, only available if flush_mapping is.
-    bool (*poll_mapped_buffer)(struct ra *ra, struct ra_mapped_buffer *buf);
+    // Update the contents of a buffer, starting at a given offset and up to a
+    // given size, with the contents of *data. This is an extremely common
+    // operation. Calling this while the buffer is considered "in use" is an
+    // error. (See: buf_poll)
+    void (*buf_update)(struct ra *ra, struct ra_buf *buf, ptrdiff_t offset,
+                       const void *data, size_t size);
+
+    // Returns if a buffer is currently "in use" or not. Updating the contents
+    // of a buffer (via buf_update or writing to buf->data) while it is still
+    // in use is an error and may result in graphical corruption. Optional, if
+    // NULL then all buffers are always usable.
+    bool (*buf_poll)(struct ra *ra, struct ra_buf *buf);
 
     // Clear the dst with the given color (rgba) and within the given scissor.
     // dst must have dst->params.render_dst==true. Content outside of the
@@ -323,17 +358,16 @@ struct ra_fns {
 
     // Copy a sub-rectangle from one texture to another. The source/dest region
     // is always within the texture bounds. Areas outside the dest region are
-    // preserved. The formats of the textures will be losely compatible (this
-    // probably has to be defined strictly). The dst texture can be a swapchain
-    // framebuffer, but src can not. Only 2D textures are supported.
-    // Both textures must have tex->params.render_dst==true (even src, which is
-    // an odd GL requirement).
-    // A rectangle with negative width or height means a flipped copy should be
-    // done. Coordinates are always in pixels.
-    // Optional. Only available if RA_CAP_BLIT is set (if it's not set, the must
+    // preserved. The formats of the textures must be losely compatible. The
+    // dst texture can be a swapchain framebuffer, but src can not. Only 2D
+    // textures are supported.
+    // The textures must have blit_src and blit_dst set, respectively.
+    // Rectangles with negative width/height lead to flipping, different src/dst
+    // sizes lead to point scaling. Coordinates are always in pixels.
+    // Optional. Only available if RA_CAP_BLIT is set (if it's not set, it must
     // not be called, even if it's non-NULL).
     void (*blit)(struct ra *ra, struct ra_tex *dst, struct ra_tex *src,
-                 int dst_x, int dst_y, struct mp_rect *src_rc);
+                 struct mp_rect *dst_rc, struct mp_rect *src_rc);
 
     // Compile a shader and create a pipeline. This is a rare operation.
     // The params pointer and anything it points to must stay valid until
@@ -347,10 +381,40 @@ struct ra_fns {
     // This is an extremely common operation.
     void (*renderpass_run)(struct ra *ra,
                            const struct ra_renderpass_run_params *params);
+
+    // Create a timer object. Returns NULL on failure, or if timers are
+    // unavailable for some reason. Optional.
+    ra_timer *(*timer_create)(struct ra *ra);
+
+    void (*timer_destroy)(struct ra *ra, ra_timer *timer);
+
+    // Start recording a timer. Note that valid usage requires you to pair
+    // every start with a stop. Trying to start a timer twice, or trying to
+    // stop a timer before having started it, consistutes invalid usage.
+    void (*timer_start)(struct ra *ra, ra_timer *timer);
+
+    // Stop recording a timer. This also returns any results that have been
+    // measured since the last usage of this ra_timer. It's important to note
+    // that GPU timer measurement are asynchronous, so this function does not
+    // always produce a value - and the values it does produce are typically
+    // delayed by a few frames. When no value is available, this returns 0.
+    uint64_t (*timer_stop)(struct ra *ra, ra_timer *timer);
+
+    // Hint that possibly queued up commands should be sent to the GPU. Optional.
+    void (*flush)(struct ra *ra);
+
+    // Associates a marker with any past error messages, for debugging
+    // purposes. Optional.
+    void (*debug_marker)(struct ra *ra, const char *msg);
 };
 
 struct ra_tex *ra_tex_create(struct ra *ra, const struct ra_tex_params *params);
 void ra_tex_free(struct ra *ra, struct ra_tex **tex);
+
+struct ra_buf *ra_buf_create(struct ra *ra, const struct ra_buf_params *params);
+void ra_buf_free(struct ra *ra, struct ra_buf **buf);
+
+void ra_free(struct ra **ra);
 
 const struct ra_format *ra_find_unorm_format(struct ra *ra,
                                              int bytes_per_component,

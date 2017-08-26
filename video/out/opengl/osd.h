@@ -17,8 +17,9 @@ void mpgl_osd_generate(struct mpgl_osd *ctx, struct mp_osd_res res, double pts,
 void mpgl_osd_resize(struct mpgl_osd *ctx, struct mp_osd_res res, int stereo_mode);
 bool mpgl_osd_draw_prepare(struct mpgl_osd *ctx, int index,
                            struct gl_shader_cache *sc);
-void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int vp_w, int vp_h, int index,
-                          struct gl_shader_cache *sc, struct ra_tex *target);
-int64_t mpgl_get_change_counter(struct mpgl_osd *ctx);
+void mpgl_osd_draw_finish(struct mpgl_osd *ctx, int index,
+                          struct gl_shader_cache *sc, struct fbodst target);
+bool mpgl_osd_check_change(struct mpgl_osd *ctx, struct mp_osd_res *res,
+                           double pts);
 
 #endif

@@ -200,6 +200,7 @@ static const struct vd_lavc_hwdec mp_vd_lavc_vaapi = {
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P10, AV_PIX_FMT_P010},
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_NV12},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_NV12},
         {AV_PIX_FMT_NONE}
     },
 };
@@ -217,6 +218,7 @@ static const struct vd_lavc_hwdec mp_vd_lavc_vaapi_copy = {
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P10, AV_PIX_FMT_P010},
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_NV12},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_NV12},
         {AV_PIX_FMT_NONE}
     },
 };
@@ -230,6 +232,7 @@ static const struct vd_lavc_hwdec mp_vd_lavc_vdpau = {
     .set_hwframes = true,
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_YUV420P},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_YUV420P},
         {AV_PIX_FMT_NONE}
     },
 };
@@ -245,6 +248,7 @@ static const struct vd_lavc_hwdec mp_vd_lavc_vdpau_copy = {
     .create_dev = vdpau_create_standalone,
     .pixfmt_map = (const enum AVPixelFormat[][2]) {
         {AV_PIX_FMT_YUV420P,   AV_PIX_FMT_YUV420P},
+        {AV_PIX_FMT_YUVJ420P,  AV_PIX_FMT_YUV420P},
         {AV_PIX_FMT_NONE}
     },
 };
@@ -557,6 +561,8 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
     ctx->pix_fmt = AV_PIX_FMT_NONE;
     ctx->hwdec = hwdec;
     ctx->hwdec_fmt = 0;
+    ctx->hwdec_failed = false;
+    ctx->hwdec_request_reinit = false;
     ctx->avctx = avcodec_alloc_context3(lavc_codec);
     AVCodecContext *avctx = ctx->avctx;
     if (!ctx->avctx)
@@ -592,6 +598,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
             ctx->hwdec_dev = hwdec_create_dev(vd, ctx->hwdec, false);
             if (!ctx->hwdec_dev)
                 goto error;
+            ctx->owns_hwdec_dev = !!ctx->hwdec->create_dev;
             if (ctx->hwdec_dev->restore_device)
                 ctx->hwdec_dev->restore_device(ctx->hwdec_dev);
             if (!ctx->hwdec->set_hwframes) {
@@ -652,6 +659,7 @@ static void reset_avctx(struct dec_video *vd)
     if (ctx->avctx && avcodec_is_open(ctx->avctx))
         avcodec_flush_buffers(ctx->avctx);
     ctx->flushing = false;
+    ctx->hwdec_request_reinit = false;
 }
 
 static void flush_all(struct dec_video *vd)
@@ -688,10 +696,10 @@ static void uninit_avctx(struct dec_video *vd)
 
     avcodec_free_context(&ctx->avctx);
 
-    if (ctx->hwdec_dev && ctx->hwdec && ctx->hwdec->generic_hwaccel &&
-        ctx->hwdec_dev->destroy)
+    if (ctx->hwdec_dev && ctx->owns_hwdec_dev && ctx->hwdec_dev->destroy)
         ctx->hwdec_dev->destroy(ctx->hwdec_dev);
     ctx->hwdec_dev = NULL;
+    ctx->owns_hwdec_dev = false;
 
     ctx->hwdec_failed = false;
     ctx->hwdec_fail_count = 0;

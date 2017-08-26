@@ -15,22 +15,23 @@
 #include "stream/stream.h"
 #include "shader_cache.h"
 #include "formats.h"
-#include "ra_gl.h"
+#include "utils.h"
 
 // Force cache flush if more than this number of shaders is created.
 #define SC_MAX_ENTRIES 48
 
 union uniform_val {
     float f[9];         // RA_VARTYPE_FLOAT
-    int i[4];           // RA_VARTYPE_INT, RA_VARTYPE_SSBO
+    int i[4];           // RA_VARTYPE_INT
     struct ra_tex *tex; // RA_VARTYPE_TEX, RA_VARTYPE_IMG_*
+    struct ra_buf *buf; // RA_VARTYPE_BUF_*
 };
 
 struct sc_uniform {
     struct ra_renderpass_input input;
     const char *glsl_type;
     union uniform_val v;
-    char *ssbo_format;
+    char *buffer_format;
 };
 
 struct sc_cached_uniform {
@@ -42,12 +43,11 @@ struct sc_entry {
     struct sc_cached_uniform *cached_uniforms;
     int num_cached_uniforms;
     bstr total;
-    struct gl_timer *timer;
+    struct timer_pool *timer;
 };
 
 struct gl_shader_cache {
     struct ra *ra;
-    GL *gl;
     struct mp_log *log;
 
     // permanent
@@ -96,7 +96,6 @@ struct gl_shader_cache *gl_sc_create(struct ra *ra, struct mpv_global *global,
     struct gl_shader_cache *sc = talloc_ptrtype(NULL, sc);
     *sc = (struct gl_shader_cache){
         .ra = ra,
-        .gl = ra_gl_get(ra),
         .global = global,
         .log = log,
     };
@@ -104,15 +103,10 @@ struct gl_shader_cache *gl_sc_create(struct ra *ra, struct mpv_global *global,
     return sc;
 }
 
-// Reset the previous pass. This must be called after
-// Unbind all GL state managed by sc - the current program and texture units.
+// Reset the previous pass. This must be called after gl_sc_generate and before
+// starting a new shader.
 static void gl_sc_reset(struct gl_shader_cache *sc)
 {
-    GL *gl = sc->gl;
-
-    if (sc->needs_reset)
-        gl_timer_stop(gl);
-
     sc->prelude_text.len = 0;
     sc->header_text.len = 0;
     sc->text.len = 0;
@@ -135,7 +129,7 @@ static void sc_flush_cache(struct gl_shader_cache *sc)
         struct sc_entry *e = sc->entries[n];
         if (e->pass)
             sc->ra->fns->renderpass_destroy(sc->ra, e->pass);
-        gl_timer_free(e->timer);
+        timer_pool_destroy(e->timer);
         talloc_free(e);
     }
     sc->num_entries = 0;
@@ -271,20 +265,20 @@ void gl_sc_uniform_image2D_wo(struct gl_shader_cache *sc, const char *name,
     u->v.tex = tex;
 }
 
-void gl_sc_ssbo(struct gl_shader_cache *sc, char *name, int gl_ssbo,
+void gl_sc_ssbo(struct gl_shader_cache *sc, char *name, struct ra_buf *buf,
                 char *format, ...)
 {
     gl_sc_enable_extension(sc, "GL_ARB_shader_storage_buffer_object");
 
     struct sc_uniform *u = find_uniform(sc, name);
-    u->input.type = RA_VARTYPE_SSBO;
+    u->input.type = RA_VARTYPE_BUF_RW;
     u->glsl_type = "";
     u->input.binding = sc->next_buffer_binding++;
-    u->v.i[0] = gl_ssbo;
+    u->v.buf = buf;
 
     va_list ap;
     va_start(ap, format);
-    u->ssbo_format = ta_vasprintf(sc, format, ap);
+    u->buffer_format = ta_vasprintf(sc, format, ap);
     va_end(ap);
 }
 
@@ -523,9 +517,9 @@ static void add_uniforms(struct gl_shader_cache *sc, bstr *dst)
         case RA_VARTYPE_IMG_W:
             ADD(dst, "uniform %s %s;\n", u->glsl_type, u->input.name);
             break;
-        case RA_VARTYPE_SSBO:
+        case RA_VARTYPE_BUF_RW:
             ADD(dst, "layout(std430, binding=%d) buffer %s { %s };\n",
-                u->input.binding, u->input.name, u->ssbo_format);
+                u->input.binding, u->input.name, u->buffer_format);
             break;
         default: abort();
         }
@@ -541,12 +535,7 @@ static void add_uniforms(struct gl_shader_cache *sc, bstr *dst)
 // 1. Unbind the program and all textures.
 // 2. Reset the sc state and prepare for a new shader program. (All uniforms
 //    and fragment operations needed for the next program have to be re-added.)
-// The return value is a mp_pass_perf containing performance metrics for the
-// execution of the generated shader. (Note: execution is measured up until
-// the corresponding gl_sc_reset call)
-// 'type' must be valid
-static struct mp_pass_perf gl_sc_generate(struct gl_shader_cache *sc,
-                                          enum ra_renderpass_type type)
+static void gl_sc_generate(struct gl_shader_cache *sc, enum ra_renderpass_type type)
 {
     int glsl_version = sc->ra->glsl_version;
     int glsl_es = sc->ra->glsl_es ? glsl_version : 0;
@@ -703,7 +692,7 @@ static struct mp_pass_perf gl_sc_generate(struct gl_shader_cache *sc,
         entry = talloc_ptrtype(NULL, entry);
         *entry = (struct sc_entry){
             .total = bstrdup(entry, *hash_total),
-            .timer = gl_timer_create(sc->gl),
+            .timer = timer_pool_create(sc->ra),
         };
         for (int n = 0; n < sc->num_uniforms; n++) {
             struct sc_cached_uniform u = {0};
@@ -716,7 +705,7 @@ static struct mp_pass_perf gl_sc_generate(struct gl_shader_cache *sc,
         MP_TARRAY_APPEND(sc, sc->entries, sc->num_entries, entry);
     }
     if (!entry->pass)
-        return (struct mp_pass_perf){0}; // not sure what to return?
+        return;
 
     assert(sc->num_uniforms == entry->num_cached_uniforms);
     assert(sc->num_uniforms == entry->pass->params.num_inputs);
@@ -725,19 +714,20 @@ static struct mp_pass_perf gl_sc_generate(struct gl_shader_cache *sc,
     for (int n = 0; n < sc->num_uniforms; n++)
         update_uniform(sc, entry, &sc->uniforms[n], n);
 
-    gl_timer_start(entry->timer);
     sc->current_shader = entry;
-
-    return gl_timer_measure(entry->timer);
 }
 
 struct mp_pass_perf gl_sc_dispatch_draw(struct gl_shader_cache *sc,
                                         struct ra_tex *target,
                                         void *ptr, size_t num)
 {
-    struct mp_pass_perf perf = gl_sc_generate(sc, RA_RENDERPASS_TYPE_RASTER);
+    struct timer_pool *timer = NULL;
+
+    gl_sc_generate(sc, RA_RENDERPASS_TYPE_RASTER);
     if (!sc->current_shader)
         goto error;
+
+    timer = sc->current_shader->timer;
 
     struct mp_rect full_rc = {0, 0, target->params.w, target->params.h};
 
@@ -752,19 +742,25 @@ struct mp_pass_perf gl_sc_dispatch_draw(struct gl_shader_cache *sc,
         .scissors = full_rc,
     };
 
+    timer_pool_start(timer);
     sc->ra->fns->renderpass_run(sc->ra, &run);
+    timer_pool_stop(timer);
 
 error:
     gl_sc_reset(sc);
-    return perf;
+    return timer_pool_measure(timer);
 }
 
 struct mp_pass_perf gl_sc_dispatch_compute(struct gl_shader_cache *sc,
                                            int w, int h, int d)
 {
-    struct mp_pass_perf perf = gl_sc_generate(sc, RA_RENDERPASS_TYPE_COMPUTE);
+    struct timer_pool *timer = NULL;
+
+    gl_sc_generate(sc, RA_RENDERPASS_TYPE_COMPUTE);
     if (!sc->current_shader)
         goto error;
+
+    timer = sc->current_shader->timer;
 
     struct ra_renderpass_run_params run = {
         .pass = sc->current_shader->pass,
@@ -773,9 +769,11 @@ struct mp_pass_perf gl_sc_dispatch_compute(struct gl_shader_cache *sc,
         .compute_groups = {w, h, d},
     };
 
+    timer_pool_start(timer);
     sc->ra->fns->renderpass_run(sc->ra, &run);
+    timer_pool_stop(timer);
 
 error:
     gl_sc_reset(sc);
-    return perf;
+    return timer_pool_measure(timer);
 }

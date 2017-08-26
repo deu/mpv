@@ -1,11 +1,84 @@
 #include <libavutil/intreadwrite.h>
 
 #include "formats.h"
+#include "utils.h"
 #include "ra_gl.h"
 
 static struct ra_fns ra_fns_gl;
 
-int ra_init_gl(struct ra *ra, GL *gl)
+// For ra.priv
+struct ra_gl {
+    GL *gl;
+    bool debug_enable;
+    bool timer_active; // hack for GL_TIME_ELAPSED limitations
+};
+
+// For ra_tex.priv
+struct ra_tex_gl {
+    struct ra_buf_pool pbo; // for ra.use_pbo
+    bool own_objects;
+    GLenum target;
+    GLuint texture; // 0 if no texture data associated
+    GLuint fbo; // 0 if no rendering requested, or it default framebuffer
+    // These 3 fields can be 0 if unknown.
+    GLint internal_format;
+    GLenum format;
+    GLenum type;
+};
+
+// For ra_buf.priv
+struct ra_buf_gl {
+    GLenum target;
+    GLuint buffer;
+    GLsync fence;
+};
+
+// For ra_renderpass.priv
+struct ra_renderpass_gl {
+    GLuint program;
+    // 1 entry for each ra_renderpass_params.inputs[] entry
+    GLint *uniform_loc;
+    int num_uniform_loc; // == ra_renderpass_params.num_inputs
+    struct gl_vao vao;
+};
+
+// (Init time only.)
+static void probe_real_size(GL *gl, struct ra_format *fmt)
+{
+    const struct gl_format *gl_fmt = fmt->priv;
+
+    if (!gl->GetTexLevelParameteriv)
+        return; // GLES
+
+    bool is_la = gl_fmt->format == GL_LUMINANCE ||
+                 gl_fmt->format == GL_LUMINANCE_ALPHA;
+    if (is_la && gl->es)
+        return; // GLES doesn't provide GL_TEXTURE_LUMINANCE_SIZE.
+
+    GLuint tex;
+    gl->GenTextures(1, &tex);
+    gl->BindTexture(GL_TEXTURE_2D, tex);
+    gl->TexImage2D(GL_TEXTURE_2D, 0, gl_fmt->internal_format, 64, 64, 0,
+                   gl_fmt->format, gl_fmt->type, NULL);
+    for (int i = 0; i < fmt->num_components; i++) {
+        const GLenum pnames[] = {
+            GL_TEXTURE_RED_SIZE,
+            GL_TEXTURE_GREEN_SIZE,
+            GL_TEXTURE_BLUE_SIZE,
+            GL_TEXTURE_ALPHA_SIZE,
+            GL_TEXTURE_LUMINANCE_SIZE,
+            GL_TEXTURE_ALPHA_SIZE,
+        };
+        int comp = is_la ? i + 4 : i;
+        assert(comp < MP_ARRAY_SIZE(pnames));
+        GLint param = -1;
+        gl->GetTexLevelParameteriv(GL_TEXTURE_2D, 0, pnames[comp], &param);
+        fmt->component_depth[i] = param > 0 ? param : 0;
+    }
+    gl->DeleteTextures(1, &tex);
+}
+
+static int ra_init_gl(struct ra *ra, GL *gl)
 {
     if (gl->version < 210 && gl->es < 200) {
         MP_ERR(ra, "At least OpenGL 2.1 or OpenGL ES 2.0 required.\n");
@@ -15,8 +88,10 @@ int ra_init_gl(struct ra *ra, GL *gl)
     struct ra_gl *p = ra->priv = talloc_zero(NULL, struct ra_gl);
     p->gl = gl;
 
+    ra_gl_set_debug(ra, true);
+
     ra->fns = &ra_fns_gl;
-    ra->caps = 0;
+    ra->caps = RA_CAP_DIRECT_UPLOAD;
     if (gl->mpgl_caps & MPGL_CAP_1D_TEX)
         ra->caps |= RA_CAP_TEX_1D;
     if (gl->mpgl_caps & MPGL_CAP_3D_TEX)
@@ -25,18 +100,14 @@ int ra_init_gl(struct ra *ra, GL *gl)
         ra->caps |= RA_CAP_BLIT;
     if (gl->mpgl_caps & MPGL_CAP_COMPUTE_SHADER)
         ra->caps |= RA_CAP_COMPUTE;
-    if (gl->MapBufferRange)
-        ra->caps |= RA_CAP_PBO;
     if (gl->mpgl_caps & MPGL_CAP_NESTED_ARRAY)
         ra->caps |= RA_CAP_NESTED_ARRAY;
+    if (gl->mpgl_caps & MPGL_CAP_SSBO)
+        ra->caps |= RA_CAP_BUF_RW;
     ra->glsl_version = gl->glsl_version;
     ra->glsl_es = gl->es > 0;
 
     int gl_fmt_features = gl_format_feature_flags(gl);
-
-    // Test whether we can use 10 bit.
-    int depth16 = gl_determine_16bit_tex_depth(gl);
-    MP_VERBOSE(ra, "16 bit texture depth: %d.\n", depth16);
 
     for (int n = 0; gl_formats[n].internal_format; n++) {
         const struct gl_format *gl_fmt = &gl_formats[n];
@@ -50,6 +121,7 @@ int ra_init_gl(struct ra *ra, GL *gl)
             .priv           = (void *)gl_fmt,
             .ctype          = gl_format_type(gl_fmt),
             .num_components = gl_format_components(gl_fmt->format),
+            .ordered        = gl_fmt->format != GL_RGB_422_APPLE,
             .pixel_size     = gl_bytes_per_pixel(gl_fmt->format, gl_fmt->type),
             .luminance_alpha = gl_fmt->format == GL_LUMINANCE_ALPHA,
             .linear_filter  = gl_fmt->flags & F_TF,
@@ -59,8 +131,7 @@ int ra_init_gl(struct ra *ra, GL *gl)
 
         int csize = gl_component_size(gl_fmt->type) * 8;
         int depth = csize;
-        if (fmt->ctype == RA_CTYPE_UNORM)
-            depth = MPMIN(csize, depth16); // naive/approximate
+
         if (gl_fmt->flags & F_F16) {
             depth = 16;
             csize = 32; // always upload as GL_FLOAT (simpler for us)
@@ -70,6 +141,9 @@ int ra_init_gl(struct ra *ra, GL *gl)
             fmt->component_size[i] = csize;
             fmt->component_depth[i] = depth;
         }
+
+        if (fmt->ctype == RA_CTYPE_UNORM && depth != 8)
+            probe_real_size(gl, fmt);
 
         // Special formats for which OpenGL happens to have direct support.
         if (strcmp(fmt->name, "rgb565") == 0) {
@@ -97,13 +171,32 @@ int ra_init_gl(struct ra *ra, GL *gl)
         MP_TARRAY_APPEND(ra, ra->formats, ra->num_formats, fmt);
     }
 
-    GLint max_wh;
-    gl->GetIntegerv(GL_MAX_TEXTURE_SIZE, &max_wh);
-    ra->max_texture_wh = max_wh;
+    GLint ival;
+    gl->GetIntegerv(GL_MAX_TEXTURE_SIZE, &ival);
+    ra->max_texture_wh = ival;
+
+    if (ra->caps & RA_CAP_COMPUTE) {
+        gl->GetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &ival);
+        ra->max_shmem = ival;
+    }
 
     gl->Disable(GL_DITHER);
 
+    if (!ra_find_unorm_format(ra, 2, 1))
+        MP_VERBOSE(ra, "16 bit UNORM textures not available.\n");
+
     return 0;
+}
+
+struct ra *ra_create_gl(GL *gl, struct mp_log *log)
+{
+    struct ra *ra = talloc_zero(NULL, struct ra);
+    ra->log = log;
+    if (ra_init_gl(ra, gl) < 0) {
+        talloc_free(ra);
+        return NULL;
+    }
+    return ra;
 }
 
 static void gl_destroy(struct ra *ra)
@@ -111,34 +204,42 @@ static void gl_destroy(struct ra *ra)
     talloc_free(ra->priv);
 }
 
-static void gl_tex_destroy(struct ra *ra, struct ra_tex *tex)
+void ra_gl_set_debug(struct ra *ra, bool enable)
 {
     struct ra_gl *p = ra->priv;
+    GL *gl = ra_gl_get(ra);
+
+    p->debug_enable = enable;
+    if (gl->debug_context)
+        gl_set_debug_logger(gl, enable ? ra->log : NULL);
+}
+
+static void gl_tex_destroy(struct ra *ra, struct ra_tex *tex)
+{
+    GL *gl = ra_gl_get(ra);
     struct ra_tex_gl *tex_gl = tex->priv;
+
+    ra_buf_pool_uninit(ra, &tex_gl->pbo);
 
     if (tex_gl->own_objects) {
         if (tex_gl->fbo)
-            p->gl->DeleteFramebuffers(1, &tex_gl->fbo);
+            gl->DeleteFramebuffers(1, &tex_gl->fbo);
 
-        p->gl->DeleteTextures(1, &tex_gl->texture);
+        gl->DeleteTextures(1, &tex_gl->texture);
     }
-    gl_pbo_upload_uninit(&tex_gl->pbo);
     talloc_free(tex_gl);
     talloc_free(tex);
 }
 
-static struct ra_tex *gl_tex_create(struct ra *ra,
-                                    const struct ra_tex_params *params)
+static struct ra_tex *gl_tex_create_blank(struct ra *ra,
+                                          const struct ra_tex_params *params)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
-
     struct ra_tex *tex = talloc_zero(NULL, struct ra_tex);
     tex->params = *params;
+    tex->params.initial_data = NULL;
     struct ra_tex_gl *tex_gl = tex->priv = talloc_zero(NULL, struct ra_tex_gl);
 
     const struct gl_format *fmt = params->format->priv;
-    tex_gl->own_objects = true;
     tex_gl->internal_format = fmt->internal_format;
     tex_gl->format = fmt->format;
     tex_gl->type = fmt->type;
@@ -152,6 +253,24 @@ static struct ra_tex *gl_tex_create(struct ra *ra,
         assert(params->dimensions == 2);
         tex_gl->target = GL_TEXTURE_RECTANGLE;
     }
+    if (params->external_oes) {
+        assert(params->dimensions == 2 && !params->non_normalized);
+        tex_gl->target = GL_TEXTURE_EXTERNAL_OES;
+    }
+
+    return tex;
+}
+
+static struct ra_tex *gl_tex_create(struct ra *ra,
+                                    const struct ra_tex_params *params)
+{
+    GL *gl = ra_gl_get(ra);
+    struct ra_tex *tex = gl_tex_create_blank(ra, params);
+    if (!tex)
+        return NULL;
+    struct ra_tex_gl *tex_gl = tex->priv;
+
+    tex_gl->own_objects = true;
 
     gl->GenTextures(1, &tex_gl->texture);
     gl->BindTexture(tex_gl->target, tex_gl->texture);
@@ -187,11 +306,10 @@ static struct ra_tex *gl_tex_create(struct ra *ra,
 
     gl->BindTexture(tex_gl->target, 0);
 
-    tex->params.initial_data = NULL;
-
     gl_check_error(gl, ra->log, "after creating texture");
 
-    if (tex->params.render_dst) {
+    // Even blitting needs an FBO in OpenGL for strange reasons
+    if (tex->params.render_dst || tex->params.blit_src || tex->params.blit_dst) {
         if (!tex->params.format->renderable) {
             MP_ERR(ra, "Trying to create renderable texture with unsupported "
                    "format.\n");
@@ -204,7 +322,7 @@ static struct ra_tex *gl_tex_create(struct ra *ra,
         gl->GenFramebuffers(1, &tex_gl->fbo);
         gl->BindFramebuffer(GL_FRAMEBUFFER, tex_gl->fbo);
         gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                GL_TEXTURE_2D, tex_gl->texture, 0);
+                                 GL_TEXTURE_2D, tex_gl->texture, 0);
         GLenum err = gl->CheckFramebufferStatus(GL_FRAMEBUFFER);
         gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -222,6 +340,22 @@ static struct ra_tex *gl_tex_create(struct ra *ra,
     return tex;
 }
 
+// Create a ra_tex that merely wraps an existing texture. The returned object
+// is freed with ra_tex_free(), but this will not delete the texture passed to
+// this function.
+// Some features are unsupported, e.g. setting params->initial_data or render_dst.
+struct ra_tex *ra_create_wrapped_tex(struct ra *ra,
+                                     const struct ra_tex_params *params,
+                                     GLuint gl_texture)
+{
+    struct ra_tex *tex = gl_tex_create_blank(ra, params);
+    if (!tex)
+        return NULL;
+    struct ra_tex_gl *tex_gl = tex->priv;
+    tex_gl->texture = gl_texture;
+    return tex;
+}
+
 static const struct ra_format fbo_dummy_format = {
     .name = "unknown_fbo",
     .priv = (void *)&(const struct gl_format){
@@ -232,92 +366,33 @@ static const struct ra_format fbo_dummy_format = {
     .renderable = true,
 };
 
-static const struct ra_format tex_dummy_format = {
-    .name = "unknown_tex",
-    .priv = (void *)&(const struct gl_format){
-        .name = "unknown",
-        .format = GL_RGBA,
-        .flags = F_TF,
-    },
-    .renderable = true,
-    .linear_filter = true,
-};
-
-static const struct ra_format *find_similar_format(struct ra *ra,
-                                                   GLint gl_iformat,
-                                                   GLenum gl_format,
-                                                   GLenum gl_type)
-{
-    if (gl_iformat || gl_format || gl_type) {
-        for (int n = 0; n < ra->num_formats; n++) {
-            const struct ra_format *fmt = ra->formats[n];
-            const struct gl_format *gl_fmt = fmt->priv;
-            if ((gl_fmt->internal_format == gl_iformat || !gl_iformat) &&
-                (gl_fmt->format == gl_format || !gl_format) &&
-                (gl_fmt->type == gl_type || !gl_type))
-                return fmt;
-        }
-    }
-    return NULL;
-}
-
-static struct ra_tex *wrap_tex_fbo(struct ra *ra, GLuint gl_obj, bool is_fbo,
-                                   GLenum gl_target, GLint gl_iformat,
-                                   GLenum gl_format, GLenum gl_type,
-                                   int w, int h)
-{
-    const struct ra_format *format =
-        find_similar_format(ra, gl_iformat, gl_format, gl_type);
-    if (!format)
-        format = is_fbo ? &fbo_dummy_format : &tex_dummy_format;
-
-    struct ra_tex *tex = talloc_zero(ra, struct ra_tex);
-    *tex = (struct ra_tex){
-        .params = {
-            .dimensions = 2,
-            .w = w, .h = h, .d = 1,
-            .format = format,
-            .render_dst = is_fbo,
-            .render_src = !is_fbo,
-            .non_normalized = gl_target == GL_TEXTURE_RECTANGLE,
-            .external_oes = gl_target == GL_TEXTURE_EXTERNAL_OES,
-        },
-    };
-
-    struct ra_tex_gl *tex_gl = tex->priv = talloc_zero(NULL, struct ra_tex_gl);
-    *tex_gl = (struct ra_tex_gl){
-        .target = gl_target,
-        .texture = is_fbo ? 0 : gl_obj,
-        .fbo = is_fbo ? gl_obj : 0,
-        .internal_format = gl_iformat,
-        .format = gl_format,
-        .type = gl_type,
-    };
-
-    return tex;
-}
-
-// Create a ra_tex that merely wraps an existing texture. gl_format and gl_type
-// can be 0, in which case possibly nonsensical fallbacks are chosen.
-// Works for 2D textures only. Integer textures are not supported.
-// The returned object is freed with ra_tex_free(), but this will not delete
-// the texture passed to this function.
-struct ra_tex *ra_create_wrapped_texture(struct ra *ra, GLuint gl_texture,
-                                         GLenum gl_target, GLint gl_iformat,
-                                         GLenum gl_format, GLenum gl_type,
-                                         int w, int h)
-{
-    return wrap_tex_fbo(ra, gl_texture, false, gl_target, gl_iformat, gl_format,
-                        gl_type, w, h);
-}
-
 // Create a ra_tex that merely wraps an existing framebuffer. gl_fbo can be 0
 // to wrap the default framebuffer.
 // The returned object is freed with ra_tex_free(), but this will not delete
 // the framebuffer object passed to this function.
 struct ra_tex *ra_create_wrapped_fb(struct ra *ra, GLuint gl_fbo, int w, int h)
 {
-    return wrap_tex_fbo(ra, gl_fbo, true, 0, GL_RGBA, 0, 0, w, h);
+    struct ra_tex *tex = talloc_zero(ra, struct ra_tex);
+    *tex = (struct ra_tex){
+        .params = {
+            .dimensions = 2,
+            .w = w, .h = h, .d = 1,
+            .format = &fbo_dummy_format,
+            .render_dst = true,
+            .blit_src = true,
+            .blit_dst = true,
+        },
+    };
+
+    struct ra_tex_gl *tex_gl = tex->priv = talloc_zero(NULL, struct ra_tex_gl);
+    *tex_gl = (struct ra_tex_gl){
+        .fbo = gl_fbo,
+        .internal_format = 0,
+        .format = GL_RGBA,
+        .type = 0,
+    };
+
+    return tex;
 }
 
 GL *ra_gl_get(struct ra *ra)
@@ -326,41 +401,71 @@ GL *ra_gl_get(struct ra *ra)
     return p->gl;
 }
 
-static void gl_tex_upload(struct ra *ra, struct ra_tex *tex,
-                          const void *src, ptrdiff_t stride,
-                          struct mp_rect *rc, uint64_t flags,
-                          struct ra_mapped_buffer *buf)
+// Return the associate glTexImage arguments for the given format. Sets all
+// fields to 0 on failure.
+void ra_gl_get_format(const struct ra_format *fmt, GLint *out_internal_format,
+                      GLenum *out_format, GLenum *out_type)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
-    struct ra_tex_gl *tex_gl = tex->priv;
-    struct ra_mapped_buffer_gl *buf_gl = NULL;
-    struct mp_rect full = {0, 0, tex->params.w, tex->params.h};
+    const struct gl_format *gl_format = fmt->priv;
+    *out_internal_format = gl_format->internal_format;
+    *out_format = gl_format->format;
+    *out_type = gl_format->type;
+}
 
+void ra_gl_get_raw_tex(struct ra *ra, struct ra_tex *tex,
+                       GLuint *out_texture, GLenum *out_target)
+{
+    struct ra_tex_gl *tex_gl = tex->priv;
+    *out_texture = tex_gl->texture;
+    *out_target = tex_gl->target;
+}
+
+// Return whether the ra instance was created with ra_create_gl(). This is the
+// _only_ function that can be called on a ra instance of any type.
+bool ra_is_gl(struct ra *ra)
+{
+    return ra->fns == &ra_fns_gl;
+}
+
+static bool gl_tex_upload(struct ra *ra,
+                          const struct ra_tex_upload_params *params)
+{
+    GL *gl = ra_gl_get(ra);
+    struct ra_tex *tex = params->tex;
+    struct ra_buf *buf = params->buf;
+    struct ra_tex_gl *tex_gl = tex->priv;
+    struct ra_buf_gl *buf_gl = buf ? buf->priv : NULL;
+    assert(tex->params.host_mutable);
+    assert(!params->buf || !params->src);
+
+    if (ra->use_pbo && !params->buf)
+        return ra_tex_upload_pbo(ra, &tex_gl->pbo, params);
+
+    const void *src = params->src;
     if (buf) {
-        buf_gl = buf->priv;
-        gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, buf_gl->pbo);
-        src = (void *)((uintptr_t)src - (uintptr_t)buf->data);
+        gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, buf_gl->buffer);
+        src = (void *)params->buf_offset;
     }
 
     gl->BindTexture(tex_gl->target, tex_gl->texture);
+    if (params->invalidate && gl->InvalidateTexImage)
+        gl->InvalidateTexImage(tex_gl->texture, 0);
 
     switch (tex->params.dimensions) {
     case 1:
-        assert(!rc);
         gl->TexImage1D(tex_gl->target, 0, tex_gl->internal_format,
                        tex->params.w, 0, tex_gl->format, tex_gl->type, src);
         break;
-    case 2:
-        if (!rc)
-            rc = &full;
-        gl_pbo_upload_tex(&tex_gl->pbo, gl, ra->use_pbo && !buf,
-                          tex_gl->target, tex_gl->format, tex_gl->type,
-                          tex->params.w, tex->params.h, src, stride,
-                          rc->x0, rc->y0, rc->x1 - rc->x0, rc->y1 - rc->y0);
+    case 2: {
+        struct mp_rect rc = {0, 0, tex->params.w, tex->params.h};
+        if (params->rc)
+            rc = *params->rc;
+        gl_upload_tex(gl, tex_gl->target, tex_gl->format, tex_gl->type,
+                      src, params->stride, rc.x0, rc.y0, rc.x1 - rc.x0,
+                      rc.y1 - rc.y0);
         break;
+    }
     case 3:
-        assert(!rc);
         gl->PixelStorei(GL_UNPACK_ALIGNMENT, 1);
         gl->TexImage3D(GL_TEXTURE_3D, 0, tex_gl->internal_format, tex->params.w,
                        tex->params.h, tex->params.d, 0, tex_gl->format,
@@ -373,68 +478,113 @@ static void gl_tex_upload(struct ra *ra, struct ra_tex *tex,
 
     if (buf) {
         gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        // Make sure the PBO is not reused until GL is done with it. If a
-        // previous operation is pending, "update" it by creating a new
-        // fence that will cover the previous operation as well.
-        gl->DeleteSync(buf_gl->fence);
-        buf_gl->fence = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        if (buf->params.host_mapped) {
+            // Make sure the PBO is not reused until GL is done with it. If a
+            // previous operation is pending, "update" it by creating a new
+            // fence that will cover the previous operation as well.
+            gl->DeleteSync(buf_gl->fence);
+            buf_gl->fence = gl->FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        }
     }
+
+    return true;
 }
 
-static void gl_destroy_mapped_buffer(struct ra *ra, struct ra_mapped_buffer *buf)
+static void gl_buf_destroy(struct ra *ra, struct ra_buf *buf)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
-    struct ra_mapped_buffer_gl *buf_gl = buf->priv;
+    if (!buf)
+        return;
+
+    GL *gl = ra_gl_get(ra);
+    struct ra_buf_gl *buf_gl = buf->priv;
 
     gl->DeleteSync(buf_gl->fence);
-    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, buf_gl->pbo);
-    if (buf->data)
-        gl->UnmapBuffer(GL_PIXEL_UNPACK_BUFFER);
-    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    gl->DeleteBuffers(1, &buf_gl->pbo);
+    if (buf->data) {
+        gl->BindBuffer(buf_gl->target, buf_gl->buffer);
+        gl->UnmapBuffer(buf_gl->target);
+        gl->BindBuffer(buf_gl->target, 0);
+    }
+    gl->DeleteBuffers(1, &buf_gl->buffer);
 
     talloc_free(buf_gl);
     talloc_free(buf);
 }
 
-static struct ra_mapped_buffer *gl_create_mapped_buffer(struct ra *ra,
-                                                        size_t size)
+static struct ra_buf *gl_buf_create(struct ra *ra,
+                                    const struct ra_buf_params *params)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
-    if (gl->version < 440)
+    if (params->host_mapped && gl->version < 440)
         return NULL;
 
-    struct ra_mapped_buffer *buf = talloc_zero(NULL, struct ra_mapped_buffer);
-    buf->size = size;
+    struct ra_buf *buf = talloc_zero(NULL, struct ra_buf);
+    buf->params = *params;
+    buf->params.initial_data = NULL;
 
-    struct ra_mapped_buffer_gl *buf_gl = buf->priv =
-        talloc_zero(NULL, struct ra_mapped_buffer_gl);
+    struct ra_buf_gl *buf_gl = buf->priv = talloc_zero(NULL, struct ra_buf_gl);
+    gl->GenBuffers(1, &buf_gl->buffer);
 
-    unsigned flags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT |
-                     GL_MAP_COHERENT_BIT;
+    switch (params->type) {
+    case RA_BUF_TYPE_TEX_UPLOAD:     buf_gl->target = GL_PIXEL_UNPACK_BUFFER;   break;
+    case RA_BUF_TYPE_SHADER_STORAGE: buf_gl->target = GL_SHADER_STORAGE_BUFFER; break;
+    default: abort();
+    };
 
-    gl->GenBuffers(1, &buf_gl->pbo);
-    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, buf_gl->pbo);
-    gl->BufferStorage(GL_PIXEL_UNPACK_BUFFER, size, NULL, flags | GL_CLIENT_STORAGE_BIT);
-    buf->data = gl->MapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, buf->size, flags);
-    gl->BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-    if (!buf->data) {
-        gl_check_error(gl, ra->log, "mapping buffer");
-        gl_destroy_mapped_buffer(ra, buf);
-        return NULL;
+    gl->BindBuffer(buf_gl->target, buf_gl->buffer);
+
+    if (params->host_mapped) {
+        unsigned flags = GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT |
+                         GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+
+        unsigned storflags = flags;
+        if (params->type == RA_BUF_TYPE_TEX_UPLOAD)
+            storflags |= GL_CLIENT_STORAGE_BIT;
+
+        gl->BufferStorage(buf_gl->target, params->size, params->initial_data,
+                          storflags);
+        buf->data = gl->MapBufferRange(buf_gl->target, 0, params->size, flags);
+        if (!buf->data) {
+            gl_check_error(gl, ra->log, "mapping buffer");
+            gl_buf_destroy(ra, buf);
+            buf = NULL;
+        }
+    } else {
+        GLenum hint;
+        switch (params->type) {
+        case RA_BUF_TYPE_TEX_UPLOAD:     hint = GL_STREAM_DRAW; break;
+        case RA_BUF_TYPE_SHADER_STORAGE: hint = GL_STREAM_COPY; break;
+        default: abort();
+        }
+
+        gl->BufferData(buf_gl->target, params->size, params->initial_data, hint);
     }
 
+    gl->BindBuffer(buf_gl->target, 0);
     return buf;
 }
 
-static bool gl_poll_mapped_buffer(struct ra *ra, struct ra_mapped_buffer *buf)
+static void gl_buf_update(struct ra *ra, struct ra_buf *buf, ptrdiff_t offset,
+                          const void *data, size_t size)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
-    struct ra_mapped_buffer_gl *buf_gl = buf->priv;
+    GL *gl = ra_gl_get(ra);
+    struct ra_buf_gl *buf_gl = buf->priv;
+    assert(buf->params.host_mutable);
+
+    gl->BindBuffer(buf_gl->target, buf_gl->buffer);
+    gl->BufferSubData(buf_gl->target, offset, size, data);
+    gl->BindBuffer(buf_gl->target, 0);
+}
+
+static bool gl_buf_poll(struct ra *ra, struct ra_buf *buf)
+{
+    // Non-persistently mapped buffers are always implicitly reusable in OpenGL,
+    // the implementation will create more buffers under the hood if needed.
+    if (!buf->data)
+        return true;
+
+    GL *gl = ra_gl_get(ra);
+    struct ra_buf_gl *buf_gl = buf->priv;
 
     if (buf_gl->fence) {
         GLenum res = gl->ClientWaitSync(buf_gl->fence, 0, 0); // non-blocking
@@ -450,8 +600,7 @@ static bool gl_poll_mapped_buffer(struct ra *ra, struct ra_mapped_buffer *buf)
 static void gl_clear(struct ra *ra, struct ra_tex *dst, float color[4],
                      struct mp_rect *scissor)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
     assert(dst->params.render_dst);
     struct ra_tex_gl *dst_gl = dst->priv;
@@ -467,28 +616,24 @@ static void gl_clear(struct ra *ra, struct ra_tex *dst, float color[4],
     gl->Clear(GL_COLOR_BUFFER_BIT);
     gl->Disable(GL_SCISSOR_TEST);
 
-    gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 static void gl_blit(struct ra *ra, struct ra_tex *dst, struct ra_tex *src,
-                    int dst_x, int dst_y, struct mp_rect *src_rc)
+                    struct mp_rect *dst_rc, struct mp_rect *src_rc)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
-    assert(dst->params.render_dst);
-    assert(src->params.render_dst); // even src must have a FBO
+    assert(src->params.blit_src);
+    assert(dst->params.blit_dst);
 
     struct ra_tex_gl *src_gl = src->priv;
     struct ra_tex_gl *dst_gl = dst->priv;
 
-    int w = mp_rect_w(*src_rc);
-    int h = mp_rect_h(*src_rc);
-
     gl->BindFramebuffer(GL_READ_FRAMEBUFFER, src_gl->fbo);
     gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_gl->fbo);
     gl->BlitFramebuffer(src_rc->x0, src_rc->y0, src_rc->x1, src_rc->y1,
-                        dst_x, dst_y, dst_x + w, dst_y + h,
+                        dst_rc->x0, dst_rc->y0, dst_rc->x1, dst_rc->y1,
                         GL_COLOR_BUFFER_BIT, GL_NEAREST);
     gl->BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -496,9 +641,9 @@ static void gl_blit(struct ra *ra, struct ra_tex *dst, struct ra_tex *src,
 
 static void gl_renderpass_destroy(struct ra *ra, struct ra_renderpass *pass)
 {
-    struct ra_gl *p = ra->priv;
+    GL *gl = ra_gl_get(ra);
     struct ra_renderpass_gl *pass_gl = pass->priv;
-    p->gl->DeleteProgram(pass_gl->program);
+    gl->DeleteProgram(pass_gl->program);
     gl_vao_uninit(&pass_gl->vao);
 
     talloc_free(pass_gl);
@@ -518,8 +663,7 @@ static const char *shader_typestr(GLenum type)
 static void compile_attach_shader(struct ra *ra, GLuint program,
                                   GLenum type, const char *source, bool *ok)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
     GLuint shader = gl->CreateShader(type);
     gl->ShaderSource(shader, 1, &source, NULL);
@@ -561,8 +705,7 @@ static void compile_attach_shader(struct ra *ra, GLuint program,
 
 static void link_shader(struct ra *ra, GLuint program, bool *ok)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
     gl->LinkProgram(program);
     GLint status = 0;
@@ -584,8 +727,7 @@ static void link_shader(struct ra *ra, GLuint program, bool *ok)
 // either 'compute' or both 'vertex' and 'frag' are needed
 static GLuint compile_program(struct ra *ra, const struct ra_renderpass_params *p)
 {
-    struct ra_gl *priv = ra->priv;
-    GL *gl = priv->gl;
+    GL *gl = ra_gl_get(ra);
 
     GLuint prog = gl->CreateProgram();
     bool ok = true;
@@ -608,8 +750,7 @@ static GLuint compile_program(struct ra *ra, const struct ra_renderpass_params *
 static GLuint load_program(struct ra *ra, const struct ra_renderpass_params *p,
                            bstr *out_cached_data)
 {
-    struct ra_gl *priv = ra->priv;
-    GL *gl = priv->gl;
+    GL *gl = ra_gl_get(ra);
 
     GLuint prog = 0;
 
@@ -639,11 +780,16 @@ static GLuint load_program(struct ra *ra, const struct ra_renderpass_params *p,
             uint8_t *buffer = talloc_size(NULL, size + 4);
             GLsizei actual_size = 0;
             GLenum binary_format = 0;
-            gl->GetProgramBinary(prog, size, &actual_size, &binary_format,
-                                 buffer + 4);
+            if (size > 0) {
+                gl->GetProgramBinary(prog, size, &actual_size, &binary_format,
+                                     buffer + 4);
+            }
             AV_WL32(buffer, binary_format);
-            if (actual_size)
+            if (actual_size) {
                 *out_cached_data = (bstr){buffer, actual_size + 4};
+            } else {
+                talloc_free(buffer);
+            }
         }
     }
 
@@ -653,8 +799,7 @@ static GLuint load_program(struct ra *ra, const struct ra_renderpass_params *p,
 static struct ra_renderpass *gl_renderpass_create(struct ra *ra,
                                     const struct ra_renderpass_params *params)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
     struct ra_renderpass *pass = talloc_zero(NULL, struct ra_renderpass);
     pass->params = *ra_render_pass_params_copy(pass, params);
@@ -672,17 +817,27 @@ static struct ra_renderpass *gl_renderpass_create(struct ra *ra,
     talloc_steal(pass, cached.start);
     pass->params.cached_program = cached;
 
+    gl->UseProgram(pass_gl->program);
     for (int n = 0; n < params->num_inputs; n++) {
         GLint loc =
             gl->GetUniformLocation(pass_gl->program, params->inputs[n].name);
         MP_TARRAY_APPEND(pass_gl, pass_gl->uniform_loc, pass_gl->num_uniform_loc,
                          loc);
+
+        // For compatibility with older OpenGL, we need to explicitly update
+        // the texture/image unit bindings after creating the shader program,
+        // since specifying it directly requires GLSL 4.20+
+        switch (params->inputs[n].type) {
+        case RA_VARTYPE_TEX:
+        case RA_VARTYPE_IMG_W:
+            gl->Uniform1i(loc, params->inputs[n].binding);
+            break;
+        }
     }
+    gl->UseProgram(0);
 
-    gl_vao_init(&pass_gl->vao, gl, params->vertex_stride, params->vertex_attribs,
-                params->num_vertex_attribs);
-
-    pass_gl->first_run = true;
+    gl_vao_init(&pass_gl->vao, gl, pass->params.vertex_stride,
+                pass->params.vertex_attribs, pass->params.num_vertex_attribs);
 
     return pass;
 }
@@ -702,8 +857,7 @@ static GLenum map_blend(enum ra_blend blend)
 static void update_uniform(struct ra *ra, struct ra_renderpass *pass,
                            struct ra_renderpass_input_val *val)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
     struct ra_renderpass_gl *pass_gl = pass->priv;
 
     struct ra_renderpass_input *input = &pass->params.inputs[val->index];
@@ -744,8 +898,6 @@ static void update_uniform(struct ra *ra, struct ra_renderpass *pass,
         struct ra_tex *tex = *(struct ra_tex **)val->data;
         struct ra_tex_gl *tex_gl = tex->priv;
         assert(tex->params.render_src);
-        if (pass_gl->first_run)
-            gl->Uniform1i(loc, input->binding);
         if (input->type == RA_VARTYPE_TEX) {
             gl->ActiveTexture(GL_TEXTURE0 + input->binding);
             gl->BindTexture(tex_gl->target, tex_gl->texture);
@@ -755,9 +907,11 @@ static void update_uniform(struct ra *ra, struct ra_renderpass *pass,
         }
         break;
     }
-    case RA_VARTYPE_SSBO: {
-        gl->BindBufferBase(GL_SHADER_STORAGE_BUFFER, input->binding,
-                           *(int *)val->data);
+    case RA_VARTYPE_BUF_RW: {
+        struct ra_buf *buf = *(struct ra_buf **)val->data;
+        struct ra_buf_gl *buf_gl = buf->priv;
+        gl->BindBufferBase(GL_SHADER_STORAGE_BUFFER, input->binding, buf_gl->buffer);
+        gl->MemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         break;
     }
     default:
@@ -768,8 +922,7 @@ static void update_uniform(struct ra *ra, struct ra_renderpass *pass,
 static void disable_binding(struct ra *ra, struct ra_renderpass *pass,
                            struct ra_renderpass_input_val *val)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
 
     struct ra_renderpass_input *input = &pass->params.inputs[val->index];
 
@@ -788,18 +941,16 @@ static void disable_binding(struct ra *ra, struct ra_renderpass *pass,
         }
         break;
     }
-    case RA_VARTYPE_SSBO: {
+    case RA_VARTYPE_BUF_RW:
         gl->BindBufferBase(GL_SHADER_STORAGE_BUFFER, input->binding, 0);
         break;
-    }
     }
 }
 
 static void gl_renderpass_run(struct ra *ra,
                               const struct ra_renderpass_run_params *params)
 {
-    struct ra_gl *p = ra->priv;
-    GL *gl = p->gl;
+    GL *gl = ra_gl_get(ra);
     struct ra_renderpass *pass = params->pass;
     struct ra_renderpass_gl *pass_gl = pass->priv;
 
@@ -851,8 +1002,98 @@ static void gl_renderpass_run(struct ra *ra,
     gl->ActiveTexture(GL_TEXTURE0);
 
     gl->UseProgram(0);
+}
 
-    pass_gl->first_run = false;
+// Timers in GL use query objects, and are asynchronous. So pool a few of
+// these together. GL_QUERY_OBJECT_NUM should be large enough to avoid this
+// ever blocking. We can afford to throw query objects around, there's no
+// practical limit on them and their overhead is small.
+
+#define GL_QUERY_OBJECT_NUM 8
+
+struct gl_timer {
+    GLuint query[GL_QUERY_OBJECT_NUM];
+    int idx;
+    uint64_t result;
+    bool active;
+};
+
+static ra_timer *gl_timer_create(struct ra *ra)
+{
+    GL *gl = ra_gl_get(ra);
+
+    if (!gl->GenQueries)
+        return NULL;
+
+    struct gl_timer *timer = talloc_zero(NULL, struct gl_timer);
+    gl->GenQueries(GL_QUERY_OBJECT_NUM, timer->query);
+
+    return (ra_timer *)timer;
+}
+
+static void gl_timer_destroy(struct ra *ra, ra_timer *ratimer)
+{
+    if (!ratimer)
+        return;
+
+    GL *gl = ra_gl_get(ra);
+    struct gl_timer *timer = ratimer;
+
+    gl->DeleteQueries(GL_QUERY_OBJECT_NUM, timer->query);
+    talloc_free(timer);
+}
+
+static void gl_timer_start(struct ra *ra, ra_timer *ratimer)
+{
+    struct ra_gl *p = ra->priv;
+    GL *gl = p->gl;
+    struct gl_timer *timer = ratimer;
+
+    // GL_TIME_ELAPSED queries are not re-entrant, so just do nothing instead
+    // of crashing. Work-around for shitty GL limitations
+    if (p->timer_active)
+        return;
+
+    // If this query object already contains a result, we need to retrieve it
+    timer->result = 0;
+    if (gl->IsQuery(timer->query[timer->idx])) {
+        gl->GetQueryObjectui64v(timer->query[timer->idx], GL_QUERY_RESULT,
+                                &timer->result);
+    }
+
+    gl->BeginQuery(GL_TIME_ELAPSED, timer->query[timer->idx++]);
+    timer->idx %= GL_QUERY_OBJECT_NUM;
+
+    p->timer_active = timer->active = true;
+}
+
+static uint64_t gl_timer_stop(struct ra *ra, ra_timer *ratimer)
+{
+    struct ra_gl *p = ra->priv;
+    GL *gl = p->gl;
+    struct gl_timer *timer = ratimer;
+
+    if (!timer->active)
+        return 0;
+
+    gl->EndQuery(GL_TIME_ELAPSED);
+    p->timer_active = timer->active = false;
+
+    return timer->result;
+}
+
+static void gl_flush(struct ra *ra)
+{
+    GL *gl = ra_gl_get(ra);
+    gl->Flush();
+}
+
+static void gl_debug_marker(struct ra *ra, const char *msg)
+{
+    struct ra_gl *p = ra->priv;
+
+    if (p->debug_enable)
+        gl_check_error(p->gl, ra->log, msg);
 }
 
 static struct ra_fns ra_fns_gl = {
@@ -860,12 +1101,19 @@ static struct ra_fns ra_fns_gl = {
     .tex_create             = gl_tex_create,
     .tex_destroy            = gl_tex_destroy,
     .tex_upload             = gl_tex_upload,
-    .create_mapped_buffer   = gl_create_mapped_buffer,
-    .destroy_mapped_buffer  = gl_destroy_mapped_buffer,
-    .poll_mapped_buffer     = gl_poll_mapped_buffer,
+    .buf_create             = gl_buf_create,
+    .buf_destroy            = gl_buf_destroy,
+    .buf_update             = gl_buf_update,
+    .buf_poll               = gl_buf_poll,
     .clear                  = gl_clear,
     .blit                   = gl_blit,
     .renderpass_create      = gl_renderpass_create,
     .renderpass_destroy     = gl_renderpass_destroy,
     .renderpass_run         = gl_renderpass_run,
+    .timer_create           = gl_timer_create,
+    .timer_destroy          = gl_timer_destroy,
+    .timer_start            = gl_timer_start,
+    .timer_stop             = gl_timer_stop,
+    .flush                  = gl_flush,
+    .debug_marker           = gl_debug_marker,
 };

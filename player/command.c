@@ -56,7 +56,7 @@
 #include "video/decode/vd.h"
 #include "video/out/vo.h"
 #include "video/csputils.h"
-#include "audio/audio_buffer.h"
+#include "audio/aframe.h"
 #include "audio/out/ao.h"
 #include "audio/filter/af.h"
 #include "video/decode/dec_video.h"
@@ -1805,9 +1805,6 @@ static int mp_property_volume(void *ctx, struct m_property *prop,
             .max = opts->softvol_max,
         };
         return M_PROPERTY_OK;
-    case M_PROPERTY_GET_NEUTRAL:
-        *(float *)arg = 100;
-        return M_PROPERTY_OK;
     case M_PROPERTY_PRINT:
         *(char **)arg = talloc_asprintf(NULL, "%i", (int)opts->softvol_volume);
         return M_PROPERTY_OK;
@@ -2019,17 +2016,20 @@ static int mp_property_audio_codec(void *ctx, struct m_property *prop,
     return m_property_strdup_ro(action, arg, c);
 }
 
-static int property_audiofmt(struct mp_audio a, int action, void *arg)
+static int property_audiofmt(struct mp_aframe *fmt, int action, void *arg)
 {
-    if (!mp_audio_config_valid(&a))
+    if (!fmt || !mp_aframe_config_is_valid(fmt))
         return M_PROPERTY_UNAVAILABLE;
 
+    struct mp_chmap chmap = {0};
+    mp_aframe_get_chmap(fmt, &chmap);
+
     struct m_sub_property props[] = {
-        {"samplerate",      SUB_PROP_INT(a.rate)},
-        {"channel-count",   SUB_PROP_INT(a.channels.num)},
-        {"channels",        SUB_PROP_STR(mp_chmap_to_str(&a.channels))},
-        {"hr-channels",     SUB_PROP_STR(mp_chmap_to_str_hr(&a.channels))},
-        {"format",          SUB_PROP_STR(af_fmt_to_str(a.format))},
+        {"samplerate",      SUB_PROP_INT(mp_aframe_get_rate(fmt))},
+        {"channel-count",   SUB_PROP_INT(chmap.num)},
+        {"channels",        SUB_PROP_STR(mp_chmap_to_str(&chmap))},
+        {"hr-channels",     SUB_PROP_STR(mp_chmap_to_str_hr(&chmap))},
+        {"format",          SUB_PROP_STR(af_fmt_to_str(mp_aframe_get_format(fmt)))},
         {0}
     };
 
@@ -2040,20 +2040,28 @@ static int mp_property_audio_params(void *ctx, struct m_property *prop,
                                     int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    struct mp_audio fmt = {0};
-    if (mpctx->ao_chain)
-        fmt = mpctx->ao_chain->input_format;
-    return property_audiofmt(fmt, action, arg);
+    return property_audiofmt(mpctx->ao_chain ? mpctx->ao_chain->input_format : NULL,
+                             action, arg);
 }
 
 static int mp_property_audio_out_params(void *ctx, struct m_property *prop,
                                         int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    struct mp_audio fmt = {0};
-    if (mpctx->ao)
-        ao_get_format(mpctx->ao, &fmt);
-    return property_audiofmt(fmt, action, arg);
+    struct mp_aframe *frame = NULL;
+    if (mpctx->ao) {
+        frame = mp_aframe_create();
+        int samplerate;
+        int format;
+        struct mp_chmap channels;
+        ao_get_format(mpctx->ao, &samplerate, &format, &channels);
+        mp_aframe_set_rate(frame, samplerate);
+        mp_aframe_set_format(frame, format);
+        mp_aframe_set_chmap(frame, &channels);
+    }
+    int r = property_audiofmt(frame, action, arg);
+    talloc_free(frame);
+    return r;
 }
 
 /// Balance (RW)
@@ -2470,29 +2478,6 @@ static int mp_property_hwdec_interop(void *ctx, struct m_property *prop,
     return m_property_strdup_ro(action, arg, name);
 }
 
-#if HAVE_GPL
-// Possibly GPL due to 7b25afd7423e9056782993cbd1b32ead64ac1462.
-static int mp_property_deinterlace(void *ctx, struct m_property *prop,
-                                   int action, void *arg)
-{
-    MPContext *mpctx = ctx;
-    if (!mpctx->vo_chain)
-        return mp_property_generic_option(mpctx, prop, action, arg);
-    switch (action) {
-    case M_PROPERTY_GET:
-        *(int *)arg = get_deinterlacing(mpctx) > 0;
-        return M_PROPERTY_OK;
-    case M_PROPERTY_GET_CONSTRICTED_TYPE:
-        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_FLAG};
-        return M_PROPERTY_OK;
-    case M_PROPERTY_SET:
-        set_deinterlacing(mpctx, *(int *)arg);
-        return M_PROPERTY_OK;
-    }
-    return mp_property_generic_option(mpctx, prop, action, arg);
-}
-#endif
-
 /// Helper to set vo flags.
 /** \ingroup PropertyImplHelper
  */
@@ -2601,35 +2586,6 @@ static int mp_property_frame_count(void *ctx, struct m_property *prop,
 
     return m_property_int_ro(action, arg, frames);
 }
-
-#if HAVE_GPL
-static int mp_property_video_color(void *ctx, struct m_property *prop,
-                                   int action, void *arg)
-{
-    const char *name = prop->priv ? prop->priv : prop->name;
-    MPContext *mpctx = ctx;
-    if (!mpctx->vo_chain)
-        return mp_property_generic_option(mpctx, prop, action, arg);
-
-    switch (action) {
-    case M_PROPERTY_SET: {
-        if (video_set_colors(mpctx->vo_chain, name, *(int *) arg) <= 0)
-            return M_PROPERTY_UNAVAILABLE;
-        break;
-    }
-    case M_PROPERTY_GET:
-        if (video_get_colors(mpctx->vo_chain, name, (int *)arg) <= 0)
-            return M_PROPERTY_UNAVAILABLE;
-        // Write new value to option variable
-        mp_property_generic_option(mpctx, prop, M_PROPERTY_SET, arg);
-        return M_PROPERTY_OK;
-    case M_PROPERTY_GET_NEUTRAL:
-        *(int *)arg = 0;
-        return M_PROPERTY_OK;
-    }
-    return mp_property_generic_option(mpctx, prop, action, arg);
-}
-#endif
 
 /// Video codec tag (RO)
 static int mp_property_video_format(void *ctx, struct m_property *prop,
@@ -4023,22 +3979,10 @@ static const struct m_property mp_properties_base[] = {
 
     // Video
     {"fullscreen", mp_property_fullscreen},
-#if HAVE_GPL
-    {"deinterlace", mp_property_deinterlace},
-#endif
     {"taskbar-progress", mp_property_taskbar_progress},
     {"ontop", mp_property_ontop},
     {"border", mp_property_border},
     {"on-all-workspaces", mp_property_all_workspaces},
-#if HAVE_GPL
-    {"gamma", mp_property_video_color},
-    {"brightness", mp_property_video_color},
-    {"contrast", mp_property_video_color},
-    {"saturation", mp_property_video_color},
-    {"hue", mp_property_video_color},
-    {"video-output-levels", mp_property_video_color,
-     .priv = (void *)"output-levels"},
-#endif
     {"video-out-params", mp_property_vo_imgparams},
     {"video-dec-params", mp_property_dec_imgparams},
     {"video-params", mp_property_vd_imgparams},
@@ -4354,6 +4298,8 @@ static const struct property_osd_display {
     int osd_progbar;
     // Needs special ways to display the new value (seeks are delayed)
     int seek_msg, seek_bar;
+    // Show a marker thing on OSD bar. Ignored if osd_progbar==0.
+    float marker;
     // Free-form message (if NULL, osd_name or the property name is used)
     const char *msg;
 } property_osd_display[] = {
@@ -4368,10 +4314,10 @@ static const struct property_osd_display {
     // audio
     { "volume", "Volume",
       .msg = "Volume: ${?volume:${volume}% ${?mute==yes:(Muted)}}${!volume:${volume}}",
-      .osd_progbar = OSD_VOLUME },
+      .osd_progbar = OSD_VOLUME, .marker = 100 },
     { "ao-volume", "AO Volume",
       .msg = "AO Volume: ${?ao-volume:${ao-volume}% ${?ao-mute==yes:(Muted)}}${!ao-volume:${ao-volume}}",
-      .osd_progbar = OSD_VOLUME },
+      .osd_progbar = OSD_VOLUME, .marker = 100 },
     { "mute", "Mute" },
     { "ao-mute", "AO Mute" },
     { "audio-delay", "A-V delay" },
@@ -4469,13 +4415,15 @@ static void show_property_osd(MPContext *mpctx, const char *name, int osd_mode)
     if ((osd_mode & MP_ON_OSD_BAR) && (prop.flags & CONF_RANGE) == CONF_RANGE) {
         if (prop.type == CONF_TYPE_INT) {
             int n = prop.min;
-            mp_property_do(name, M_PROPERTY_GET_NEUTRAL, &n, mpctx);
+            if (disp.osd_progbar)
+                n = disp.marker;
             int i;
             if (mp_property_do(name, M_PROPERTY_GET, &i, mpctx) > 0)
                 set_osd_bar(mpctx, disp.osd_progbar, prop.min, prop.max, n, i);
         } else if (prop.type == CONF_TYPE_FLOAT) {
             float n = prop.min;
-            mp_property_do(name, M_PROPERTY_GET_NEUTRAL, &n, mpctx);
+            if (disp.osd_progbar)
+                n = disp.marker;
             float f;
             if (mp_property_do(name, M_PROPERTY_GET, &f, mpctx) > 0)
                 set_osd_bar(mpctx, disp.osd_progbar, prop.min, prop.max, n, f);
@@ -5843,13 +5791,8 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags)
     if (flags & UPDATE_TERM)
         mp_update_logging(mpctx, false);
 
-    if (mpctx->video_out) {
-        if (flags & UPDATE_VIDEOPOS)
-            vo_control(mpctx->video_out, VOCTRL_SET_PANSCAN, NULL);
-
-        if (flags & UPDATE_RENDERER)
-            vo_control(mpctx->video_out, VOCTRL_UPDATE_RENDER_OPTS, NULL);
-    }
+    if (flags & UPDATE_DEINT)
+        recreate_auto_filters(mpctx);
 
     if (flags & UPDATE_OSD) {
         osd_changed(mpctx->osd);
@@ -5901,6 +5844,9 @@ void mp_option_change_callback(void *ctx, struct m_config_option *co, int flags)
 
     if (flags & UPDATE_VOL)
         audio_update_volume(mpctx);
+
+    if (flags & UPDATE_LAVFI_COMPLEX)
+        update_lavfi_complex(mpctx);
 }
 
 void mp_notify_property(struct MPContext *mpctx, const char *property)

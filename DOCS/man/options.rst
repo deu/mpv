@@ -88,6 +88,18 @@ Track Selection
     to ``auto`` (the default), mpv will choose the first edition declared as a
     default, or if there is no default, the first edition defined.
 
+``--track-auto-selection=<yes|no>``
+    Enable the default track auto-selection (default: yes). Enabling this will
+    make the player select streams according to ``--aid``, ``--alang``, and
+    others. If it is disabled, no tracks are selected. In addition, the player
+    will not exit if no tracks are selected, and wait instead (this wait mode
+    is similar to pausing, but the pause option is not set).
+
+    This is useful with ``--lavfi-complex``: you can start playback in this
+    mode, and then set select tracks at runtime by setting the filter graph.
+    Note that if ``--lavfi-complex`` is set before playback is started, the
+    referenced tracks are always selected.
+
 
 Playback Control
 ----------------
@@ -299,11 +311,7 @@ Playback Control
     time trying to loop a file that doesn't exist. But it might be useful for
     playing webradios under very bad network conditions.
 
-``--loop``
-    Currently a deprecated alias to ``--loop-playlist``. After a deprecation
-    period, it will be undeprecated, but changed to alias ``--loop-file``.
-
-``--loop-file=<N|inf|no>``
+``--loop-file=<N|inf|no>``, ``--loop=<N|inf|no>``
     Loop a single file N times. ``inf`` means forever, ``no`` means normal
     playback. For compatibility, ``--loop-file`` and ``--loop-file=yes`` are
     also accepted, and are the same as ``--loop-file=inf``.
@@ -312,6 +320,8 @@ Playback Control
     just the file itself. If the playlist contains only a single file, the
     difference between the two option is that this option performs a seek on
     loop, instead of reloading the file.
+
+    ``--loop`` is an alias for this option.
 
 ``--ab-loop-a=<time>``, ``--ab-loop-b=<time>``
     Set loop points. If playback passes the ``b`` timestamp, it will seek to
@@ -968,8 +978,8 @@ Video
 
         Works in ``--no-correct-pts`` mode only.
 
-``--deinterlace=<yes|no|auto>``
-    Enable or disable interlacing (default: auto, which usually means no).
+``--deinterlace=<yes|no>``
+    Enable or disable interlacing (default: no).
     Interlaced video shows ugly comb-like artifacts, which are visible on
     fast movement. Enabling this typically inserts the yadif video filter in
     order to deinterlace the video, or lets the video output apply deinterlacing
@@ -978,10 +988,11 @@ Video
     This behaves exactly like the ``deinterlace`` input property (usually
     mapped to ``d``).
 
-    ``auto`` is a technicality. Strictly speaking, the default for this option
-    is deinterlacing disabled, but the ``auto`` case is needed if ``yadif`` was
-    added to the filter chain manually with ``--vf``. Then the core shouldn't
-    disable deinterlacing just because the ``--deinterlace`` was not set.
+    Keep in mind that this **will** conflict with manually inserted
+    deinterlacing filters, unless you take care. (Since mpv 0.27.0, even the
+    hardware deinterlace filters will conflict. Also since that version,
+    ``--deinterlace=auto`` was removed, which used to mean that the default
+    interlacing option of possibly inserted video filters was used.)
 
 ``--frames=<number>``
     Play/convert only first ``<number>`` video frames, then quit.
@@ -1489,7 +1500,7 @@ Audio
     :no:    Don't automatically load external audio files.
     :exact: Load the media filename with audio file extension (default).
     :fuzzy: Load all audio files containing media filename.
-    :all:   Load all audio files in the current and ``--audio-file-path``
+    :all:   Load all audio files in the current and ``--audio-file-paths``
             directories.
 
 ``--audio-file-paths=<path1:path2:...>``
@@ -1844,7 +1855,7 @@ Subtitles
     :no:    Don't automatically load external subtitle files.
     :exact: Load the media filename with subtitle file extension (default).
     :fuzzy: Load all subs containing media filename.
-    :all:   Load all subs in the current and ``--sub-file-path`` directories.
+    :all:   Load all subs in the current and ``--sub-file-paths`` directories.
 
 ``--sub-codepage=<codepage>``
     You can use this option to specify the subtitle codepage. uchardet will be
@@ -2488,6 +2499,10 @@ Window
     On regular HiDPI resolutions the window opens with double the size but appears
     as having the same size as on none-HiDPI resolutions. This is the default OS X
     behavior.
+
+``--native-fs``, ``--no-native-fs``
+    (OS X only)
+    Uses the native fullscreen mechanism of the OS (default: yes).
 
 ``--monitorpixelaspect=<ratio>``
     Set the aspect of a single pixel of your monitor or TV screen (default:
@@ -5231,11 +5246,14 @@ Miscellaneous
     video or audio outputs are not possible, but you can use filters to merge
     them into one.
 
-    The complex filter cannot be changed yet during playback. It's also not
-    possible to change the tracks connected to the filter at runtime. Other
-    tracks, as long as they're not connected to the filter, and the
+    It's not possible to change the tracks connected to the filter at runtime,
+    unless you explicitly change the ``lavfi-complex`` property and set new
+    track assignments. When the graph is changed, the track selection is changed
+    according to the used labels as well.
+
+    Other tracks, as long as they're not connected to the filter, and the
     corresponding output is not connected to the filter, can still be freely
-    changed.
+    changed with the normal methods.
 
     Note that the normal filter chains (``--af``, ``--vf``) are applied between
     the complex graphs (e.g. ``ao`` label) and the actual output.

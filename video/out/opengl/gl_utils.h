@@ -34,10 +34,6 @@ void gl_upload_tex(GL *gl, GLenum target, GLenum format, GLenum type,
 
 mp_image_t *gl_read_fbo_contents(GL *gl, int fbo, int w, int h);
 
-// print a multi line string with line numbers (e.g. for shader sources)
-// log, lev: module and log level, as in mp_msg()
-void mp_log_source(struct mp_log *log, int lev, const char *src);
-
 struct gl_vao {
     GL *gl;
     GLuint vao;     // the VAO object, or 0 if unsupported by driver
@@ -55,30 +51,6 @@ void gl_vao_draw_data(struct gl_vao *vao, GLenum prim, void *ptr, size_t num);
 
 void gl_set_debug_logger(GL *gl, struct mp_log *log);
 
-struct gl_timer;
-
-struct gl_timer *gl_timer_create(GL *gl);
-void gl_timer_free(struct gl_timer *timer);
-void gl_timer_start(struct gl_timer *timer);
-void gl_timer_stop(GL *gl);
-struct mp_pass_perf gl_timer_measure(struct gl_timer *timer);
-
-#define NUM_PBO_BUFFERS 3
-
-struct gl_pbo_upload {
-    GL *gl;
-    int index;
-    GLuint buffer;
-    size_t buffer_size;
-};
-
-void gl_pbo_upload_tex(struct gl_pbo_upload *pbo, GL *gl, bool use_pbo,
-                       GLenum target, GLenum format,  GLenum type,
-                       int tex_w, int tex_h, const void *dataptr, int stride,
-                       int x, int y, int w, int h);
-void gl_pbo_upload_uninit(struct gl_pbo_upload *pbo);
-
-int gl_determine_16bit_tex_depth(GL *gl);
 int gl_get_fb_depth(GL *gl, int fbo);
 
 #endif

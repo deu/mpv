@@ -62,18 +62,55 @@ static inline bool gl_transform_eq(struct gl_transform a, struct gl_transform b)
 
 void gl_transform_trans(struct gl_transform t, struct gl_transform *x);
 
+struct fbodst {
+    struct ra_tex *tex;
+    bool flip; // mirror vertically
+};
+
+void gl_transform_ortho_fbodst(struct gl_transform *t, struct fbodst fbo);
+
+// A pool of buffers, which can grow as needed
+struct ra_buf_pool {
+    struct ra_buf_params current_params;
+    struct ra_buf **buffers;
+    int num_buffers;
+    int index;
+};
+
+void ra_buf_pool_uninit(struct ra *ra, struct ra_buf_pool *pool);
+
+// Note: params->initial_data is *not* supported
+struct ra_buf *ra_buf_pool_get(struct ra *ra, struct ra_buf_pool *pool,
+                               const struct ra_buf_params *params);
+
+// Helper that wraps ra_tex_upload using texture upload buffers to ensure that
+// params->buf is always set. This is intended for RA-internal usage.
+bool ra_tex_upload_pbo(struct ra *ra, struct ra_buf_pool *pbo,
+                       const struct ra_tex_upload_params *params);
+
 struct fbotex {
     struct ra *ra;
     struct ra_tex *tex;
-    int rw, rh; // real (texture) size, same as tex->params.w/h
     int lw, lh; // logical (configured) size, <= than texture size
+    struct fbodst fbo;
 };
 
-bool fbotex_init(struct fbotex *fbo, struct ra *ra, struct mp_log *log,
-                 int w, int h, const struct ra_format *fmt);
 void fbotex_uninit(struct fbotex *fbo);
 bool fbotex_change(struct fbotex *fbo, struct ra *ra, struct mp_log *log,
                    int w, int h, const struct ra_format *fmt, int flags);
 #define FBOTEX_FUZZY_W 1
 #define FBOTEX_FUZZY_H 2
 #define FBOTEX_FUZZY (FBOTEX_FUZZY_W | FBOTEX_FUZZY_H)
+
+// A wrapper around ra_timer that does result pooling, averaging etc.
+struct timer_pool;
+
+struct timer_pool *timer_pool_create(struct ra *ra);
+void timer_pool_destroy(struct timer_pool *pool);
+void timer_pool_start(struct timer_pool *pool);
+void timer_pool_stop(struct timer_pool *pool);
+struct mp_pass_perf timer_pool_measure(struct timer_pool *pool);
+
+// print a multi line string with line numbers (e.g. for shader sources)
+// log, lev: module and log level, as in mp_msg()
+void mp_log_source(struct mp_log *log, int lev, const char *src);

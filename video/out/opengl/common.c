@@ -311,6 +311,13 @@ static const struct gl_functions gl_functions[] = {
     },
     {
         .ver_core = 430,
+        .functions = (const struct gl_function[]) {
+            DEF_FN(InvalidateTexImage),
+            {0}
+        },
+    },
+    {
+        .ver_core = 430,
         .ver_es_core = 300,
         .functions = (const struct gl_function[]) {
             DEF_FN(InvalidateFramebuffer),
@@ -625,10 +632,8 @@ void mpgl_load_functions2(GL *gl, void *(*get_fn)(void *ctx, const char *n),
     }
 
     // GL_ARB_compute_shader & GL_ARB_shader_image_load_store
-    if (gl->DispatchCompute && gl->BindImageTexture) {
+    if (gl->DispatchCompute && gl->BindImageTexture)
         gl->mpgl_caps |= MPGL_CAP_COMPUTE_SHADER;
-        gl->GetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &gl->max_shmem);
-    }
 
     // Provided for simpler handling if no framebuffer support is available.
     if (!gl->BindFramebuffer)
