@@ -804,19 +804,20 @@ static void init_video(struct gl_video *p)
     p->use_integer_conversion = false;
 
     if (p->hwdec && ra_hwdec_test_format(p->hwdec, p->image_params.imgfmt)) {
-        p->hwdec_mapper = ra_hwdec_mapper_create(p->hwdec, &p->image_params);
-        if (!p->hwdec_mapper)
-            MP_ERR(p, "Initializing texture for hardware decoding failed.\n");
+        if (p->hwdec->driver->overlay_frame) {
+            MP_WARN(p, "Using HW-overlay mode. No GL filtering is performed "
+                       "on the video!\n");
+        } else {
+            p->hwdec_mapper = ra_hwdec_mapper_create(p->hwdec, &p->image_params);
+            if (!p->hwdec_mapper)
+                MP_ERR(p, "Initializing texture for hardware decoding failed.\n");
+        }
         if (p->hwdec_mapper)
             p->image_params = p->hwdec_mapper->dst_params;
         const char **exts = p->hwdec->glsl_extensions;
         for (int n = 0; exts && exts[n]; n++)
             gl_sc_enable_extension(p->sc, (char *)exts[n]);
         p->hwdec_active = true;
-        if (p->hwdec->driver->overlay_frame) {
-            MP_WARN(p, "Using HW-overlay mode. No GL filtering is performed "
-                       "on the video!\n");
-        }
     }
 
     p->ra_format = (struct ra_imgfmt_desc){0};
@@ -3133,6 +3134,11 @@ void gl_video_resize(struct gl_video *p,
                      struct mp_rect *src, struct mp_rect *dst,
                      struct mp_osd_res *osd)
 {
+    if (mp_rect_equals(&p->src_rect, src) &&
+        mp_rect_equals(&p->dst_rect, dst) &&
+        osd_res_equals(p->osd_rect, *osd))
+        return;
+
     p->src_rect = *src;
     p->dst_rect = *dst;
     p->osd_rect = *osd;
