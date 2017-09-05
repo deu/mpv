@@ -239,13 +239,13 @@
 
     if (fabs([event deltaY]) >= fabs([event deltaX])) {
         delta = [event deltaY] * 0.1;
-        cmd   = delta > 0 ? MP_AXIS_UP : MP_AXIS_DOWN;
+        cmd   = delta > 0 ? MP_WHEEL_UP : MP_WHEEL_DOWN;
     } else {
         delta = [event deltaX] * 0.1;
-        cmd   = delta > 0 ? MP_AXIS_RIGHT : MP_AXIS_LEFT;
+        cmd   = delta > 0 ? MP_WHEEL_RIGHT : MP_WHEEL_LEFT;
     }
 
-    [self.adapter putAxis:cmd delta:fabs(delta)];
+    [self.adapter putWheel:cmd delta:fabs(delta)];
 }
 
 - (void)scrollWheel:(NSEvent *)event
@@ -266,9 +266,9 @@
         int mpkey;
 
         if (fabs(deltaY) >= fabs(deltaX)) {
-            mpkey = deltaY > 0 ? MP_MOUSE_BTN3 : MP_MOUSE_BTN4;
+            mpkey = deltaY > 0 ? MP_WHEEL_UP : MP_WHEEL_DOWN;
         } else {
-            mpkey = deltaX > 0 ? MP_MOUSE_BTN5 : MP_MOUSE_BTN6;
+            mpkey = deltaX > 0 ? MP_WHEEL_LEFT : MP_WHEEL_RIGHT;
         }
 
         [self.adapter putKey:mpkey withModifiers:modifiers];
@@ -291,7 +291,7 @@
 - (void)putMouseEvent:(NSEvent *)event withState:(int)state
 {
     self.hasMouseDown = (state == MP_KEY_STATE_DOWN);
-    int mpkey = (MP_MOUSE_BTN0 + [self mpvButtonNumber:event]);
+    int mpkey = [self mpvButtonNumber:event];
     [self.adapter putKey:(mpkey | state) withModifiers:[event modifierFlags]];
 }
 
@@ -326,9 +326,12 @@
 {
     int buttonNumber = [event buttonNumber];
     switch (buttonNumber) {
-        case 1:  return 2;
-        case 2:  return 1;
-        default: return buttonNumber;
+        case 0:  return MP_MBTN_LEFT;
+        case 1:  return MP_MBTN_RIGHT;
+        case 2:  return MP_MBTN_MID;
+        case 3:  return MP_MBTN_BACK;
+        case 4:  return MP_MBTN_FORWARD;
+        default: return MP_MBTN9 - 5 + buttonNumber;
     }
 }
 @end

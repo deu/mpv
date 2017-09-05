@@ -41,27 +41,16 @@ static void pass_sample_separated_get_weights(struct gl_shader_cache *sc,
                                               struct scaler *scaler)
 {
     gl_sc_uniform_texture(sc, "lut", scaler->lut);
-    // Define a new variable to cache the corrected fcoord.
-    GLSLF("float fcoord_lut = LUT_POS(fcoord, %d.0);\n", scaler->lut_size);
+    GLSLF("float ypos = LUT_POS(fcoord, %d.0);\n", scaler->lut_size);
 
     int N = scaler->kernel->size;
-    if (N == 2) {
-        GLSL(vec2 c1 = texture(lut, vec2(0.5, fcoord_lut)).rg;)
-        GLSL(float weights[2] = float[](c1.r, c1.g);)
-    } else if (N == 6) {
-        GLSL(vec4 c1 = texture(lut, vec2(0.25, fcoord_lut));)
-        GLSL(vec4 c2 = texture(lut, vec2(0.75, fcoord_lut));)
-        GLSL(float weights[6] = float[](c1.r, c1.g, c1.b, c2.r, c2.g, c2.b);)
-    } else {
-        GLSLF("float weights[%d];\n", N);
-        for (int n = 0; n < N / 4; n++) {
-            GLSLF("c = texture(lut, vec2(1.0 / %d.0 + %d.0 / %d.0, fcoord_lut));\n",
-                    N / 2, n, N / 4);
-            GLSLF("weights[%d] = c.r;\n", n * 4 + 0);
-            GLSLF("weights[%d] = c.g;\n", n * 4 + 1);
-            GLSLF("weights[%d] = c.b;\n", n * 4 + 2);
-            GLSLF("weights[%d] = c.a;\n", n * 4 + 3);
-        }
+    int width = (N + 3) / 4; // round up
+
+    GLSLF("float weights[%d];\n", N);
+    for (int i = 0; i < N; i++) {
+        if (i % 4 == 0)
+            GLSLF("c = texture(lut, vec2(%f, ypos));\n", (i / 4 + 0.5) / width);
+        GLSLF("weights[%d] = c[%d];\n", i, i % 4);
     }
 }
 
@@ -133,7 +122,7 @@ static void polar_sample(struct gl_shader_cache *sc, struct scaler *scaler,
 
     // get the weight for this pixel
     if (scaler->lut->params.dimensions == 1) {
-        GLSLF("w = texture1D(lut, LUT_POS(d * 1.0/%f, %d.0)).r;\n",
+        GLSLF("w = tex1D(lut, LUT_POS(d * 1.0/%f, %d.0)).r;\n",
               radius, scaler->lut_size);
     } else {
         GLSLF("w = texture(lut, vec2(0.5, LUT_POS(d * 1.0/%f, %d.0))).r;\n",
@@ -808,7 +797,7 @@ const struct m_sub_options deband_conf = {
 
 // Stochastically sample a debanded result from a hooked texture.
 void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
-                        AVLFG *lfg)
+                        AVLFG *lfg, enum mp_csp_trc trc)
 {
     // Initialize the PRNG
     GLSLF("{\n");
@@ -850,7 +839,10 @@ void pass_sample_deband(struct gl_shader_cache *sc, struct deband_opts *opts,
     GLSL(noise.x = rand(h); h = permute(h);)
     GLSL(noise.y = rand(h); h = permute(h);)
     GLSL(noise.z = rand(h); h = permute(h);)
-    GLSLF("color.xyz += %f * (noise - vec3(0.5));\n", opts->grain/8192.0);
+
+    // Noise is scaled to the signal level to prevent extreme noise for HDR
+    float gain = opts->grain/8192.0 / mp_trc_nom_peak(trc);
+    GLSLF("color.xyz += %f * (noise - vec3(0.5));\n", gain);
     GLSLF("}\n");
 }
 

@@ -1004,7 +1004,7 @@ layouts["box"] = function ()
     lo.style = osc_styles.smallButtonsR
 
     lo = add_layout("volume")
-    lo.geometry = 
+    lo.geometry =
         {x = posX+pos_offsetX - (25 * 2) - osc_geo.p,
          y = bigbtnrowY, an = 4, w = 25, h = 25}
     lo.style = osc_styles.smallButtonsR
@@ -1554,7 +1554,7 @@ function osc_init()
         return not (title == "") and title or "mpv"
     end
 
-    ne.eventresponder["mouse_btn0_up"] = function ()
+    ne.eventresponder["mbtn_left_up"] = function ()
         local title = mp.get_property_osd("media-title")
         if (have_pl) then
             title = string.format("[%d/%d] %s", countone(pl_pos - 1),
@@ -1563,7 +1563,7 @@ function osc_init()
         show_message(title)
     end
 
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () show_message(mp.get_property_osd("filename")) end
 
     -- playlist buttons
@@ -1573,14 +1573,14 @@ function osc_init()
 
     ne.content = "\238\132\144"
     ne.enabled = (pl_pos > 1) or (loop ~= "no")
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function ()
             mp.commandv("playlist-prev", "weak")
             show_message(get_playlist(), 3)
         end
-    ne.eventresponder["shift+mouse_btn0_up"] =
+    ne.eventresponder["shift+mbtn_left_up"] =
         function () show_message(get_playlist(), 3) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () show_message(get_playlist(), 3) end
 
     --next
@@ -1588,14 +1588,14 @@ function osc_init()
 
     ne.content = "\238\132\129"
     ne.enabled = (have_pl and (pl_pos < pl_count)) or (loop ~= "no")
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function ()
             mp.commandv("playlist-next", "weak")
             show_message(get_playlist(), 3)
         end
-    ne.eventresponder["shift+mouse_btn0_up"] =
+    ne.eventresponder["shift+mbtn_left_up"] =
         function () show_message(get_playlist(), 3) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () show_message(get_playlist(), 3) end
 
 
@@ -1611,7 +1611,7 @@ function osc_init()
             return ("\238\128\130")
         end
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("cycle", "pause") end
 
     --skipback
@@ -1619,11 +1619,11 @@ function osc_init()
 
     ne.softrepeat = true
     ne.content = "\238\128\132"
-    ne.eventresponder["mouse_btn0_down"] =
+    ne.eventresponder["mbtn_left_down"] =
         function () mp.commandv("seek", -5, "relative", "keyframes") end
-    ne.eventresponder["shift+mouse_btn0_down"] =
+    ne.eventresponder["shift+mbtn_left_down"] =
         function () mp.commandv("frame-back-step") end
-    ne.eventresponder["mouse_btn2_down"] =
+    ne.eventresponder["mbtn_right_down"] =
         function () mp.commandv("seek", -30, "relative", "keyframes") end
 
     --skipfrwd
@@ -1631,11 +1631,11 @@ function osc_init()
 
     ne.softrepeat = true
     ne.content = "\238\128\133"
-    ne.eventresponder["mouse_btn0_down"] =
+    ne.eventresponder["mbtn_left_down"] =
         function () mp.commandv("seek", 10, "relative", "keyframes") end
-    ne.eventresponder["shift+mouse_btn0_down"] =
+    ne.eventresponder["shift+mbtn_left_down"] =
         function () mp.commandv("frame-step") end
-    ne.eventresponder["mouse_btn2_down"] =
+    ne.eventresponder["mbtn_right_down"] =
         function () mp.commandv("seek", 60, "relative", "keyframes") end
 
     --ch_prev
@@ -1643,14 +1643,14 @@ function osc_init()
 
     ne.enabled = have_ch
     ne.content = "\238\132\132"
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function ()
             mp.commandv("add", "chapter", -1)
             show_message(get_chapterlist(), 3)
         end
-    ne.eventresponder["shift+mouse_btn0_up"] =
+    ne.eventresponder["shift+mbtn_left_up"] =
         function () show_message(get_chapterlist(), 3) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () show_message(get_chapterlist(), 3) end
 
     --ch_next
@@ -1658,14 +1658,14 @@ function osc_init()
 
     ne.enabled = have_ch
     ne.content = "\238\132\133"
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function ()
             mp.commandv("add", "chapter", 1)
             show_message(get_chapterlist(), 3)
         end
-    ne.eventresponder["shift+mouse_btn0_up"] =
+    ne.eventresponder["shift+mbtn_left_up"] =
         function () show_message(get_chapterlist(), 3) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () show_message(get_chapterlist(), 3) end
 
     --
@@ -1683,11 +1683,11 @@ function osc_init()
         return ("\238\132\134" .. osc_styles.smallButtonsLlabel
             .. " " .. aid .. "/" .. #tracks_osc.audio)
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () set_track("audio", 1) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () set_track("audio", -1) end
-    ne.eventresponder["shift+mouse_btn0_down"] =
+    ne.eventresponder["shift+mbtn_left_down"] =
         function () show_message(get_tracklist("audio"), 2) end
 
     --cy_sub
@@ -1702,11 +1702,11 @@ function osc_init()
         return ("\238\132\135" .. osc_styles.smallButtonsLlabel
             .. " " .. sid .. "/" .. #tracks_osc.sub)
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () set_track("sub", 1) end
-    ne.eventresponder["mouse_btn2_up"] =
+    ne.eventresponder["mbtn_right_up"] =
         function () set_track("sub", -1) end
-    ne.eventresponder["shift+mouse_btn0_down"] =
+    ne.eventresponder["shift+mbtn_left_down"] =
         function () show_message(get_tracklist("sub"), 2) end
 
     --tog_fs
@@ -1718,7 +1718,7 @@ function osc_init()
             return ("\238\132\136")
         end
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("cycle", "fullscreen") end
 
 
@@ -1764,7 +1764,7 @@ function osc_init()
             end
 
         end
-    ne.eventresponder["mouse_btn0_down"] = --exact seeks on single clicks
+    ne.eventresponder["mbtn_left_down"] = --exact seeks on single clicks
         function (element) mp.commandv("seek", get_slider_value(element),
             "absolute-percent", "exact") end
     ne.eventresponder["reset"] =
@@ -1781,7 +1781,7 @@ function osc_init()
             return (mp.get_property_osd("playback-time"))
         end
     end
-    ne.eventresponder["mouse_btn0_up"] = function ()
+    ne.eventresponder["mbtn_left_up"] = function ()
         state.tc_ms = not state.tc_ms
         request_init()
     end
@@ -1805,7 +1805,7 @@ function osc_init()
             end
         end
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () state.rightTC_trem = not state.rightTC_trem end
 
     -- cache
@@ -1852,12 +1852,12 @@ function osc_init()
             return volicon[math.min(4,math.ceil(volume / (100/3)))]
         end
     end
-    ne.eventresponder["mouse_btn0_up"] =
+    ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("cycle", "mute") end
 
-    ne.eventresponder["mouse_wheel_up_press"] =
+    ne.eventresponder["wheel_up_press"] =
         function () mp.commandv("osd-auto", "add", "volume", 5) end
-    ne.eventresponder["mouse_wheel_down_press"] =
+    ne.eventresponder["wheel_down_press"] =
         function () mp.commandv("osd-auto", "add", "volume", -5) end
 
 
@@ -2300,19 +2300,17 @@ do_enable_keybindings()
 
 --mouse input bindings
 mp.set_key_bindings({
-    {"mouse_btn0",              function(e) process_event("mouse_btn0", "up") end,
-                                function(e) process_event("mouse_btn0", "down")  end},
-    {"shift+mouse_btn0",        function(e) process_event("shift+mouse_btn0", "up") end,
-                                function(e) process_event("shift+mouse_btn0", "down")  end},
-    {"mouse_btn2",              function(e) process_event("mouse_btn2", "up") end,
-                                function(e) process_event("mouse_btn2", "down")  end},
-    {"mouse_btn3",              function(e) process_event("mouse_wheel_up", "press") end},
-    {"mouse_btn4",              function(e) process_event("mouse_wheel_down", "press") end},
-    {"axis_up",                 function(e) process_event("mouse_wheel_up", "press") end},
-    {"axis_down",               function(e) process_event("mouse_wheel_down", "press") end},
-    {"mouse_btn0_dbl",          "ignore"},
-    {"shift+mouse_btn0_dbl",    "ignore"},
-    {"mouse_btn2_dbl",          "ignore"},
+    {"mbtn_left",           function(e) process_event("mbtn_left", "up") end,
+                            function(e) process_event("mbtn_left", "down")  end},
+    {"shift+mbtn_left",     function(e) process_event("shift+mbtn_left", "up") end,
+                            function(e) process_event("shift+mbtn_left", "down")  end},
+    {"mbtn_right",          function(e) process_event("mbtn_right", "up") end,
+                            function(e) process_event("mbtn_right", "down")  end},
+    {"wheel_up",            function(e) process_event("wheel_up", "press") end},
+    {"wheel_down",          function(e) process_event("wheel_down", "press") end},
+    {"mbtn_left_dbl",       "ignore"},
+    {"shift+mbtn_left_dbl", "ignore"},
+    {"mbtn_right_dbl",      "ignore"},
 }, "input", "force")
 mp.enable_key_bindings("input")
 
