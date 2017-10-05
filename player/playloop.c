@@ -39,7 +39,6 @@
 #include "osdep/timer.h"
 
 #include "audio/decode/dec_audio.h"
-#include "audio/filter/af.h"
 #include "audio/out/ao.h"
 #include "demux/demux.h"
 #include "stream/stream.h"
@@ -685,21 +684,6 @@ int get_cache_buffering_percentage(struct MPContext *mpctx)
     return mpctx->demuxer ? mpctx->cache_buffer : -1;
 }
 
-static void handle_heartbeat_cmd(struct MPContext *mpctx)
-{
-#if !HAVE_UWP
-    struct MPOpts *opts = mpctx->opts;
-    if (opts->heartbeat_cmd && !mpctx->paused && mpctx->video_out) {
-        double now = mp_time_sec();
-        if (mpctx->next_heartbeat <= now) {
-            mpctx->next_heartbeat = now + opts->heartbeat_interval;
-            (void)system(opts->heartbeat_cmd);
-        }
-        mp_set_timeout(mpctx, mpctx->next_heartbeat - now);
-    }
-#endif
-}
-
 static void handle_cursor_autohide(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
@@ -1089,7 +1073,6 @@ void run_playloop(struct MPContext *mpctx)
 
     handle_cursor_autohide(mpctx);
     handle_vo_events(mpctx);
-    handle_heartbeat_cmd(mpctx);
     handle_command_updates(mpctx);
 
     if (mpctx->lavfi) {

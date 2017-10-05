@@ -50,6 +50,7 @@
 extern const struct vo_driver video_out_x11;
 extern const struct vo_driver video_out_vdpau;
 extern const struct vo_driver video_out_xv;
+extern const struct vo_driver video_out_gpu;
 extern const struct vo_driver video_out_opengl;
 extern const struct vo_driver video_out_opengl_cb;
 extern const struct vo_driver video_out_null;
@@ -60,7 +61,6 @@ extern const struct vo_driver video_out_drm;
 extern const struct vo_driver video_out_direct3d;
 extern const struct vo_driver video_out_sdl;
 extern const struct vo_driver video_out_vaapi;
-extern const struct vo_driver video_out_wayland;
 extern const struct vo_driver video_out_rpi;
 extern const struct vo_driver video_out_tct;
 
@@ -69,17 +69,12 @@ const struct vo_driver *const video_out_drivers[] =
 #if HAVE_RPI
     &video_out_rpi,
 #endif
-#if HAVE_GL
-    &video_out_opengl,
-#endif
+    &video_out_gpu,
 #if HAVE_VDPAU
     &video_out_vdpau,
 #endif
 #if HAVE_DIRECT3D
     &video_out_direct3d,
-#endif
-#if HAVE_WAYLAND
-    &video_out_wayland,
 #endif
 #if HAVE_XV
     &video_out_xv,
@@ -87,7 +82,7 @@ const struct vo_driver *const video_out_drivers[] =
 #if HAVE_SDL2
     &video_out_sdl,
 #endif
-#if HAVE_VAAPI_X11
+#if HAVE_VAAPI_X11 && HAVE_GPL
     &video_out_vaapi,
 #endif
 #if HAVE_X11
@@ -107,6 +102,7 @@ const struct vo_driver *const video_out_drivers[] =
     &video_out_lavc,
 #endif
 #if HAVE_GL
+    &video_out_opengl,
     &video_out_opengl_cb,
 #endif
     NULL

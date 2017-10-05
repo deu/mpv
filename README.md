@@ -42,7 +42,7 @@ Releases can be found on the [release list][releases].
 
 ## System requirements
 
-- A not too ancient Linux, or Windows Vista or later, or OSX 10.8 or later.
+- A not too ancient Linux, or Windows 7 or later, or OSX 10.8 or later.
 - A somewhat capable CPU. Hardware decoding might sometimes help if the CPU
   is too slow to decode video realtime, but must be explicitly enabled with
   the `--hwdec` option.
@@ -140,6 +140,7 @@ FFmpeg dependencies:
 - libx264/libmp3lame/libfdk-aac if you want to use encoding (have to be
   explicitly enabled when compiling FFmpeg)
 - Libav also works, but some features will not work. (See section below.)
+- FFmpeg/Libav git for Windows/D3D11 and Cuda decoding.
 
 Most of the above libraries are available in suitable versions on normal
 Linux distributions. However, FFmpeg is an exception (distro versions may be

@@ -143,19 +143,16 @@ struct voctrl_playback_state {
 };
 
 // VOCTRL_PERFORMANCE_DATA
-#define PERF_SAMPLE_COUNT 256u
+#define VO_PERF_SAMPLE_COUNT 256
 
 struct mp_pass_perf {
     // times are all in nanoseconds
     uint64_t last, avg, peak;
-    // this is a ring buffer, indices are relative to index and modulo
-    // PERF_SAMPLE_COUNT
-    uint64_t *samples;
-    int count;
-    int index;
+    uint64_t samples[VO_PERF_SAMPLE_COUNT];
+    uint64_t count;
 };
 
-#define VO_PASS_PERF_MAX 128
+#define VO_PASS_PERF_MAX 64
 
 struct mp_frame_perf {
     int count;
@@ -377,7 +374,7 @@ struct vo {
     struct vo_x11_state *x11;
     struct vo_w32_state *w32;
     struct vo_cocoa_state *cocoa;
-    struct vo_wayland_state *wayland;
+    struct vo_wayland_state *wl;
     struct mp_hwdec_devices *hwdec_devs;
     struct input_ctx *input_ctx;
     struct osd_state *osd;

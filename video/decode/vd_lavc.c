@@ -1,28 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * Almost LGPLv3+.
- *
- * The parts potentially making this file LGPL v3 (instead of v2.1 or later) are:
- * 376e3abf5c7d2 xvmc use get_format for IDCT/MC recognition
- * c73f0e18bd1d6 Return PIX_FMT_NONE if the video system refuses all other formats.
- * (iive agreed to LGPL v3+ only. Jeremy agreed to LGPL v2.1 or later.)
- * Once these changes are not relevant to for copyright anymore (e.g. because
- * they have been removed), and the core is LGPL, this file will change to
- * LGPLv2.1+.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdio.h>
@@ -145,7 +135,6 @@ extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2;
 extern const struct vd_lavc_hwdec mp_vd_lavc_dxva2_copy;
 extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va;
 extern const struct vd_lavc_hwdec mp_vd_lavc_d3d11va_copy;
-extern const struct vd_lavc_hwdec mp_vd_lavc_cuda_old;
 
 #if HAVE_RPI
 static const struct vd_lavc_hwdec mp_vd_lavc_rpi = {
@@ -168,15 +157,13 @@ static const struct vd_lavc_hwdec mp_vd_lavc_mediacodec = {
 };
 #endif
 
-#if NEW_CUDA_HWACCEL
+#if HAVE_CUDA_HWACCEL
 static const struct vd_lavc_hwdec mp_vd_lavc_cuda = {
     .type = HWDEC_CUDA,
     .image_format = IMGFMT_CUDA,
     .lavc_suffix = "_cuvid",
     .generic_hwaccel = true,
 };
-#endif
-#if HAVE_CUDA_HWACCEL
 static const struct vd_lavc_hwdec mp_vd_lavc_cuda_copy = {
     .type = HWDEC_CUDA_COPY,
     .lavc_suffix = "_cuvid",
@@ -261,10 +248,15 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
 #endif
 #if HAVE_VDPAU_HWACCEL
     &mp_vd_lavc_vdpau,
+    &mp_vd_lavc_vdpau_copy,
 #endif
 #if HAVE_VIDEOTOOLBOX_HWACCEL
     &mp_vd_lavc_videotoolbox,
     &mp_vd_lavc_videotoolbox_copy,
+#endif
+#if HAVE_VAAPI_HWACCEL
+    &mp_vd_lavc_vaapi,
+    &mp_vd_lavc_vaapi_copy,
 #endif
 #if HAVE_D3D_HWACCEL
     &mp_vd_lavc_d3d11va,
@@ -279,19 +271,8 @@ static const struct vd_lavc_hwdec *const hwdec_list[] = {
     &mp_vd_lavc_mediacodec,
 #endif
 #if HAVE_CUDA_HWACCEL
- #if NEW_CUDA_HWACCEL
     &mp_vd_lavc_cuda,
- #else
-    &mp_vd_lavc_cuda_old,
- #endif
     &mp_vd_lavc_cuda_copy,
-#endif
-#if HAVE_VDPAU_HWACCEL
-    &mp_vd_lavc_vdpau_copy,
-#endif
-#if HAVE_VAAPI_HWACCEL
-    &mp_vd_lavc_vaapi,
-    &mp_vd_lavc_vaapi_copy,
 #endif
     &mp_vd_lavc_crystalhd,
     NULL
@@ -604,7 +585,7 @@ static void init_avctx(struct dec_video *vd, const char *decoder,
             if (ctx->hwdec_dev->restore_device)
                 ctx->hwdec_dev->restore_device(ctx->hwdec_dev);
             if (!ctx->hwdec->set_hwframes) {
-#if HAVE_VDPAU_HWACCEL
+#if HAVE_VDPAU_HWACCEL || HAVE_CUDA_HWACCEL
                 avctx->hw_device_ctx = av_buffer_ref(ctx->hwdec_dev->av_device_ref);
 #else
                 goto error;
@@ -1097,12 +1078,7 @@ static void handle_err(struct dec_video *vd)
 
     if (ctx->hwdec) {
         ctx->hwdec_fail_count += 1;
-        // The FFmpeg VT hwaccel is buggy and can crash after 1 broken frame.
-        bool force = false;
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 82, 101)
-        force |= ctx->hwdec && ctx->hwdec->type == HWDEC_VIDEOTOOLBOX;
-#endif
-        if (ctx->hwdec_fail_count >= opts->software_fallback || force)
+        if (ctx->hwdec_fail_count >= opts->software_fallback)
             ctx->hwdec_failed = true;
     }
 }

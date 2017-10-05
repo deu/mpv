@@ -44,19 +44,20 @@
 #include "video/hwdec.h"
 #include "video/image_writer.h"
 #include "sub/osd.h"
-#include "audio/filter/af.h"
 #include "audio/decode/dec_audio.h"
 #include "player/core.h"
 #include "player/command.h"
 #include "stream/stream.h"
 
+#if HAVE_LIBAF
+#include "audio/filter/af.h"
+#endif
+
 #if HAVE_DRM
 #include "video/out/drm_common.h"
 #endif
 
-#if HAVE_GL
-#include "video/out/opengl/hwdec.h"
-#endif
+#include "video/out/gpu/hwdec.h"
 
 static void print_version(struct mp_log *log)
 {
@@ -87,6 +88,9 @@ extern const struct m_obj_list af_obj_list;
 extern const struct m_obj_list vo_obj_list;
 extern const struct m_obj_list ao_obj_list;
 
+extern const struct m_sub_options opengl_conf;
+extern const struct m_sub_options vulkan_conf;
+extern const struct m_sub_options spirv_conf;
 extern const struct m_sub_options angle_conf;
 extern const struct m_sub_options cocoa_conf;
 
@@ -177,11 +181,9 @@ static const m_option_t mp_vo_opt_list[] = {
                         0, drm_validate_connector_opt),
     OPT_INT("drm-mode", drm_mode_id, 0),
 #endif
-#if HAVE_GL
     OPT_STRING_VALIDATE("opengl-hwdec-interop", gl_hwdec_interop, 0,
                         ra_hwdec_validate_opt),
     OPT_REPLACED("hwdec-preload", "opengl-hwdec-interop"),
-#endif
     {0}
 };
 
@@ -419,8 +421,10 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- codec/vfilter options --------------------
 
+#if HAVE_LIBAF
     OPT_SETTINGSLIST("af-defaults", af_defs, 0, &af_obj_list, ),
     OPT_SETTINGSLIST("af", af_settings, 0, &af_obj_list, ),
+#endif
     OPT_SETTINGSLIST("vf-defaults", vf_defs, 0, &vf_obj_list, ),
     OPT_SETTINGSLIST("vf", vf_settings, 0, &vf_obj_list, ),
 
@@ -566,10 +570,6 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("cursor-autohide-fs-only", cursor_autohide_fs, 0),
     OPT_FLAG("stop-screensaver", stop_screensaver, UPDATE_SCREENSAVER),
 
-    OPT_STRING("heartbeat-cmd", heartbeat_cmd, 0,
-               .deprecation_message = "use Lua scripting instead"),
-    OPT_FLOAT("heartbeat-interval", heartbeat_interval, CONF_MIN, 0),
-
     OPT_SUBSTRUCT("", video_equalizer, mp_csp_equalizer_conf, 0),
 
     OPT_FLAG("use-filedir-conf", use_filedir_conf, 0),
@@ -687,8 +687,15 @@ const m_option_t mp_opts[] = {
     OPT_SUBSTRUCT("", vo, vo_sub_opts, 0),
     OPT_SUBSTRUCT("", demux_opts, demux_conf, 0),
 
-#if HAVE_GL
     OPT_SUBSTRUCT("", gl_video_opts, gl_video_conf, 0),
+    OPT_SUBSTRUCT("", spirv_opts, spirv_conf, 0),
+
+#if HAVE_GL
+    OPT_SUBSTRUCT("", opengl_opts, opengl_conf, 0),
+#endif
+
+#if HAVE_VULKAN
+    OPT_SUBSTRUCT("", vulkan_opts, vulkan_conf, 0),
 #endif
 
 #if HAVE_EGL_ANGLE_WIN32
@@ -823,6 +830,7 @@ const m_option_t mp_opts[] = {
     OPT_REPLACED("sub-ass-style-override", "sub-ass-override"),
     OPT_REMOVED("fs-black-out-screens", NULL),
     OPT_REPLACED("sub-paths", "sub-file-paths"),
+    OPT_REMOVED("heartbeat-cmd", "use Lua scripting instead"),
 
     {0}
 };
@@ -842,7 +850,6 @@ const struct MPOpts mp_default_opts = {
     .audio_device = "auto",
     .audio_client_name = "mpv",
     .wintitle = "${?media-title:${media-title}}${!media-title:No file} - mpv",
-    .heartbeat_interval = 30.0,
     .stop_screensaver = 1,
     .cursor_autohide_delay = 1000,
     .video_osd = 1,

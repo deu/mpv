@@ -181,8 +181,6 @@ typedef struct MPOpts {
     char *status_msg;
     char *osd_status_msg;
     char *osd_msg[3];
-    char *heartbeat_cmd;
-    float heartbeat_interval;
     int player_idle_mode;
     int consolecontrols;
     int playlist_pos;
@@ -331,6 +329,9 @@ typedef struct MPOpts {
 
     struct gl_video_opts *gl_video_opts;
     struct angle_opts *angle_opts;
+    struct opengl_opts *opengl_opts;
+    struct vulkan_opts *vulkan_opts;
+    struct spirv_opts *spirv_opts;
     struct cocoa_opts *cocoa_opts;
     struct dvd_opts *dvd_opts;
 

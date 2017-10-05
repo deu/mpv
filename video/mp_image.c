@@ -1,20 +1,18 @@
 /*
  * This file is part of mpv.
  *
- * mpv is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * mpv is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
  * mpv is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * GNU Lesser General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License along
- * with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * Almost LGPL.
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <limits.h>
@@ -35,7 +33,6 @@
 #include "mp_image.h"
 #include "sws_utils.h"
 #include "fmt-conversion.h"
-#include "gpu_memcpy.h"
 
 #include "video/filter/vf.h"
 
@@ -480,35 +477,10 @@ void mp_image_copy(struct mp_image *dst, struct mp_image *src)
     mp_image_copy_cb(dst, src, memcpy);
 }
 
-void mp_image_copy_gpu(struct mp_image *dst, struct mp_image *src)
+static enum mp_csp mp_image_params_get_forced_csp(struct mp_image_params *params)
 {
-#if HAVE_SSE4_INTRINSICS
-    if (av_get_cpu_flags() & AV_CPU_FLAG_SSE4) {
-        mp_image_copy_cb(dst, src, gpu_memcpy);
-        return;
-    }
-#endif
-    mp_image_copy(dst, src);
-}
-
-// Helper, only for outputting some log info.
-void mp_check_gpu_memcpy(struct mp_log *log, bool *once)
-{
-    if (once) {
-        if (*once)
-            return;
-        *once = true;
-    }
-
-    bool have_sse = false;
-#if HAVE_SSE4_INTRINSICS
-    have_sse = av_get_cpu_flags() & AV_CPU_FLAG_SSE4;
-#endif
-    if (have_sse) {
-        mp_verbose(log, "Using SSE4 memcpy\n");
-    } else {
-        mp_warn(log, "Using fallback memcpy (slow)\n");
-    }
+    int imgfmt = params->hw_subfmt ? params->hw_subfmt : params->imgfmt;
+    return mp_imgfmt_get_forced_csp(imgfmt);
 }
 
 void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
@@ -521,21 +493,15 @@ void mp_image_copy_attributes(struct mp_image *dst, struct mp_image *src)
     dst->params.rotate = src->params.rotate;
     dst->params.stereo_in = src->params.stereo_in;
     dst->params.stereo_out = src->params.stereo_out;
-    if (dst->w == src->w && dst->h == src->h) {
-        dst->params.p_w = src->params.p_w;
-        dst->params.p_h = src->params.p_h;
-    }
-    dst->params.color.primaries = src->params.color.primaries;
-    dst->params.color.gamma = src->params.color.gamma;
-    dst->params.color.sig_peak = src->params.color.sig_peak;
-    dst->params.color.light = src->params.color.light;
-    if ((dst->fmt.flags & MP_IMGFLAG_YUV) == (src->fmt.flags & MP_IMGFLAG_YUV)) {
-        dst->params.color.space = src->params.color.space;
-        dst->params.color.levels = src->params.color.levels;
-        dst->params.chroma_location = src->params.chroma_location;
-    }
+    dst->params.p_w = src->params.p_w;
+    dst->params.p_h = src->params.p_h;
+    dst->params.color = src->params.color;
+    dst->params.chroma_location = src->params.chroma_location;
     dst->params.spherical = src->params.spherical;
-    mp_image_params_guess_csp(&dst->params); // ensure colorspace consistency
+    // ensure colorspace consistency
+    if (mp_image_params_get_forced_csp(&dst->params) !=
+        mp_image_params_get_forced_csp(&src->params))
+        dst->params.color = (struct mp_colorspace){0};
     if ((dst->fmt.flags & MP_IMGFLAG_PAL) && (src->fmt.flags & MP_IMGFLAG_PAL)) {
         if (dst->planes[1] && src->planes[1]) {
             if (mp_image_make_writeable(dst))
@@ -742,7 +708,7 @@ void mp_image_set_attributes(struct mp_image *image,
     nparams.w = image->w;
     nparams.h = image->h;
     if (nparams.imgfmt != params->imgfmt)
-        mp_image_params_guess_csp(&nparams);
+        nparams.color = (struct mp_colorspace){0};
     mp_image_set_params(image, &nparams);
 }
 
@@ -751,12 +717,7 @@ void mp_image_set_attributes(struct mp_image *image,
 // the colorspace as implied by the pixel format.
 void mp_image_params_guess_csp(struct mp_image_params *params)
 {
-    int imgfmt = params->hw_subfmt ? params->hw_subfmt : params->imgfmt;
-    struct mp_imgfmt_desc fmt = mp_imgfmt_get_desc(imgfmt);
-    if (!fmt.id)
-        return;
-
-    enum mp_csp forced_csp = mp_imgfmt_get_forced_csp(imgfmt);
+    enum mp_csp forced_csp = mp_image_params_get_forced_csp(params);
     if (forced_csp == MP_CSP_AUTO) { // YUV/other
         if (params->color.space != MP_CSP_BT_601 &&
             params->color.space != MP_CSP_BT_709 &&
