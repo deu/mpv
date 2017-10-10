@@ -4,7 +4,7 @@ import os
 def _add_rst_manual_dependencies(ctx):
     manpage_sources_basenames = """
         options.rst ao.rst vo.rst af.rst vf.rst encode.rst
-        input.rst osc.rst lua.rst ipc.rst changes.rst""".split()
+        input.rst osc.rst stats.rst lua.rst ipc.rst changes.rst""".split()
 
     manpage_sources = ['DOCS/man/'+x for x in manpage_sources_basenames]
 
@@ -100,7 +100,7 @@ def build(ctx):
     )
 
     lua_files = ["defaults.lua", "assdraw.lua", "options.lua", "osc.lua",
-                 "ytdl_hook.lua"]
+                 "ytdl_hook.lua", "stats.lua"]
 
     for fn in lua_files:
         fn = "player/lua/" + fn
@@ -369,6 +369,7 @@ def build(ctx):
         ( "video/decode/dec_video.c"),
         ( "video/decode/hw_dxva2.c",             "d3d9-hwaccel" ),
         ( "video/decode/hw_d3d11va.c",           "d3d-hwaccel" ),
+        ( "video/decode/hw_mediacodec.c",        "android" ),
         ( "video/decode/hw_videotoolbox.c",      "videotoolbox-hwaccel" ),
         ( "video/decode/vd_lavc.c" ),
         ( "video/filter/refqueue.c" ),
@@ -424,6 +425,7 @@ def build(ctx):
         ( "video/out/opengl/context_drm_egl.c",  "egl-drm" ),
         ( "video/out/opengl/context_dxinterop.c","gl-dxinterop" ),
         ( "video/out/opengl/context_mali_fbdev.c","mali-fbdev" ),
+        ( "video/out/opengl/context_android.c",  "android" ),
         ( "video/out/opengl/context_rpi.c",      "rpi" ),
         ( "video/out/opengl/context_vdpau.c",    "vdpau-gl-x11" ),
         ( "video/out/opengl/context_wayland.c",  "gl-wayland" ),
@@ -445,6 +447,7 @@ def build(ctx):
         ( "video/out/opengl/hwdec_vaglx.c",      "vaapi-glx" ),
         ( "video/out/opengl/hwdec_vdpau.c",      "vdpau-gl-x11" ),
         ( "video/out/vo.c" ),
+        ( "video/out/vo_mediacodec_embed.c",     "android" ),
         ( "video/out/vo_caca.c",                 "caca" ),
         ( "video/out/vo_drm.c",                  "drm" ),
         ( "video/out/vo_direct3d.c",             "direct3d" ),

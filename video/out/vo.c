@@ -47,11 +47,11 @@
 #include "osdep/io.h"
 #include "osdep/threads.h"
 
+extern const struct vo_driver video_out_mediacodec_embed;
 extern const struct vo_driver video_out_x11;
 extern const struct vo_driver video_out_vdpau;
 extern const struct vo_driver video_out_xv;
 extern const struct vo_driver video_out_gpu;
-extern const struct vo_driver video_out_opengl;
 extern const struct vo_driver video_out_opengl_cb;
 extern const struct vo_driver video_out_null;
 extern const struct vo_driver video_out_image;
@@ -66,6 +66,9 @@ extern const struct vo_driver video_out_tct;
 
 const struct vo_driver *const video_out_drivers[] =
 {
+#if HAVE_ANDROID
+    &video_out_mediacodec_embed,
+#endif
 #if HAVE_RPI
     &video_out_rpi,
 #endif
@@ -102,7 +105,6 @@ const struct vo_driver *const video_out_drivers[] =
     &video_out_lavc,
 #endif
 #if HAVE_GL
-    &video_out_opengl,
     &video_out_opengl_cb,
 #endif
     NULL
@@ -192,8 +194,9 @@ const struct m_obj_list vo_obj_list = {
     .get_desc = get_desc,
     .description = "video outputs",
     .aliases = {
-        {"gl", "opengl"},
+        {"gl", "gpu"},
         {"direct3d_shaders", "direct3d"},
+        {"opengl", "gpu"},
         {0}
     },
     .allow_unknown_entries = true,
@@ -882,6 +885,11 @@ static bool render_frame(struct vo *vo)
         update_vsync_timing_after_swap(vo);
     }
 
+    if (vo->driver->caps & VO_CAP_NOREDRAW) {
+        talloc_free(in->current_frame);
+        in->current_frame = NULL;
+    }
+
     if (in->dropped_frame) {
         MP_STATS(vo, "drop-vo");
     } else {
@@ -903,7 +911,7 @@ static void do_redraw(struct vo *vo)
 {
     struct vo_internal *in = vo->in;
 
-    if (!vo->config_ok)
+    if (!vo->config_ok || (vo->driver->caps & VO_CAP_NOREDRAW))
         return;
 
     pthread_mutex_lock(&in->lock);

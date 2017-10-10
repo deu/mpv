@@ -592,6 +592,11 @@ Program Behavior
         - ``--ytdl-raw-options=username=user,password=pass``
         - ``--ytdl-raw-options=force-ipv6=``
 
+``--load-stats-overlay=<yes|no>``
+    Enable the builtin script that shows useful playback information on a key
+    binding (default: yes). By default, the ``i`` key is used (``I`` to make
+    the overlay permanent).
+
 ``--player-operation-mode=<cplayer|pseudo-gui>``
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but
@@ -693,7 +698,8 @@ Video
     :d3d11va:   requires ``--vo=gpu`` with ``--gpu-context=angle``
                 (Windows 8+ only)
     :d3d11va-copy: copies video back to system RAM (Windows 8+ only)
-    :mediacodec: copies video back to system RAM (Android only)
+    :mediacodec: requires ``--vo=mediacodec_embed`` (Android only)
+    :mediacodec-copy: copies video back to system RAM (Android only)
     :rpi:       requires ``--vo=gpu`` (Raspberry Pi only - default if available)
     :rpi-copy:  copies video back to system RAM (Raspberry Pi only)
     :cuda:      requires ``--vo=gpu`` (Any platform CUDA is available)
@@ -2491,6 +2497,11 @@ Window
     to ``intptr_t``. mpv will create its own sub-view. Because OSX does not
     support window embedding of foreign processes, this works only with libmpv,
     and will crash when used from the command line.
+
+    On Android, the ID is interpreted as ``android.view.Surface``. Pass it as a
+    value cast to ``intptr_t``. Use with ``--vo=mediacodec_embed`` and
+    ``--hwdec=mediacodec`` for direct rendering using MediaCodec, or with
+    ``--vo=gpu --gpu-context=android`` (with or without ``--hwdec=mediacodec-copy``).
 
 ``--no-window-dragging``
     Don't move the window when clicking on it and moving the mouse pointer.
@@ -4644,6 +4655,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
         DRM/EGL
     x11egl
         X11/EGL
+    android
+	Android/EGL. Requires ``--wid`` be set to an ``android.view.Surface``.
     mali-fbdev
         Direct fbdev/EGL support on some ARM/MALI devices.
     vdpauglx
