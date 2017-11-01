@@ -15,15 +15,19 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MP_JSON_H
-#define MP_JSON_H
+#ifndef DRM_PRIME_H
+#define DRM_PRIME_H
 
-// We reuse mpv_node.
-#include "libmpv/client.h"
+#include <libavutil/hwcontext_drm.h>
 
-int json_parse(void *ta_parent, struct mpv_node *dst, char **src, int max_depth);
-void json_skip_whitespace(char **src);
-int json_write(char **s, struct mpv_node *src);
-int json_write_pretty(char **s, struct mpv_node *src);
+#include "common/msg.h"
 
-#endif
+struct drm_prime_framebuffer {
+    uint32_t fb_id;
+    uint32_t gem_handles[AV_DRM_MAX_PLANES];
+};
+
+int drm_prime_create_framebuffer(struct mp_log *log, int fd, AVDRMFrameDescriptor *descriptor, int width, int height,
+                                  struct  drm_prime_framebuffer *framebuffers);
+void drm_prime_destroy_framebuffer(struct mp_log *log, int fd, struct  drm_prime_framebuffer *framebuffers);
+#endif // DRM_PRIME_H

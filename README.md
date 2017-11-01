@@ -112,10 +112,7 @@ Essential dependencies (incomplete list):
   libGL, GLX, EGL, xv, ...)
 - Audio output development headers (libasound/ALSA, pulseaudio)
 - FFmpeg libraries (libavutil libavcodec libavformat libswscale libavfilter
-  and either libswresample or libavresample)
-  At least FFmpeg 3.2.2 or Libav 12 is required.
-  For hardware decoding with vaapi and vdpau, FFmpeg 3.3 or Libav git is
-  required.
+  and either libswresample or libavresample) from ffmpeg-mpv or Libav
 - zlib
 - iconv (normally provided by the system libc)
 - libass (OSD, OSC, text subtitles)
@@ -123,7 +120,6 @@ Essential dependencies (incomplete list):
 - libjpeg (optional, used for screenshots only)
 - uchardet (optional, for subtitle charset detection)
 - vdpau and vaapi libraries for hardware decoding on Linux (optional)
-  (FFmpeg 3.3 or Libav git is also required.)
 
 Libass dependencies:
 
@@ -140,11 +136,10 @@ FFmpeg dependencies:
 - libx264/libmp3lame/libfdk-aac if you want to use encoding (have to be
   explicitly enabled when compiling FFmpeg)
 - Libav also works, but some features will not work. (See section below.)
-- FFmpeg/Libav git for Windows/D3D11 and Cuda decoding.
 
 Most of the above libraries are available in suitable versions on normal
-Linux distributions. However, FFmpeg is an exception (distro versions may be
-too old to work well or at all). For that reason you may want to use
+Linux distributions. However, FFmpeg is an exception - [ffmpeg-mpv][ffmpeg-mpv]
+or Libav git master is required. For that reason you may want to use
 the separately available build wrapper ([mpv-build][mpv-build]) that first
 compiles FFmpeg libraries and libass, and then compiles the player statically
 linked against those.
@@ -164,17 +159,14 @@ with FFmpeg only (subtitle formats in particular).
 
 ## Preferred FFmpeg version
 
+Only [ffmpeg-mpv][ffmpeg-mpv] is supported. Upstream FFmpeg can be forced by
+passing a certain switch to configure, but compilation or runtime behavior
+might be broken at times.
 
-Using the latest FFmpeg release (or FFmpeg git master) is strongly recommended.
-Older versions are unsupported, even if the build system still happens to
-accept them. The main reason mpv still builds with older FFmpeg versions is to
-evade arguing with people (users, distros) who insist on using older FFmpeg
-versions for no rational reason.
-
-If you want to use a stable FFmpeg release, use the latest release, which has
-most likely the best maintenance out of all stable releases. Older releases
-are for distros, and at best receive basic changes, like fixing critical security
-issues or build fixes, and at worst are completely abandoned.
+_If_ you force upstream FFmpeg, and it doesn't work, please contact upstream
+FFmpeg for help, instead of mpv. See
+[FFmpeg contact][http://ffmpeg.org/contact.html#MailingLists] how to contact
+FFmpeg upstream.
 
 ## FFmpeg ABI compatibility
 
@@ -238,7 +230,8 @@ and largely unmaintained list of changes is located [here][mplayer-changes].
 
 ## License
 
-Mostly GPLv2 or later. See [details.](https://github.com/mpv-player/mpv/blob/master/Copyright)
+GPLv2 "or later" by default, LGPLv2.1 "or later" with `--enable-lgpl`.
+See [details.](https://github.com/mpv-player/mpv/blob/master/Copyright)
 
 
 ## Contact
@@ -265,3 +258,4 @@ only if discretion is required.
 [api-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/client-api-changes.rst
 [restore-old-bindings]: https://github.com/mpv-player/mpv/blob/master/etc/restore-old-bindings.conf
 [contribute.md]: https://github.com/mpv-player/mpv/blob/master/DOCS/contribute.md
+[ffmpeg-mpv]: https://github.com/mpv-player/ffmpeg-mpv

@@ -913,8 +913,8 @@ Property list
 
 ``file-size``
     Length in bytes of the source file/stream. (This is the same as
-    ``${stream-end}``. For ordered chapters and such, the
-    size of the currently played segment is returned.)
+    ``${stream-end}``. For segmented/multi-part files, this will return the
+    size of the main or manifest file, whatever it is.)
 
 ``estimated-frame-count``
     Total number of frames in current file.
@@ -954,8 +954,7 @@ Property list
 
 ``stream-path``
     Filename (full path) of the stream layer filename. (This is probably
-    useless. It looks like this can be different from ``path`` only when
-    using e.g. ordered chapters.)
+    useless and is almost never different from ``path``.)
 
 ``stream-pos``
     Raw byte position in source stream. Technically, this returns the position
@@ -1259,6 +1258,28 @@ Property list
     Returns ``yes`` if the demuxer is idle, which means the demuxer cache is
     filled to the requested amount, and is currently not reading more data.
 
+``demuxer-cache-state``
+    Various undocumented or half-documented things.
+
+    Each entry in ``seekable-ranges`` represents a region in the demuxer cache
+    that can be seeked to. If there are multiple demuxers active, this only
+    returns information about the "main" demuxer, but might be changed in
+    future to return unified information about all demuxers. There is currently
+    only at most 1 range. Should the player implement caching for multiple
+    ranges, the order of the ranges will be unspecified and arbitrary.
+
+    When querying the property with the client API using ``MPV_FORMAT_NODE``,
+    or with Lua ``mp.get_property_native``, this will return a mpv_node with
+    the following contents:
+
+    ::
+
+        MPV_FORMAT_NODE_MAP
+            "seekable-ranges"   MPV_FORMAT_NODE_ARRAY
+                MPV_FORMAT_NODE_MAP
+                    "start"             MPV_FORMAT_DOUBLE
+                    "end"               MPV_FORMAT_DOUBLE
+
 ``demuxer-via-network``
     Returns ``yes`` if the stream demuxed via the main demuxer is most likely
     played via network. What constitutes "network" is not always clear, might
@@ -1287,8 +1308,8 @@ Property list
 ``seeking``
     Returns ``yes`` if the player is currently seeking, or otherwise trying
     to restart playback. (It's possible that it returns ``yes`` while a file
-    is loaded, or when switching ordered chapter segments. This is because
-    the same underlying code is used for seeking and resyncing.)
+    is loadedThis is because the same underlying code is used for seeking and
+    resyncing.)
 
 ``mixer-active``
     Return ``yes`` if the audio mixer is active, ``no`` otherwise.

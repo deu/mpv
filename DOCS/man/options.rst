@@ -30,6 +30,9 @@ Track Selection
         - ``mpv --slang=jpn example.mkv`` plays a Matroska file with Japanese
           subtitles.
 
+``--vlang=<...>``
+    Equivalent to ``--alang`` and ``--slang``, for video tracks.
+
 ``--achans=<channels[,channels,...]>``
     Specify a priority list of number of audio channels to use.
     ``--alang`` takes priority over this.
@@ -704,7 +707,10 @@ Video
     :rpi-copy:  copies video back to system RAM (Raspberry Pi only)
     :cuda:      requires ``--vo=gpu`` (Any platform CUDA is available)
     :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
+    :nvdec:     requires ``--vo=gpu`` (Any platform CUDA is available)
+    :nvdec-copy: copies video back to system RAM (Any platform CUDA is available)
     :crystalhd: copies video back to system RAM (Any platform supported by hardware)
+    :rkmpp:     requires ``--vo=gpu`` (some RockChip devices only)
 
     ``auto`` tries to automatically enable hardware decoding using the first
     available method. This still depends what VO you are using. For example,
@@ -730,6 +736,12 @@ Video
     Pass ``weave`` (or leave the option unset) to not attempt any
     deinterlacing. ``cuda`` should always be preferred unless the ``gpu``
     vo is not being used or filters are required.
+
+    ``nvdec`` is a newer implementation of CUVID/CUDA decoding, which uses the
+    FFmpeg decoders for file parsing. Experimental, is known not to correctly
+    check whether decoding is supported by the hardware at all. Deinterlacing
+    is not supported. Since this uses FFmpeg's codec parsers, it is expected
+    that this generally causes fewer issues than ``cuda``. Requires ffmpeg-mpv.
 
     Most video filters will not work with hardware decoding as they are
     primarily implemented on the CPU. Some exceptions are ``vdpaupp``,
@@ -844,6 +856,17 @@ Video
     The old alias ``--hwdec-preload`` has different behavior if the option value
     is ``no``.
 
+``--hwdec-image-format=<name>``
+    Set the internal pixel format used by hardware decoding via ``--hwdec``
+    (default ``no``). The special value ``no`` selects an implementation
+    specific standard format. Most decoder implementations support only one
+    format, and will fail to initialize if the format is not supported.
+
+    Some implementations might support multiple formats. In particular,
+    videotoolbox is known to require ``uyvy422`` for good performance on some
+    older hardware. d3d11va can always use ``yuv420p``, which uses an opaque
+    format, with likely no advantages.
+
 ``--videotoolbox-format=<name>``
     Set the internal pixel format used by ``--hwdec=videotoolbox`` on OSX. The
     choice of the format can influence performance considerably. On the other
@@ -853,6 +876,9 @@ Video
     works.
     Since mpv 0.25.0, ``no`` is an accepted value, which lets the decoder pick
     the format on newer FFmpeg versions (will use ``nv12`` on older versions).
+
+    Deprecated. Use ``--hwdec-image-format`` if you really need this. If both
+    are specified, ``--hwdec-image-format`` wins.
 
 ``--panscan=<0.0-1.0>``
     Enables pan-and-scan functionality (cropping the sides of e.g. a 16:9
@@ -2834,11 +2860,31 @@ Demuxer
 
     See ``--list-options`` for defaults and value range.
 
-``--demuxer-max-packets=<packets>``
-    Quite similar ``--demuxer-max-bytes=<bytes>``. Deprecated, because the
-    other option does basically the same job. Since mpv 0.25.0, the code
-    tries to account for per-packet overhead, which is why this option becomes
-    rather pointless.
+``--demuxer-max-back-bytes=<value>``
+    This controls how much past data the demuxer is allowed to preserve. This
+    is useful only if the ``--demuxer-seekable-cache`` option is enabled.
+    Unlike the forward cache, there is no control how many seconds are actually
+    cached - it will simply use as much memory this option allows. Setting this
+    option to 0 will strictly disable any back buffer.
+
+    Keep in mind that other buffers in the player (like decoders) will cause the
+    demuxer to cache "future" frames in the back buffer, which can skew the
+    impression about how much data the backbuffer contains.
+
+    See ``--list-options`` for defaults and value range.
+
+``--demuxer-seekable-cache=<yes|no>``
+    This controls whether seeking can use the demuxer cache (default: no). If
+    enabled, short seek offsets will not trigger a low level demuxer seek
+    (which means for example that slow network round trips or FFmpeg seek bugs
+    can be avoided). If a seek cannot happen within the cached range, a low
+    level seek will be triggered. Seeking outside of the cache will always
+    discard the full cache.
+
+    Keep in mind that some events can flush the cache or force a low level
+    seek anyway, such as switching tracks, or attmepting to seek before the
+    start or after the end of the file. This option is experimental - thus
+    disabled, and bugs are to be expected.
 
 ``--demuxer-thread=<yes|no>``
     Run the demuxer in a separate thread, and let it prefetch a certain amount
@@ -3398,7 +3444,9 @@ Terminal
 
 ``--msg-level=<module1=level1,module2=level2,...>``
     Control verbosity directly for each module. The ``all`` module changes the
-    verbosity of all the modules not explicitly specified on the command line.
+    verbosity of all the modules. The verbosity changes from this option are
+    applied in order from left to right, and each item can override a previous
+    one.
 
     Run mpv with ``--msg-level=all=trace`` to see all messages mpv outputs. You
     can use the module names printed in the output (prefixed to each line in
@@ -4636,6 +4684,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
         Cocoa/OS X
     win
         Win32/WGL
+    winvk
+        VK_KHR_win32_surface
     angle
         Direct3D11 through the OpenGL ES translation layer ANGLE. This supports
         almost everything the ``win`` backend does (if the ANGLE build is new
@@ -4645,18 +4695,22 @@ The following video options are currently all specific to ``--vo=gpu`` and
         on Nvidia and AMD. Newer Intel chips with the latest drivers may also
         work.
     x11
-        X11/GLX, VK_KHR_xlib_surface
+        X11/GLX
+    x11vk
+        VK_KHR_xlib_surface
     x11probe
         For internal autoprobing, equivalent to ``x11`` otherwise. Don't use
         directly, it could be removed without warning as autoprobing is changed.
     wayland
-        Wayland/EGL, VK_KHR_wayland_surface
+        Wayland/EGL
+    waylandvk
+        VK_KHR_wayland_surface
     drm
         DRM/EGL
     x11egl
         X11/EGL
     android
-	Android/EGL. Requires ``--wid`` be set to an ``android.view.Surface``.
+        Android/EGL. Requires ``--wid`` be set to an ``android.view.Surface``.
     mali-fbdev
         Direct fbdev/EGL support on some ARM/MALI devices.
     vdpauglx
@@ -4696,9 +4750,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Selects the internal format of textures used for FBOs. The format can
     influence performance and quality of the video output. ``fmt`` can be one
     of: rgb8, rgb10, rgb10_a2, rgb16, rgb16f, rgb32f, rgba12, rgba16, rgba16f,
-    rgba32f. Default: ``auto``, which maps to rgba16 on desktop GL, and rgba16f
-    or rgb10_a2 on GLES (e.g. ANGLE), unless GL_EXT_texture_norm16 is
-    available.
+    rgba16hf, rgba32f. Default: ``auto``, which maps to rgba16 on desktop GL,
+    and rgba16f or rgb10_a2 on GLES (e.g. ANGLE), unless GL_EXT_texture_norm16
+    is available.
 
 ``--gamma-factor=<0.1..2.0>``
     Set an additional raw gamma factor (default: 1.0). If gamma is adjusted in
@@ -4864,14 +4918,15 @@ The following video options are currently all specific to ``--vo=gpu`` and
     some drivers, so enable at your own risk.
 
 ``--tone-mapping-desaturate=<value>``
-    Apply desaturation for highlights that exceed this level of brightness. The
-    higher the parameter, the more color information will be preserved. This
-    setting helps prevent unnaturally blown-out colors for super-highlights, by
-    (smoothly) turning into white instead. This makes images feel more natural,
-    at the cost of reducing information about out-of-range colors.
+    Apply desaturation for highlights. The parameter essentially controls the
+    steepness of the desaturation curve. The higher the parameter, the more
+    aggressively colors will be desaturated. This setting helps prevent
+    unnaturally blown-out colors for super-highlights, by (smoothly) turning
+    into white instead. This makes images feel more natural, at the cost of
+    reducing information about out-of-range colors.
 
-    The default of 2.0 is somewhat conservative and will mostly just apply to
-    skies or directly sunlit surfaces. A setting of 0.0 disables this option.
+    The default of 1.0 provides a good balance that roughly matches the look
+    and feel of the ACES ODT curves. A setting of 0.0 disables this option.
 
 ``--gamut-warning``
     If enabled, mpv will mark all clipped/out-of-gamut pixels that exceed a

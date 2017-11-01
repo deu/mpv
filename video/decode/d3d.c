@@ -84,34 +84,10 @@ void d3d_hwframes_refine(struct lavc_ctx *ctx, AVBufferRef *hw_frames_ctx)
 {
     AVHWFramesContext *fctx = (void *)hw_frames_ctx->data;
 
-    int alignment = 16;
-    switch (ctx->avctx->codec_id) {
-        // decoding MPEG-2 requires additional alignment on some Intel GPUs, but it
-        // causes issues for H.264 on certain AMD GPUs.....
-    case AV_CODEC_ID_MPEG2VIDEO:
-        alignment = 32;
-        break;
-        // the HEVC DXVA2 spec asks for 128 pixel aligned surfaces to ensure
-        // all coding features have enough room to work with
-    case AV_CODEC_ID_HEVC:
-        alignment = 128;
-        break;
-    }
-    fctx->width  = FFALIGN(fctx->width,  alignment);
-    fctx->height = FFALIGN(fctx->height, alignment);
-
-#if HAVE_D3D9_HWACCEL
-    if (fctx->format == AV_PIX_FMT_DXVA2_VLD) {
-        AVDXVA2FramesContext *hwctx = fctx->hwctx;
-
-        hwctx->surface_type = DXVA2_VideoDecoderRenderTarget;
-    }
-#endif
-
     if (fctx->format == AV_PIX_FMT_D3D11) {
         AVD3D11VAFramesContext *hwctx = fctx->hwctx;
 
-        hwctx->BindFlags |= D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+        hwctx->BindFlags |= D3D11_BIND_SHADER_RESOURCE;
     }
 }
 
@@ -132,3 +108,17 @@ AVBufferRef *d3d11_wrap_device_ref(ID3D11Device *device)
 
     return device_ref;
 }
+
+static void d3d11_complete_image_params(struct mp_image *img)
+{
+    AVHWFramesContext *hw_frames = (void *)img->hwctx->data;
+
+    // According to hwcontex_d3d11va.h, this means DXGI_FORMAT_420_OPAQUE.
+    img->params.hw_flags = hw_frames->sw_format == AV_PIX_FMT_YUV420P
+                         ? MP_IMAGE_HW_FLAG_OPAQUE : 0;
+}
+
+const struct hwcontext_fns hwcontext_fns_d3d11 = {
+    .av_hwdevice_type = AV_HWDEVICE_TYPE_D3D11VA,
+    .complete_image_params = d3d11_complete_image_params,
+};

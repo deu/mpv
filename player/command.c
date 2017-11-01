@@ -1696,11 +1696,10 @@ static int mp_property_demuxer_cache_time(void *ctx, struct m_property *prop,
     if (demux_control(mpctx->demuxer, DEMUXER_CTRL_GET_READER_STATE, &s) < 1)
         return M_PROPERTY_UNAVAILABLE;
 
-    double ts = s.ts_range[1];
-    if (ts == MP_NOPTS_VALUE)
+    if (s.ts_end == MP_NOPTS_VALUE)
         return M_PROPERTY_UNAVAILABLE;
 
-    return m_property_double_ro(action, arg, ts);
+    return m_property_double_ro(action, arg, s.ts_end);
 }
 
 static int mp_property_demuxer_cache_idle(void *ctx, struct m_property *prop,
@@ -1715,6 +1714,49 @@ static int mp_property_demuxer_cache_idle(void *ctx, struct m_property *prop,
         return M_PROPERTY_UNAVAILABLE;
 
     return m_property_flag_ro(action, arg, s.idle);
+}
+
+static int mp_property_demuxer_cache_state(void *ctx, struct m_property *prop,
+                                           int action, void *arg)
+{
+    MPContext *mpctx = ctx;
+    if (!mpctx->demuxer)
+        return M_PROPERTY_UNAVAILABLE;
+
+    if (action == M_PROPERTY_GET_TYPE) {
+        *(struct m_option *)arg = (struct m_option){.type = CONF_TYPE_NODE};
+        return M_PROPERTY_OK;
+    }
+    if (action != M_PROPERTY_GET)
+        return M_PROPERTY_NOT_IMPLEMENTED;
+
+    struct demux_ctrl_reader_state s;
+    if (demux_control(mpctx->demuxer, DEMUXER_CTRL_GET_READER_STATE, &s) < 1)
+        return M_PROPERTY_UNAVAILABLE;
+
+    struct mpv_node *r = (struct mpv_node *)arg;
+    node_init(r, MPV_FORMAT_NODE_MAP, NULL);
+
+    struct mpv_node *ranges =
+        node_map_add(r, "seekable-ranges", MPV_FORMAT_NODE_ARRAY);
+    for (int n = 0; n < s.num_seek_ranges; n++) {
+        struct demux_seek_range *range = &s.seek_ranges[n];
+        struct mpv_node *sub = node_array_add(ranges, MPV_FORMAT_NODE_MAP);
+        node_map_add_double(sub, "start", range->start);
+        node_map_add_double(sub, "end", range->end);
+    }
+
+    if (s.ts_end != MP_NOPTS_VALUE)
+        node_map_add_double(r, "cache-end", s.ts_end);
+
+    if (s.ts_reader != MP_NOPTS_VALUE)
+        node_map_add_double(r, "reader-pts", s.ts_reader);
+
+    node_map_add_flag(r, "eof", s.eof);
+    node_map_add_flag(r, "underrun", s.underrun);
+    node_map_add_flag(r, "idle", s.idle);
+
+    return M_PROPERTY_OK;
 }
 
 static int mp_property_demuxer_start_time(void *ctx, struct m_property *prop,
@@ -3938,6 +3980,7 @@ static const struct m_property mp_properties_base[] = {
     {"demuxer-cache-time", mp_property_demuxer_cache_time},
     {"demuxer-cache-idle", mp_property_demuxer_cache_idle},
     {"demuxer-start-time", mp_property_demuxer_start_time},
+    {"demuxer-cache-state", mp_property_demuxer_cache_state},
     {"cache-buffering-state", mp_property_cache_buffering},
     {"paused-for-cache", mp_property_paused_for_cache},
     {"demuxer-via-network", mp_property_demuxer_is_network},

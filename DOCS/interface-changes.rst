@@ -43,6 +43,9 @@ Interface changes
     - the --msg-level option now affects --log-file
     - drop "audio-out-detected-device" property - this was unavailable on all
       audio output drivers for quite a while (coreaudio used to provide it)
+    - deprecate --videotoolbox-format (use --hwdec-image-format, which affects
+      most other hwaccels)
+    - remove deprecated --demuxer-max-packets
  --- mpv 0.27.0 ---
     - drop previously deprecated --field-dominance option
     - drop previously deprecated "osd" command

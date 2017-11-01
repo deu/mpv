@@ -42,10 +42,9 @@
 #include <libavdevice/avdevice.h>
 #endif
 
-#if HAVE_IS_LIBAV
+#if HAVE_LIBAV
 #include <libavresample/avresample.h>
-#endif
-#if HAVE_IS_FFMPEG
+#else
 #include <libswresample/swresample.h>
 #endif
 
@@ -197,10 +196,9 @@ bool print_libav_versions(struct mp_log *log, int v)
         {"libavformat",   LIBAVFORMAT_VERSION_INT,   avformat_version()},
         {"libswscale",    LIBSWSCALE_VERSION_INT,    swscale_version()},
         {"libavfilter",   LIBAVFILTER_VERSION_INT,   avfilter_version()},
-#if HAVE_IS_LIBAV
+#if HAVE_LIBAV
         {"libavresample", LIBAVRESAMPLE_VERSION_INT, avresample_version()},
-#endif
-#if HAVE_IS_FFMPEG
+#else
         {"libswresample", LIBSWRESAMPLE_VERSION_INT, swresample_version()},
 #endif
     };

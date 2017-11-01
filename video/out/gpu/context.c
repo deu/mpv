@@ -45,7 +45,7 @@ extern const struct ra_ctx_fns ra_ctx_angle;
 extern const struct ra_ctx_fns ra_ctx_dxgl;
 extern const struct ra_ctx_fns ra_ctx_rpi;
 extern const struct ra_ctx_fns ra_ctx_android;
-extern const struct ra_ctx_fns ra_ctx_mali;
+extern const struct ra_ctx_fns ra_ctx_mali_fbdev;
 extern const struct ra_ctx_fns ra_ctx_vdpauglx;
 
 /* Vulkan */
@@ -89,7 +89,7 @@ static const struct ra_ctx_fns *contexts[] = {
     &ra_ctx_drm_egl,
 #endif
 #if HAVE_MALI_FBDEV
-    &ra_ctx_mali,
+    &ra_ctx_mali_fbdev,
 #endif
 #if HAVE_VDPAU_GL_X11
     &ra_ctx_vdpauglx,
@@ -111,24 +111,16 @@ static const struct ra_ctx_fns *contexts[] = {
 #endif
 };
 
-static bool get_help(struct mp_log *log, struct bstr param)
-{
-    if (bstr_equals0(param, "help")) {
-        mp_info(log, "GPU contexts / APIs:\n");
-        mp_info(log, "    auto (autodetect)\n");
-        for (int n = 0; n < MP_ARRAY_SIZE(contexts); n++)
-            mp_info(log, "    %s (%s)\n", contexts[n]->name, contexts[n]->type);
-        return true;
-    }
-
-    return false;
-}
-
 int ra_ctx_validate_api(struct mp_log *log, const struct m_option *opt,
                         struct bstr name, struct bstr param)
 {
-    if (get_help(log, param))
+    if (bstr_equals0(param, "help")) {
+        mp_info(log, "GPU APIs (contexts):\n");
+        mp_info(log, "    auto (autodetect)\n");
+        for (int n = 0; n < MP_ARRAY_SIZE(contexts); n++)
+            mp_info(log, "    %s (%s)\n", contexts[n]->type, contexts[n]->name);
         return M_OPT_EXIT;
+    }
     if (bstr_equals0(param, "auto"))
         return 1;
     for (int i = 0; i < MP_ARRAY_SIZE(contexts); i++) {
@@ -141,8 +133,13 @@ int ra_ctx_validate_api(struct mp_log *log, const struct m_option *opt,
 int ra_ctx_validate_context(struct mp_log *log, const struct m_option *opt,
                             struct bstr name, struct bstr param)
 {
-    if (get_help(log, param))
+    if (bstr_equals0(param, "help")) {
+        mp_info(log, "GPU contexts (APIs):\n");
+        mp_info(log, "    auto (autodetect)\n");
+        for (int n = 0; n < MP_ARRAY_SIZE(contexts); n++)
+            mp_info(log, "    %s (%s)\n", contexts[n]->name, contexts[n]->type);
         return M_OPT_EXIT;
+    }
     if (bstr_equals0(param, "auto"))
         return 1;
     for (int i = 0; i < MP_ARRAY_SIZE(contexts); i++) {

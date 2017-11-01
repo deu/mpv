@@ -236,7 +236,6 @@ const struct m_sub_options demux_mkv_conf = {
         .subtitle_preroll = 2,
         .subtitle_preroll_secs = 1.0,
         .subtitle_preroll_secs_index = 10.0,
-        .probe_start_time = 1,
     },
 };
 
@@ -2893,8 +2892,6 @@ static int create_index_until(struct demuxer *demuxer, int64_t timecode)
     return 0;
 }
 
-#define FLAG_BACKWARD 1
-#define FLAG_SUBPREROLL 2
 static struct mkv_index *seek_with_cues(struct demuxer *demuxer, int seek_id,
                                         int64_t target_timecode, int flags)
 {
@@ -2905,8 +2902,8 @@ static struct mkv_index *seek_with_cues(struct demuxer *demuxer, int seek_id,
     for (size_t i = 0; i < mkv_d->num_indexes; i++) {
         if (seek_id < 0 || mkv_d->indexes[i].tnum == seek_id) {
             int64_t diff =
-                target_timecode - mkv_d->indexes[i].timecode * mkv_d->tc_scale;
-            if (flags & FLAG_BACKWARD)
+                mkv_d->indexes[i].timecode * mkv_d->tc_scale - target_timecode;
+            if (flags & SEEK_FORWARD)
                 diff = -diff;
             if (min_diff != INT64_MIN) {
                 if (diff <= 0) {
@@ -2922,7 +2919,7 @@ static struct mkv_index *seek_with_cues(struct demuxer *demuxer, int seek_id,
 
     if (index) {        /* We've found an entry. */
         uint64_t seek_pos = index->filepos;
-        if (flags & FLAG_SUBPREROLL) {
+        if (flags & SEEK_HR) {
             // Find the cluster with the highest filepos, that has a timestamp
             // still lower than min_tc.
             double secs = mkv_d->opts->subtitle_preroll_secs;
@@ -2987,14 +2984,12 @@ static void demux_mkv_seek(demuxer_t *demuxer, double seek_pts, int flags)
         }
     }
 
-    int cueflags = (flags & SEEK_BACKWARD) ? FLAG_BACKWARD : 0;
-
     mkv_d->subtitle_preroll = NUM_SUB_PREROLL_PACKETS;
     int preroll_opt = mkv_d->opts->subtitle_preroll;
-    if (((flags & SEEK_HR) || preroll_opt == 1 ||
-         (preroll_opt == 2 && mkv_d->index_has_durations))
-        && st_active[STREAM_SUB] && st_active[STREAM_VIDEO])
-        cueflags |= FLAG_SUBPREROLL;
+    if (preroll_opt == 1 || (preroll_opt == 2 && mkv_d->index_has_durations))
+        flags |= SEEK_HR;
+    if (!st_active[STREAM_SUB])
+        flags &= ~SEEK_HR;
 
     // Adjust the target a little bit to catch cases where the target position
     // specifies a keyframe with high, but not perfect, precision.
@@ -3008,9 +3003,9 @@ static void demux_mkv_seek(demuxer_t *demuxer, double seek_pts, int flags)
 
         if (create_index_until(demuxer, target_timecode) >= 0) {
             int seek_id = st_active[STREAM_VIDEO] ? v_tnum : a_tnum;
-            index = seek_with_cues(demuxer, seek_id, target_timecode, cueflags);
+            index = seek_with_cues(demuxer, seek_id, target_timecode, flags);
             if (!index)
-                index = seek_with_cues(demuxer, -1, target_timecode, cueflags);
+                index = seek_with_cues(demuxer, -1, target_timecode, flags);
         }
 
         if (!index)

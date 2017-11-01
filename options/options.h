@@ -55,8 +55,7 @@ typedef struct mp_vo_opts {
     // vo_opengl, vo_opengl_cb
     char *gl_hwdec_interop;
     // vo_drm
-    char *drm_connector_spec;
-    int drm_mode_id;
+    struct drm_opts *drm_opts;
 } mp_vo_opts;
 
 struct mp_cache_opts {
@@ -293,6 +292,7 @@ typedef struct MPOpts {
     int hwdec_api;
     char *hwdec_codecs;
     int videotoolbox_format;
+    int hwdec_image_format;
 
     int w32_priority;
 

@@ -44,20 +44,46 @@ static const struct zxdg_shell_v6_listener xdg_shell_listener = {
     xdg_shell_ping,
 };
 
-static int set_cursor_visibility(struct vo_wayland_state *wl, int on)
+static int spawn_cursor(struct vo_wayland_state *wl)
+{
+    if (wl->allocated_cursor_scale == wl->scaling) /* Reuse if size is identical */
+        return 0;
+    else if (wl->cursor_theme)
+        wl_cursor_theme_destroy(wl->cursor_theme);
+
+    wl->cursor_theme = wl_cursor_theme_load(NULL, 32*wl->scaling, wl->shm);
+    if (!wl->cursor_theme) {
+        MP_ERR(wl, "Unable to load cursor theme!\n");
+        return 1;
+    }
+
+    wl->default_cursor = wl_cursor_theme_get_cursor(wl->cursor_theme, "left_ptr");
+    if (!wl->default_cursor) {
+        MP_ERR(wl, "Unable to load cursor theme!\n");
+        return 1;
+    }
+
+    wl->allocated_cursor_scale = wl->scaling;
+
+    return 0;
+}
+
+static int set_cursor_visibility(struct vo_wayland_state *wl, bool on)
 {
     if (!wl->pointer)
         return VO_NOTAVAIL;
     if (on) {
-        struct wl_cursor_image *image = wl->default_cursor->images[0];
-        struct wl_buffer *buffer = wl_cursor_image_get_buffer(image);
+        if (spawn_cursor(wl))
+            return VO_FALSE;
+        struct wl_cursor_image *img = wl->default_cursor->images[0];
+        struct wl_buffer *buffer = wl_cursor_image_get_buffer(img);
         if (!buffer)
             return VO_FALSE;
         wl_pointer_set_cursor(wl->pointer, wl->pointer_id, wl->cursor_surface,
-                              image->hotspot_x, image->hotspot_y);
-        wl_surface_attach(wl->cursor_surface, buffer, 0, 0);
+                              img->hotspot_x/wl->scaling, img->hotspot_y/wl->scaling);
         wl_surface_set_buffer_scale(wl->cursor_surface, wl->scaling);
-        wl_surface_damage(wl->cursor_surface, 0, 0, image->width, image->height);
+        wl_surface_attach(wl->cursor_surface, buffer, 0, 0);
+        wl_surface_damage(wl->cursor_surface, 0, 0, img->width, img->height);
         wl_surface_commit(wl->cursor_surface);
     } else {
         wl_pointer_set_cursor(wl->pointer, wl->pointer_id, NULL, 0, 0);
@@ -74,7 +100,7 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
     wl->pointer    = pointer;
     wl->pointer_id = serial;
 
-    set_cursor_visibility(wl, 1);
+    set_cursor_visibility(wl, true);
     mp_input_put_key(wl->vo->input_ctx, MP_KEY_MOUSE_ENTER);
 }
 
@@ -548,6 +574,10 @@ static void output_handle_scale(void* data, struct wl_output *wl_output,
                                 int32_t factor)
 {
     struct vo_wayland_output *output = data;
+    if (!factor) {
+        MP_ERR(output->wl, "Invalid output scale given by the compositor!\n");
+        return;
+    }
     output->scale = factor;
 }
 
@@ -753,20 +783,19 @@ static void registry_handle_add(void *data, struct wl_registry *reg, uint32_t id
         ver = MPMIN(ver, 4); /* Cap the version */
         wl->compositor = wl_registry_bind(reg, id, &wl_compositor_interface, ver);
         wl->surface = wl_compositor_create_surface(wl->compositor);
+        wl->cursor_surface = wl_compositor_create_surface(wl->compositor);
         wl_surface_add_listener(wl->surface, &surface_listener, wl);
         wl->frame_callback = wl_surface_frame(wl->surface);
         wl_callback_add_listener(wl->frame_callback, &frame_listener, wl);
     }
 
-    if (!strcmp(interface, wl_output_interface.name) && found++) {
+    if (!strcmp(interface, wl_output_interface.name) && (ver >= 2) && found++) {
         struct vo_wayland_output *output = talloc_zero(wl, struct vo_wayland_output);
 
-        output->wl       = wl;
-        output->id       = id;
-        output->scale    = 1;
-        output->geometry = (struct mp_rect){ -1, -1, -1, -1 };
-        output->output   = wl_registry_bind(reg, id, &wl_output_interface,
-                                            MPMIN(2, ver));
+        output->wl     = wl;
+        output->id     = id;
+        output->scale  = 1;
+        output->output = wl_registry_bind(reg, id, &wl_output_interface, 2);
 
         wl_output_add_listener(output->output, &output_listener, output);
         wl_list_insert(&wl->output_list, &output->link);
@@ -799,7 +828,7 @@ static void registry_handle_add(void *data, struct wl_registry *reg, uint32_t id
     }
 
     if (found > 1)
-        MP_VERBOSE(wl, "Registered for protocol %s, ver %i\n", interface, ver);
+        MP_VERBOSE(wl, "Registered for protocol %s\n", interface);
 }
 
 static void remove_output(struct vo_wayland_output *out)
@@ -832,25 +861,6 @@ static const struct wl_registry_listener registry_listener = {
     registry_handle_add,
     registry_handle_remove,
 };
-
-static int spawn_cursor(struct vo_wayland_state *wl)
-{
-    wl->cursor_theme = wl_cursor_theme_load(NULL, 32, wl->shm);
-    if (!wl->cursor_theme) {
-        MP_ERR(wl, "Unable to load cursor theme!\n");
-        return 1;
-    }
-
-    wl->default_cursor = wl_cursor_theme_get_cursor(wl->cursor_theme, "left_ptr");
-    if (!wl->default_cursor) {
-        MP_ERR(wl, "Unable to load cursor theme!\n");
-        return 1;
-    }
-
-    wl->cursor_surface = wl_compositor_create_surface(wl->compositor);
-
-    return 0;
-}
 
 static void handle_surface_config(void *data, struct zxdg_surface_v6 *surface,
                                   uint32_t serial)
@@ -980,12 +990,13 @@ int vo_wayland_init(struct vo *vo)
         .dnd_fd = -1,
     };
 
+    wl_list_init(&wl->output_list);
+
     if (!wl->display)
         return false;
 
     if (create_input(wl))
         return false;
-    wl_list_init(&wl->output_list);
 
     wl->registry = wl_display_get_registry(wl->display);
     wl_registry_add_listener(wl->registry, &registry_listener, wl);
@@ -999,9 +1010,13 @@ int vo_wayland_init(struct vo *vo)
         return false;
     }
 
-    /* Can't be initialized during registry, as they depend on 2 or more protocols */
-    if (spawn_cursor(wl))
+    if (!wl_list_length(&wl->output_list)) {
+        MP_FATAL(wl, "No outputs found or compositor doesn't support %s (ver. 2)\n",
+                 wl_output_interface.name);
         return false;
+    }
+
+    /* Can't be initialized during registry due to multi-protocol dependence */
     if (create_xdg_surface(wl))
         return false;
 
@@ -1036,6 +1051,8 @@ void vo_wayland_uninit(struct vo *vo)
     struct vo_wayland_state *wl = vo->wl;
     if (!wl)
         return;
+
+    mp_input_put_key(wl->vo->input_ctx, MP_INPUT_RELEASE_ALL);
 
     if (wl->cursor_theme)
         wl_cursor_theme_destroy(wl->cursor_theme);
@@ -1155,6 +1172,8 @@ int vo_wayland_reconfig(struct vo *vo)
     wl_surface_commit(wl->surface);
     wl->pending_vo_events |= VO_EVENT_RESIZE;
     if (!wl->configured) {
+        if (spawn_cursor(wl))
+            return false;
         wl_display_roundtrip(wl->display);
         wl->configured = true;
     }

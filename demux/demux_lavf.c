@@ -33,12 +33,9 @@
 #include <libavutil/avstring.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/replaygain.h>
+#include <libavutil/spherical.h>
 #include <libavutil/display.h>
 #include <libavutil/opt.h>
-
-#if HAVE_AVUTIL_SPHERICAL
-#include <libavutil/spherical.h>
-#endif
 
 #include "common/msg.h"
 #include "common/tags.h"
@@ -242,7 +239,7 @@ static int mp_read(void *opaque, uint8_t *buf, int size)
 
     MP_TRACE(demuxer, "%d=mp_read(%p, %p, %d), pos: %"PRId64", eof:%d\n",
              ret, stream, buf, size, stream_tell(stream), stream->eof);
-    return ret;
+    return ret ? ret : AVERROR_EOF;
 }
 
 static int64_t mp_seek(void *opaque, int64_t pos, int whence)
@@ -643,7 +640,6 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
                 sh->codec->rotate = (((int)(-r) % 360) + 360) % 360;
         }
 
-#if HAVE_AVUTIL_SPHERICAL
         sd = av_stream_get_side_data(st, AV_PKT_DATA_SPHERICAL, NULL);
         if (sd) {
             AVSphericalMapping *sp = (void *)sd;
@@ -654,7 +650,6 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
             mpsp->ref_angles[1] = sp->pitch / (float)(1 << 16);
             mpsp->ref_angles[2] = sp->roll / (float)(1 << 16);
         }
-#endif
 
         // This also applies to vfw-muxed mkv, but we can't detect these easily.
         sh->codec->avi_dts = matches_avinputformat_name(priv, "avi");
@@ -809,13 +804,6 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
         avfc->flags |= AVFMT_FLAG_GENPTS;
     if (index_mode != 1)
         avfc->flags |= AVFMT_FLAG_IGNIDX;
-
-#if LIBAVFORMAT_VERSION_MICRO >= 100
-    /* Keep side data as side data instead of mashing it into the packet
-     * stream.
-     * Note: Libav doesn't have this horrible insanity. */
-    av_opt_set(avfc, "fflags", "+keepside", 0);
-#endif
 
     if (lavfdopts->probesize) {
         if (av_opt_set_int(avfc, "probesize", lavfdopts->probesize, 0) < 0)
@@ -1014,7 +1002,7 @@ static void demux_seek_lavf(demuxer_t *demuxer, double seek_pts, int flags)
     int avsflags = 0;
     int64_t seek_pts_av = 0;
 
-    if (flags & SEEK_BACKWARD)
+    if (!(flags & SEEK_FORWARD))
         avsflags = AVSEEK_FLAG_BACKWARD;
 
     if (flags & SEEK_FACTOR) {
@@ -1031,7 +1019,7 @@ static void demux_seek_lavf(demuxer_t *demuxer, double seek_pts, int flags)
             seek_pts_av = seek_pts * priv->avfc->duration;
         }
     } else {
-        if (flags & SEEK_BACKWARD)
+        if (!(flags & SEEK_FORWARD))
             seek_pts -= priv->seek_delay;
         seek_pts_av = seek_pts * AV_TIME_BASE;
     }
