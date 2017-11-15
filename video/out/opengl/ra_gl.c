@@ -96,20 +96,29 @@ static int ra_init_gl(struct ra *ra, GL *gl)
 
     static const int caps_map[][2] = {
         {RA_CAP_DIRECT_UPLOAD,      0},
-        {RA_CAP_SHARED_BINDING,     0},
         {RA_CAP_GLOBAL_UNIFORM,     0},
+        {RA_CAP_FRAGCOORD,          0},
         {RA_CAP_TEX_1D,             MPGL_CAP_1D_TEX},
         {RA_CAP_TEX_3D,             MPGL_CAP_3D_TEX},
         {RA_CAP_COMPUTE,            MPGL_CAP_COMPUTE_SHADER},
         {RA_CAP_NESTED_ARRAY,       MPGL_CAP_NESTED_ARRAY},
-        {RA_CAP_BUF_RO,             MPGL_CAP_UBO},
-        {RA_CAP_BUF_RW,             MPGL_CAP_SSBO},
     };
 
     for (int i = 0; i < MP_ARRAY_SIZE(caps_map); i++) {
         if ((gl->mpgl_caps & caps_map[i][1]) == caps_map[i][1])
             ra->caps |= caps_map[i][0];
     }
+
+    if (gl->BindBufferBase) {
+        if (gl->mpgl_caps & MPGL_CAP_UBO)
+            ra->caps |= RA_CAP_BUF_RO;
+        if (gl->mpgl_caps & MPGL_CAP_SSBO)
+            ra->caps |= RA_CAP_BUF_RW;
+    }
+
+    // textureGather is only supported in GLSL 400+
+    if (ra->glsl_version >= 400)
+        ra->caps |= RA_CAP_GATHER;
 
     if (gl->BlitFramebuffer)
         ra->caps |= RA_CAP_BLIT;
@@ -174,6 +183,8 @@ static int ra_init_gl(struct ra *ra, GL *gl)
             desc->components[0][2] = 2;
             desc->chroma_w = desc->chroma_h = 1;
         }
+
+        fmt->glsl_format = ra_fmt_glsl_format(fmt);
 
         MP_TARRAY_APPEND(ra, ra->formats, ra->num_formats, fmt);
     }
@@ -648,6 +659,11 @@ static void gl_blit(struct ra *ra, struct ra_tex *dst, struct ra_tex *src,
     gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 }
 
+static int gl_desc_namespace(enum ra_vartype type)
+{
+    return type;
+}
+
 static void gl_renderpass_destroy(struct ra *ra, struct ra_renderpass *pass)
 {
     GL *gl = ra_gl_get(ra);
@@ -1117,6 +1133,7 @@ static struct ra_fns ra_fns_gl = {
     .clear                  = gl_clear,
     .blit                   = gl_blit,
     .uniform_layout         = std140_layout,
+    .desc_namespace         = gl_desc_namespace,
     .renderpass_create      = gl_renderpass_create,
     .renderpass_destroy     = gl_renderpass_destroy,
     .renderpass_run         = gl_renderpass_run,

@@ -698,8 +698,8 @@ Video
     :dxva2:     requires ``--vo=gpu`` with ``--gpu-context=angle`` or
                 ``--gpu-context=dxinterop`` (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
-    :d3d11va:   requires ``--vo=gpu`` with ``--gpu-context=angle``
-                (Windows 8+ only)
+    :d3d11va:   requires ``--vo=gpu`` with ``--gpu-context=d3d11`` or
+                ``--gpu-context=angle`` (Windows 8+ only)
     :d3d11va-copy: copies video back to system RAM (Windows 8+ only)
     :mediacodec: requires ``--vo=mediacodec_embed`` (Android only)
     :mediacodec-copy: copies video back to system RAM (Android only)
@@ -787,10 +787,11 @@ Video
         BT.601 or BT.709, a forced, low-quality but correct RGB conversion is
         performed. Otherwise, the result will be totally incorrect.
 
-        ``d3d11va`` is usually safe (if used with ANGLE builds that support
-        ``EGL_KHR_stream path`` - otherwise, it converts to RGB), except that
-        10 bit input (HEVC main 10 profiles) will be rounded down to 8 bits,
-        which results in reduced quality.
+        ``d3d11va`` is safe when used with the ``d3d11`` backend. If used with
+        ``angle`` is it usually safe, except that 10 bit input (HEVC main 10
+        profiles) will be rounded down to 8 bits, which will result in reduced
+        quality. Also note that with very old ANGLE builds (without
+        ``EGL_KHR_stream path``,) all input will be converted to RGB.
 
         ``dxva2`` is not safe. It appears to always use BT.601 for forced RGB
         conversion, but actual behavior depends on the GPU drivers. Some drivers
@@ -2146,6 +2147,18 @@ Subtitles
 
     Default: ``no``.
 
+``--sub-create-cc-track=<yes|no>``
+    For every video stream, create a closed captions track (default: no). The
+    only purpose is to make the track available for selection at the start of
+    playback, instead of creating it lazily. This applies only to
+    ``ATSC A53 Part 4 Closed Captions`` (displayed by mpv as subtitle tracks
+    using the codec ``eia_608``). The CC track is marked "default" and selected
+    according to the normal subtitle track selection rules. You can then use
+    ``--sid`` to explicitly select the correct track too.
+
+    If the video stream contains no closed captions, or if no video is being
+    decoded, the CC track will remain empty and will not show any text.
+
 Window
 ------
 
@@ -2865,7 +2878,9 @@ Demuxer
     is useful only if the ``--demuxer-seekable-cache`` option is enabled.
     Unlike the forward cache, there is no control how many seconds are actually
     cached - it will simply use as much memory this option allows. Setting this
-    option to 0 will strictly disable any back buffer.
+    option to 0 will strictly disable any back buffer, but this will lead to
+    the situation that the forward seek range starts after the current playback
+    position (as it removes past packets that are seek points).
 
     Keep in mind that other buffers in the player (like decoders) will cause the
     demuxer to cache "future" frames in the back buffer, which can skew the
@@ -2873,18 +2888,23 @@ Demuxer
 
     See ``--list-options`` for defaults and value range.
 
-``--demuxer-seekable-cache=<yes|no>``
-    This controls whether seeking can use the demuxer cache (default: no). If
+``--demuxer-seekable-cache=<yes|no|auto>``
+    This controls whether seeking can use the demuxer cache (default: auto). If
     enabled, short seek offsets will not trigger a low level demuxer seek
     (which means for example that slow network round trips or FFmpeg seek bugs
     can be avoided). If a seek cannot happen within the cached range, a low
-    level seek will be triggered. Seeking outside of the cache will always
-    discard the full cache.
+    level seek will be triggered. Seeking outside of the cache will start a new
+    cached range, but can discard the old cache range if the demuxer exhibits
+    certain unsupported behavior.
 
     Keep in mind that some events can flush the cache or force a low level
-    seek anyway, such as switching tracks, or attmepting to seek before the
+    seek anyway, such as switching tracks, or attempting to seek before the
     start or after the end of the file. This option is experimental - thus
     disabled, and bugs are to be expected.
+
+    The special value ``auto`` means ``yes`` in the same situation as
+    ``--cache-secs`` is used (i.e. when the stream appears to be a network
+    stream or the stream cache is enabled).
 
 ``--demuxer-thread=<yes|no>``
     Run the demuxer in a separate thread, and let it prefetch a certain amount
@@ -3814,7 +3834,7 @@ Cache
 ``--cache-secs=<seconds>``
     How many seconds of audio/video to prefetch if the cache is active. This
     overrides the ``--demuxer-readahead-secs`` option if and only if the cache
-    is enabled and the value is larger. (Default: 10.)
+    is enabled and the value is larger. (Default: 120.)
 
 ``--cache-pause``, ``--no-cache-pause``
     Whether the player should automatically pause when the cache runs low,
@@ -4272,6 +4292,42 @@ The following video options are currently all specific to ``--vo=gpu`` and
     as mpv's vulkan implementation currently does not try and protect textures
     against concurrent access.
 
+``--d3d11-warp=<yes|no|auto>``
+    Use WARP (Windows Advanced Rasterization Platform) with the D3D11 GPU
+    backend (default: auto). This is a high performance software renderer. By
+    default, it is only used when the system has no hardware adapters that
+    support D3D11. While the extended GPU features will work with WARP, they
+    can be very slow.
+
+``--d3d11-feature-level=<12_1|12_0|11_1|11_0|10_1|10_0|9_3|9_2|9_1>``
+    Select a specific feature level when using the D3D11 GPU backend. By
+    default, the highest available feature level is used. This option can be
+    used to select a lower feature level, which is mainly useful for debugging.
+    Most extended GPU features will not work at 9_x feature levels.
+
+``--d3d11-flip=<yes|no>``
+    Enable flip-model presentation, which avoids unnecessarily copying the
+    backbuffer by sharing surfaces with the DWM (default: yes). This may cause
+    performance issues with older drivers. If flip-model presentation is not
+    supported (for example, on Windows 7 without the platform update), mpv will
+    automatically fall back to the older bitblt presentation model.
+
+``--d3d11-sync-interval=<0..4>``
+    Schedule each frame to be presented for this number of VBlank intervals.
+    (default: 1) Setting to 1 will enable VSync, setting to 0 will disable it.
+
+``--d3d11va-zero-copy=<yes|no>``
+    By default, when using hardware decoding with ``--gpu-api=d3d11``, the
+    video image will be copied (GPU-to-GPU) from the decoder surface to a
+    shader resource. Set this option to avoid that copy by sampling directly
+    from the decoder image. This may increase performance and reduce power
+    usage, but can cause the image to be sampled incorrectly on the bottom and
+    right edges due to padding, and may invoke driver bugs, since Direct3D 11
+    technically does not allow sampling from a decoder surface (though most
+    drivers support it.)
+
+    Currently only relevant for ``--gpu-api=d3d11``.
+
 ``--spirv-compiler=<compiler>``
     Controls which compiler is used to translate GLSL to SPIR-V. This is
     (currently) only relevant for ``--gpu-api=vulkan``. The possible choices
@@ -4694,6 +4750,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
         Win32, using WGL for rendering and Direct3D 9Ex for presentation. Works
         on Nvidia and AMD. Newer Intel chips with the latest drivers may also
         work.
+    d3d11
+        Win32, with native Direct3D 11 rendering.
     x11
         X11/GLX
     x11vk
@@ -4728,6 +4786,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
         Allow only OpenGL (requires OpenGL 2.1+ or GLES 2.0+)
     vulkan
         Allow only Vulkan (requires a valid/working ``--spirv-compiler``)
+    d3d11
+        Allow only ``--gpu-context=d3d11``
 
 ``--opengl-es=<mode>``
     Controls which type of OpenGL context will be accepted:

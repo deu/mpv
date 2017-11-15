@@ -46,6 +46,8 @@ static int get_feature_levels(int max_fl, int min_fl,
                               const D3D_FEATURE_LEVEL **out)
 {
     static const D3D_FEATURE_LEVEL levels[] = {
+        D3D_FEATURE_LEVEL_12_1,
+        D3D_FEATURE_LEVEL_12_0,
         D3D_FEATURE_LEVEL_11_1,
         D3D_FEATURE_LEVEL_11_0,
         D3D_FEATURE_LEVEL_10_1,
@@ -71,7 +73,8 @@ static int get_feature_levels(int max_fl, int min_fl,
 }
 
 static HRESULT create_device(struct mp_log *log, bool warp, bool bgra,
-                             int max_fl, int min_fl, ID3D11Device **dev)
+                             bool debug, int max_fl, int min_fl,
+                             ID3D11Device **dev)
 {
     const D3D_FEATURE_LEVEL *levels;
     int levels_len = get_feature_levels(max_fl, min_fl, &levels);
@@ -82,7 +85,11 @@ static HRESULT create_device(struct mp_log *log, bool warp, bool bgra,
 
     D3D_DRIVER_TYPE type = warp ? D3D_DRIVER_TYPE_WARP
                                 : D3D_DRIVER_TYPE_HARDWARE;
-    UINT flags = bgra ? D3D11_CREATE_DEVICE_BGRA_SUPPORT : 0;
+    UINT flags = 0;
+    if (bgra)
+        flags |= D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    if (debug)
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
     return pD3D11CreateDevice(NULL, type, NULL, flags, levels, levels_len,
         D3D11_SDK_VERSION, dev, NULL, NULL);
 }
@@ -116,7 +123,7 @@ bool mp_d3d11_create_present_device(struct mp_log *log,
         max_fl = max_fl ? max_fl : D3D_FEATURE_LEVEL_11_0;
         min_fl = min_fl ? min_fl : D3D_FEATURE_LEVEL_9_1;
 
-        hr = create_device(log, warp, bgra, max_fl, min_fl, &dev);
+        hr = create_device(log, warp, bgra, opts->debug, max_fl, min_fl, &dev);
         if (SUCCEEDED(hr))
             break;
 
@@ -127,8 +134,19 @@ bool mp_d3d11_create_present_device(struct mp_log *log,
             continue;
         }
 
+        // Trying to create a D3D_FEATURE_LEVEL_12_0 device on Windows 8.1 or
+        // below will not succeed. Try an 11_1 device.
+        if (max_fl >= D3D_FEATURE_LEVEL_12_0 &&
+            min_fl <= D3D_FEATURE_LEVEL_11_1)
+        {
+            mp_dbg(log, "Failed to create 12_0+ device, trying 11_1\n");
+            max_fl = D3D_FEATURE_LEVEL_11_1;
+            bgra = true;
+            continue;
+        }
+
         // Trying to create a D3D_FEATURE_LEVEL_11_1 device on Windows 7
-        // without the platform update will not succeed. Try a 11_0 device.
+        // without the platform update will not succeed. Try an 11_0 device.
         if (max_fl >= D3D_FEATURE_LEVEL_11_1 &&
             min_fl <= D3D_FEATURE_LEVEL_11_0)
         {
@@ -380,4 +398,85 @@ done:
     SAFE_RELEASE(adapter);
     SAFE_RELEASE(dxgi_dev);
     return success;
+}
+
+struct mp_image *mp_d3d11_screenshot(IDXGISwapChain *swapchain)
+{
+    ID3D11Device *dev = NULL;
+    ID3D11DeviceContext *ctx = NULL;
+    ID3D11Texture2D *frontbuffer = NULL;
+    ID3D11Texture2D *staging = NULL;
+    struct mp_image *img = NULL;
+    HRESULT hr;
+
+    // Validate the swap chain. This screenshot method will only work on DXGI
+    // 1.2+ flip/sequential swap chains. It's probably not possible at all with
+    // discard swap chains, since by definition, the backbuffer contents is
+    // discarded on Present().
+    DXGI_SWAP_CHAIN_DESC scd;
+    hr = IDXGISwapChain_GetDesc(swapchain, &scd);
+    if (FAILED(hr))
+        goto done;
+    if (scd.SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL)
+        goto done;
+
+    // Get the last buffer that was presented with Present(). This should be
+    // the n-1th buffer for a swap chain of length n.
+    hr = IDXGISwapChain_GetBuffer(swapchain, scd.BufferCount - 1,
+        &IID_ID3D11Texture2D, (void**)&frontbuffer);
+    if (FAILED(hr))
+        goto done;
+
+    ID3D11Texture2D_GetDevice(frontbuffer, &dev);
+    ID3D11Device_GetImmediateContext(dev, &ctx);
+
+    D3D11_TEXTURE2D_DESC td;
+    ID3D11Texture2D_GetDesc(frontbuffer, &td);
+    if (td.SampleDesc.Count > 1)
+        goto done;
+
+    // Validate the backbuffer format and convert to an mpv IMGFMT
+    enum mp_imgfmt fmt;
+    switch (td.Format) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM: fmt = IMGFMT_BGR0; break;
+    case DXGI_FORMAT_R8G8B8A8_UNORM: fmt = IMGFMT_RGB0; break;
+    default:
+        goto done;
+    }
+
+    // Create a staging texture based on the frontbuffer with CPU access
+    td.BindFlags = 0;
+    td.MiscFlags = 0;
+    td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    td.Usage = D3D11_USAGE_STAGING;
+    hr = ID3D11Device_CreateTexture2D(dev, &td, 0, &staging);
+    if (FAILED(hr))
+        goto done;
+
+    ID3D11DeviceContext_CopyResource(ctx, (ID3D11Resource*)staging,
+        (ID3D11Resource*)frontbuffer);
+
+    // Attempt to map the staging texture to CPU-accessible memory
+    D3D11_MAPPED_SUBRESOURCE lock;
+    hr = ID3D11DeviceContext_Map(ctx, (ID3D11Resource*)staging, 0,
+                                 D3D11_MAP_READ, 0, &lock);
+    if (FAILED(hr))
+        goto done;
+
+    img = mp_image_alloc(fmt, td.Width, td.Height);
+    if (!img)
+        return NULL;
+    for (int i = 0; i < td.Height; i++) {
+        memcpy(img->planes[0] + img->stride[0] * i,
+               (char*)lock.pData + lock.RowPitch * i, td.Width * 4);
+    }
+
+    ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource*)staging, 0);
+
+done:
+    SAFE_RELEASE(frontbuffer);
+    SAFE_RELEASE(staging);
+    SAFE_RELEASE(ctx);
+    SAFE_RELEASE(dev);
+    return img;
 }

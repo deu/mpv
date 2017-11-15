@@ -13,8 +13,6 @@
  *
  * You should have received a copy of the GNU Lesser General Public
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
- *
- * Parts under HAVE_GPL are licensed under GNU General Public License.
  */
 
 #ifndef MPLAYER_CFG_MPLAYER_H
@@ -92,6 +90,8 @@ extern const struct m_obj_list ao_obj_list;
 extern const struct m_sub_options opengl_conf;
 extern const struct m_sub_options vulkan_conf;
 extern const struct m_sub_options spirv_conf;
+extern const struct m_sub_options d3d11_conf;
+extern const struct m_sub_options d3d11va_conf;
 extern const struct m_sub_options angle_conf;
 extern const struct m_sub_options cocoa_conf;
 
@@ -326,10 +326,7 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- demuxer options --------------------
 
-#if HAVE_GPL
-    // Possibly GPL due to d8fd7131bbcde029ab41799fd3162050b43f6848.
     OPT_CHOICE_OR_INT("frames", play_frames, 0, 0, INT_MAX, ({"all", -1})),
-#endif
 
     OPT_REL_TIME("start", play_start, 0),
     OPT_REL_TIME("end", play_end, 0),
@@ -703,6 +700,13 @@ const m_option_t mp_opts[] = {
 
 #if HAVE_VULKAN
     OPT_SUBSTRUCT("", vulkan_opts, vulkan_conf, 0),
+#endif
+
+#if HAVE_D3D11
+    OPT_SUBSTRUCT("", d3d11_opts, d3d11_conf, 0),
+#if HAVE_D3D_HWACCEL
+    OPT_SUBSTRUCT("", d3d11va_opts, d3d11va_conf, 0),
+#endif
 #endif
 
 #if HAVE_EGL_ANGLE_WIN32

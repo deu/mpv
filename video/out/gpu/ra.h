@@ -50,8 +50,9 @@ enum {
     RA_CAP_BUF_RO         = 1 << 5, // supports RA_VARTYPE_BUF_RO
     RA_CAP_BUF_RW         = 1 << 6, // supports RA_VARTYPE_BUF_RW
     RA_CAP_NESTED_ARRAY   = 1 << 7, // supports nested arrays
-    RA_CAP_SHARED_BINDING = 1 << 8, // sampler/image/buffer namespaces are disjoint
-    RA_CAP_GLOBAL_UNIFORM = 1 << 9, // supports using "naked" uniforms (not UBO)
+    RA_CAP_GLOBAL_UNIFORM = 1 << 8, // supports using "naked" uniforms (not UBO)
+    RA_CAP_GATHER         = 1 << 9, // supports textureGather in GLSL
+    RA_CAP_FRAGCOORD      = 1 << 10, // supports reading from gl_FragCoord
 };
 
 enum ra_ctype {
@@ -88,6 +89,10 @@ struct ra_format {
     // shader representation is given by the special_imgfmt_desc pointer.
     int special_imgfmt;
     const struct ra_imgfmt_desc *special_imgfmt_desc;
+
+    // This gives the GLSL image format corresponding to the format, if any.
+    // (e.g. rgba16ui)
+    const char *glsl_format;
 };
 
 struct ra_tex_params {
@@ -206,8 +211,8 @@ struct ra_renderpass_input {
     // RA_VARTYPE_IMG_W: image unit
     // RA_VARTYPE_BUF_* buffer binding point
     // Other uniforms: unused
-    // If RA_CAP_SHARED_BINDING is set, these may only be unique per input type.
-    // Otherwise, these must be unique for all input values.
+    // Bindings must be unique within each namespace, as specified by
+    // desc_namespace()
     int binding;
 };
 
@@ -396,6 +401,11 @@ struct ra_fns {
     // but must be implemented if ra.max_pushc_size > 0.
     struct ra_layout (*push_constant_layout)(struct ra_renderpass_input *inp);
 
+    // Returns an abstract namespace index for a given renderpass input type.
+    // This will always be a value >= 0 and < RA_VARTYPE_COUNT. This is used to
+    // figure out which inputs may share the same value of `binding`.
+    int (*desc_namespace)(enum ra_vartype type);
+
     // Clear the dst with the given color (rgba) and within the given scissor.
     // dst must have dst->params.render_dst==true. Content outside of the
     // scissor is preserved.
@@ -489,6 +499,8 @@ struct ra_imgfmt_desc {
     // this later.
     uint8_t components[4][4];
 };
+
+const char *ra_fmt_glsl_format(const struct ra_format *fmt);
 
 bool ra_get_imgfmt_desc(struct ra *ra, int imgfmt, struct ra_imgfmt_desc *out);
 

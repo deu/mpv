@@ -23,7 +23,15 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 
+#include "video/mp_image.h"
+
+#define D3D_FEATURE_LEVEL_12_0 (0xc000)
+#define D3D_FEATURE_LEVEL_12_1 (0xc100)
+
 struct d3d11_device_opts {
+    // Enable the debug layer (D3D11_CREATE_DEVICE_DEBUG)
+    bool debug;
+
     // Allow a software (WARP) adapter. Note, sometimes a software adapter will
     // be used even when allow_warp is false. This is because, on Windows 8 and
     // up, if there are no hardware adapters, Windows will pretend the WARP
@@ -69,5 +77,7 @@ struct d3d11_swapchain_opts {
 bool mp_d3d11_create_swapchain(ID3D11Device *dev, struct mp_log *log,
                                struct d3d11_swapchain_opts *opts,
                                IDXGISwapChain **swapchain_out);
+
+struct mp_image *mp_d3d11_screenshot(IDXGISwapChain *swapchain);
 
 #endif

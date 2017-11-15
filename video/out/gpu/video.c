@@ -894,20 +894,6 @@ static void init_video(struct gl_video *p)
     gl_video_setup_hooks(p);
 }
 
-// Release any texture mappings associated with the current frame.
-static void unmap_current_image(struct gl_video *p)
-{
-    struct video_image *vimg = &p->image;
-
-    if (vimg->hwdec_mapped) {
-        assert(p->hwdec_active && p->hwdec_mapper);
-        ra_hwdec_mapper_unmap(p->hwdec_mapper);
-        memset(vimg->planes, 0, sizeof(vimg->planes));
-        vimg->hwdec_mapped = false;
-        vimg->id = 0; // needs to be mapped again
-    }
-}
-
 static struct dr_buffer *gl_find_dr_buffer(struct gl_video *p, uint8_t *ptr)
 {
    for (int i = 0; i < p->num_dr_buffers; i++) {
@@ -948,10 +934,18 @@ again:;
 
 static void unref_current_image(struct gl_video *p)
 {
-    unmap_current_image(p);
-    p->image.id = 0;
+    struct video_image *vimg = &p->image;
 
-    mp_image_unrefp(&p->image.mpi);
+    if (vimg->hwdec_mapped) {
+        assert(p->hwdec_active && p->hwdec_mapper);
+        ra_hwdec_mapper_unmap(p->hwdec_mapper);
+        memset(vimg->planes, 0, sizeof(vimg->planes));
+        vimg->hwdec_mapped = false;
+    }
+
+    vimg->id = 0;
+
+    mp_image_unrefp(&vimg->mpi);
 
     // While we're at it, also garbage collect pending fences in here to
     // get it out of the way.
@@ -1725,7 +1719,8 @@ static void pass_dispatch_sample_polar(struct gl_video *p, struct scaler *scaler
 fallback:
     // Fall back to regular polar shader when compute shaders are unsupported
     // or the kernel is too big for shmem
-    pass_sample_polar(p->sc, scaler, img.components, p->ra->glsl_version);
+    pass_sample_polar(p->sc, scaler, img.components,
+                      p->ra->caps & RA_CAP_GATHER);
 }
 
 // Sample from image, with the src rectangle given by it.
@@ -3089,8 +3084,6 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
 
 done:
 
-    unmap_current_image(p);
-
     debug_check_gl(p, "after video rendering");
 
     if (p->osd) {
@@ -3269,14 +3262,19 @@ static bool pass_upload_image(struct gl_video *p, struct mp_image *mpi, uint64_t
     for (int n = 0; n < p->plane_count; n++) {
         struct texplane *plane = &vimg->planes[n];
 
-        plane->flipped = mpi->stride[0] < 0;
-
         struct ra_tex_upload_params params = {
             .tex = plane->tex,
             .src = mpi->planes[n],
             .invalidate = true,
             .stride = mpi->stride[n],
         };
+
+        plane->flipped = params.stride < 0;
+        if (plane->flipped) {
+            int h = mp_image_plane_h(mpi, n);
+            params.src = (char *)params.src + (h - 1) * params.stride;
+            params.stride = -params.stride;
+        }
 
         struct dr_buffer *mapped = gl_find_dr_buffer(p, mpi->planes[n]);
         if (mapped) {
@@ -3472,6 +3470,19 @@ static void check_gl_features(struct gl_video *p)
     if ((!have_compute || !have_ssbo) && p->opts.compute_hdr_peak) {
         p->opts.compute_hdr_peak = 0;
         MP_WARN(p, "Disabling HDR peak computation (no compute shaders).\n");
+    }
+    if (!(ra->caps & RA_CAP_FRAGCOORD) && p->opts.dither_depth >= 0 &&
+        p->opts.dither_algo != DITHER_NONE)
+    {
+        p->opts.dither_algo = DITHER_NONE;
+        MP_WARN(p, "Disabling dithering (no gl_FragCoord).\n");
+    }
+    if (!(ra->caps & RA_CAP_FRAGCOORD) &&
+        p->opts.alpha_mode == ALPHA_BLEND_TILES)
+    {
+        p->opts.alpha_mode = ALPHA_BLEND;
+        // Verbose, since this is the default setting
+        MP_VERBOSE(p, "Disabling alpha checkerboard (no gl_FragCoord).\n");
     }
 }
 

@@ -114,6 +114,8 @@ static bool vk_setup_formats(struct ra *ra)
         for (int i = 0; i < 4; i++)
             fmt->component_size[i] = fmt->component_depth[i] = vk_fmt->bits[i];
 
+        fmt->glsl_format = ra_fmt_glsl_format(fmt);
+
         MP_TARRAY_APPEND(ra, ra->formats, ra->num_formats, fmt);
     }
 
@@ -200,7 +202,11 @@ struct ra *ra_create_vk(struct mpvk_ctx *vk, struct mp_log *log)
         goto error;
 
     // UBO support is required
-    ra->caps |= RA_CAP_BUF_RO;
+    ra->caps |= RA_CAP_BUF_RO | RA_CAP_FRAGCOORD;
+
+    // textureGather is only supported in GLSL 400+
+    if (ra->glsl_version >= 400)
+        ra->caps |= RA_CAP_GATHER;
 
     // Try creating a shader storage buffer
     struct ra_buf_params ssbo_params = {
@@ -1585,6 +1591,11 @@ static void vk_clear(struct ra *ra, struct ra_tex *tex, float color[4],
     }
 }
 
+static int vk_desc_namespace(enum ra_vartype type)
+{
+    return 0;
+}
+
 #define VK_QUERY_POOL_SIZE (MPVK_MAX_STREAMING_DEPTH * 4)
 
 struct vk_timer {
@@ -1688,6 +1699,7 @@ static struct ra_fns ra_fns_vk = {
     .blit                   = vk_blit,
     .uniform_layout         = std140_layout,
     .push_constant_layout   = std430_layout,
+    .desc_namespace         = vk_desc_namespace,
     .renderpass_create      = vk_renderpass_create,
     .renderpass_destroy     = vk_renderpass_destroy_lazy,
     .renderpass_run         = vk_renderpass_run,

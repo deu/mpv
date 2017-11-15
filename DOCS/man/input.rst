@@ -1264,9 +1264,14 @@ Property list
     Each entry in ``seekable-ranges`` represents a region in the demuxer cache
     that can be seeked to. If there are multiple demuxers active, this only
     returns information about the "main" demuxer, but might be changed in
-    future to return unified information about all demuxers. There is currently
-    only at most 1 range. Should the player implement caching for multiple
-    ranges, the order of the ranges will be unspecified and arbitrary.
+    future to return unified information about all demuxers. The ranges are in
+    arbitrary order. Often, ranges will overlap for a bit, before being joined.
+    In broken corner cases, ranges may overlap all over the place.
+
+    The end of a seek range is usually smaller than the value returned by the
+    ``demuxer-cache-time`` property, because that property returns the guessed
+    buffering amount, while the seek ranges represent the buffered data that
+    can actually be used for cached seeking.
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -1279,6 +1284,27 @@ Property list
                 MPV_FORMAT_NODE_MAP
                     "start"             MPV_FORMAT_DOUBLE
                     "end"               MPV_FORMAT_DOUBLE
+
+    Other fields (might be changed or removed in the future):
+
+    ``eof``
+        True if the reader thread has hit the end of the file.
+
+    ``underrun``
+        True if the reader thread could not satisfy a decoder's request for a
+        new packet.
+
+    ``idle``
+        True if the thread is currently not reading.
+
+    ``total-bytes``
+        Sum of packet bytes (plus some overhead estimation) of the entire packet
+        queue, including cached seekable ranges.
+
+    ``fw-bytes``
+        Sum of packet bytes (plus some overhead estimation) of the readahead
+        packet queue (packets between current decoder reader positions and
+        demuxer position).
 
 ``demuxer-via-network``
     Returns ``yes`` if the stream demuxed via the main demuxer is most likely

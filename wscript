@@ -176,7 +176,7 @@ main_dependencies = [
         'name': 'win32-desktop',
         'desc': 'win32 desktop APIs',
         'deps': '(os-win32 || os-cygwin) && !uwp',
-        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt', 'dwmapi']),
+        'func': check_cc(lib=['winmm', 'gdi32', 'ole32', 'uuid', 'avrt', 'dwmapi', 'version']),
     }, {
         'name': '--win32-internal-pthreads',
         'desc': 'internal pthread wrapper for win32 (Vista+)',
@@ -421,7 +421,6 @@ iconv support use --disable-iconv.",
         'name': '--libarchive',
         'desc': 'libarchive wrapper for reading zip files and more',
         'func': check_pkg_config('libarchive >= 3.0.0'),
-        'default': 'disable',
     }
 ]
 
@@ -754,6 +753,19 @@ video_output_features = [
         'deps': 'win32-desktop && gpl',
         'func': check_cc(header_name='d3d9.h'),
     }, {
+        'name': '--shaderc',
+        'desc': 'libshaderc SPIR-V compiler',
+        'func': check_cc(header_name='shaderc/shaderc.h', lib='shaderc_shared'),
+    }, {
+        'name': '--crossc',
+        'desc': 'libcrossc SPIR-V translator',
+        'func': check_pkg_config('crossc'),
+    }, {
+        'name': '--d3d11',
+        'desc': 'Direct3D 11 video output',
+        'deps': 'win32-desktop && shaderc && crossc',
+        'func': check_cc(header_name=['d3d11_1.h', 'dxgi1_2.h']),
+    }, {
         # We need MMAL/bcm_host/dispmanx APIs. Also, most RPI distros require
         # every project to hardcode the paths to the include directories. Also,
         # these headers are so broken that they spam tons of warnings by merely
@@ -805,11 +817,7 @@ video_output_features = [
     }, {
         'name': '--vulkan',
         'desc':  'Vulkan context support',
-        'func': check_cc(header_name='vulkan/vulkan.h', lib='vulkan'),
-    }, {
-        'name': '--shaderc',
-        'desc': 'libshaderc SPIR-V compiler',
-        'func': check_cc(header_name='shaderc/shaderc.h', lib='shaderc_shared'),
+        'func': check_pkg_config('vulkan'),
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
@@ -852,7 +860,7 @@ hwaccel_features = [
         'desc': 'CUDA hwaccel',
         'deps': 'gl',
         'func': check_cc(fragment=load_fragment('cuda.c'),
-                         use='libav'),
+                         use='libavcodec'),
     }
 ]
 

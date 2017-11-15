@@ -143,7 +143,7 @@ static void polar_sample(struct gl_shader_cache *sc, struct scaler *scaler,
 }
 
 void pass_sample_polar(struct gl_shader_cache *sc, struct scaler *scaler,
-                       int components, int glsl_version)
+                       int components, bool sup_gather)
 {
     GLSL(color = vec4(0.0);)
     GLSLF("{\n");
@@ -167,8 +167,7 @@ void pass_sample_polar(struct gl_shader_cache *sc, struct scaler *scaler,
             // exactly when all four texels are within bounds
             bool use_gather = sqrt(x*x + y*y) < scaler->kernel->radius_cutoff;
 
-            // textureGather is only supported in GLSL 400+
-            if (glsl_version < 400)
+            if (!sup_gather)
                 use_gather = false;
 
             if (use_gather) {
@@ -627,7 +626,7 @@ static void pass_tone_map(struct gl_shader_cache *sc, float ref_peak,
         GLSLF("float b = (j*j - 2.0*j*sig_peak + sig_peak) / "
               "max(1e-6, sig_peak - 1.0);\n");
         GLSLF("float scale = (b*b + 2.0*b*j + j*j) / (b-a);\n");
-        GLSL(sig = mix(sig, scale * (sig + a) / (sig + b), sig > j);)
+        GLSL(sig = sig > j ? scale * (sig + a) / (sig + b) : sig;)
         break;
 
     case TONE_MAPPING_REINHARD: {
