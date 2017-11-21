@@ -5,6 +5,7 @@ New branches:
 - `deu_slavemode` **[discontinued]**: A slave mode. Do not use.
 - `deu_achans` **[merged to master]**: -achans option ([commit](https://github.com/deuiore/mpv/commit/ac158b3ec8fc3fa88b2d5cde9775b4214903762e)); display number of audio channels in the OSD ([commit](https://github.com/deuiore/mpv/commit/9feb8758d0a9f3a839b97c6e698a35293cbd5563)).
 - `deu_orderedchapters` **[discontinued]**: Disable the recursive resolution of ordered chapters ([commit](https://github.com/deuiore/mpv/commit/17a7123b025632ccc436dae4448d618264330074)). Solved by upstream ([commit](https://github.com/mpv-player/mpv/commit/18681a7dd26cacac9a9df9aac696d5c4f172b34d)).
+- `deu_build` **[merged to master]**: Added submodules for [ffmpeg-mpv](https://github.com/mpv-player/ffmpeg-mpv), [libass](https://github.com/libass/libass) and [fribidi](https://github.com/fribidi/fribidi); and a build.sh script.
 
 Also disabled Travis CI.
 
