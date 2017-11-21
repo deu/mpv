@@ -1,0 +1,10 @@
+[submodule "external/ffmpeg-mpv"]
+	path = external/ffmpeg-mpv
+	url = https://github.com/mpv-player/ffmpeg-mpv.git
+[submodule "external/libass"]
+	path = external/libass
+	url = https://github.com/libass/libass.git
+[submodule "external/fribidi"]
+	path = external/fribidi
+    url = https://github.com/fribidi/fribidi.git
+    ignore = dirty
