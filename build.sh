@@ -28,7 +28,7 @@ pushd "external"
 BUILD_LIBS="$(pwd)/build_libs"
 
 if choice "Build ffmpeg?"; then
-    pushd "ffmpeg-mpv"
+    pushd "ffmpeg"
     git pull
     if choice "--- Reconfigure ffmpeg?"; then
         make distclean
@@ -43,7 +43,7 @@ if choice "Build ffmpeg?"; then
     fi
     make
     make install
-    popd # ffmpeg-mpv
+    popd # ffmpeg
 fi
 
 if choice "Build libass?"; then
