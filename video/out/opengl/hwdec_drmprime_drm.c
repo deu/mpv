@@ -48,7 +48,7 @@ struct priv {
     struct mp_log *log;
 
     struct mp_image_params params;
-  
+
     struct drm_atomic_context *ctx;
     struct drm_frame current_frame, old_frame;
 
@@ -182,7 +182,7 @@ static int overlay_frame(struct ra_hwdec *hw, struct mp_image *hw_image,
 
     set_current_frame(hw, &next_frame);
     return 0;
-    
+
  fail:
     drm_prime_destroy_framebuffer(p->log, p->ctx->fd, &next_frame.fb);
     return ret;
@@ -205,6 +205,9 @@ static int init(struct ra_hwdec *hw)
     struct priv *p = hw->priv;
     int drm_overlay;
 
+    if (!ra_is_gl(hw->ra))
+        return -1;
+
     p->log = hw->log;
 
     void *tmp = talloc_new(NULL);
@@ -217,7 +220,7 @@ static int init(struct ra_hwdec *hw)
             gl ? (struct mpv_opengl_cb_drm_params *)
             mpgl_get_native_display(gl, "opengl-cb-drm-params") : NULL;
     if (!params) {
-        MP_ERR(hw, "Could not get drm interop info.\n");
+        MP_VERBOSE(hw, "Could not get drm interop info.\n");
         goto err;
     }
 
@@ -257,7 +260,6 @@ err:
 
 const struct ra_hwdec_driver ra_hwdec_drmprime_drm = {
     .name = "drmprime-drm",
-    .api = HWDEC_RKMPP,
     .priv_size = sizeof(struct priv),
     .imgfmts = {IMGFMT_DRMPRIME, 0},
     .init = init,

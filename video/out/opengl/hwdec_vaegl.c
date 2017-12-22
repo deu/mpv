@@ -128,7 +128,7 @@ struct priv {
     EGLImageKHR images[4];
     VAImage current_image;
     bool buffer_acquired;
-#if 0
+#if VA_CHECK_VERSION(1, 1, 0)
     bool esh_not_implemented;
     VADRMPRIMESurfaceDescriptor desc;
     bool surface_acquired;
@@ -215,7 +215,7 @@ static void mapper_unmap(struct ra_hwdec_mapper *mapper)
         p->images[n] = 0;
     }
 
-#if 0
+#if VA_CHECK_VERSION(1, 1, 0)
     if (p->surface_acquired) {
         for (int n = 0; n < p->desc.num_objects; n++)
             close(p->desc.objects[n].fd);
@@ -344,7 +344,7 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
     VAImage *va_image = &p->current_image;
     VADisplay *display = p_owner->display;
 
-#if 0
+#if VA_CHECK_VERSION(1, 1, 0)
     if (p->esh_not_implemented)
         goto esh_failed;
 
@@ -497,7 +497,7 @@ static void determine_working_formats(struct ra_hwdec *hw)
     AVHWFramesConstraints *fc =
             av_hwdevice_get_hwframe_constraints(p->ctx->av_device_ref, NULL);
     if (!fc) {
-        MP_WARN(hw, "failed to retrieve libavutil frame constaints\n");
+        MP_WARN(hw, "failed to retrieve libavutil frame constraints\n");
         goto done;
     }
     for (int n = 0; fc->valid_sw_formats[n] != AV_PIX_FMT_NONE; n++) {
@@ -544,7 +544,6 @@ done:
 const struct ra_hwdec_driver ra_hwdec_vaegl = {
     .name = "vaapi-egl",
     .priv_size = sizeof(struct priv_owner),
-    .api = HWDEC_VAAPI,
     .imgfmts = {IMGFMT_VAAPI, 0},
     .init = init,
     .uninit = uninit,

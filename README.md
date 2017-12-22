@@ -18,20 +18,29 @@ Also disabled Travis CI.
 --------------
 
 
+* [External links](#external-links)
 * [Overview](#overview)
+* [System requirements](#system-requirements)
 * [Downloads](#downloads)
 * [Changelog](#changelog)
 * [Compilation](#compilation)
 * [FFmpeg vs. Libav](#ffmpeg-vs-libav)
+* [FFmpeg ABI compatibility](#ffmpeg-abi-compatibility)
 * [Release cycle](#release-cycle)
 * [Bug reports](#bug-reports)
 * [Contributing](#contributing)
 * [Relation to MPlayer and mplayer2](#relation-to-mplayer-and-mplayer2)
+* [License](#license)
+* [Contact](#contact)
+
+
+## External links
+
+
 * [Wiki](https://github.com/mpv-player/mpv/wiki)
 * [FAQ](https://github.com/mpv-player/mpv/wiki/FAQ)
-* [Man pages](http://mpv.io/manual/master/)
-* [Contact](#contact)
-* [License](#license)
+* [Manual](http://mpv.io/manual/master/)
+
 
 ## Overview
 
@@ -43,10 +52,10 @@ Releases can be found on the [release list][releases].
 
 ## System requirements
 
-- A not too ancient Linux, or Windows 7 or later, or OSX 10.8 or later.
-- A somewhat capable CPU. Hardware decoding might sometimes help if the CPU
-  is too slow to decode video realtime, but must be explicitly enabled with
-  the `--hwdec` option.
+- A not too ancient Linux, Windows 7 or later, or OSX 10.8 or later.
+- A somewhat capable CPU. Hardware decoding might help if the CPU is too slow to
+  decode video in realtime, but must be explicitly enabled with the `--hwdec`
+  option.
 - A not too crappy GPU. mpv is not intended to be used with bad GPUs. There are
   many caveats with drivers or system compositors causing tearing, stutter,
   etc. On Windows, you might want to make sure the graphics drivers are
@@ -58,7 +67,7 @@ Releases can be found on the [release list][releases].
 
 
 For semi-official builds and third-party packages please see
-[mpv.io](http://mpv.io/installation/).
+[mpv.io/installation](http://mpv.io/installation/).
 
 ## Changelog
 
@@ -80,9 +89,9 @@ Changes to the default key bindings are indicated in
 Compiling with full features requires development files for several
 external libraries. Below is a list of some important requirements.
 
-The mpv build system uses *waf*, but we don't store it in your source tree. The
-script './bootstrap.py' will download the latest version of waf that was tested
-with the build system.
+The mpv build system uses [waf](https://waf.io/), but we don't store it in the
+repository. The `./bootstrap.py` script will download the latest version
+of waf that was tested with the build system.
 
 For a list of the available build options use `./waf configure --help`. If
 you think you have support for some feature installed but configure fails to
@@ -113,7 +122,7 @@ Essential dependencies (incomplete list):
   libGL, GLX, EGL, xv, ...)
 - Audio output development headers (libasound/ALSA, pulseaudio)
 - FFmpeg libraries (libavutil libavcodec libavformat libswscale libavfilter
-  and either libswresample or libavresample) from ffmpeg-mpv or Libav
+  and either libswresample or libavresample)
 - zlib
 - iconv (normally provided by the system libc)
 - libass (OSD, OSC, text subtitles)
@@ -139,11 +148,10 @@ FFmpeg dependencies:
 - Libav also works, but some features will not work. (See section below.)
 
 Most of the above libraries are available in suitable versions on normal
-Linux distributions. However, FFmpeg is an exception - [ffmpeg-mpv][ffmpeg-mpv]
-or Libav git master is required. For that reason you may want to use
-the separately available build wrapper ([mpv-build][mpv-build]) that first
-compiles FFmpeg libraries and libass, and then compiles the player statically
-linked against those.
+Linux distributions. For ease of compiling the latest git master of everything,
+you may wish to use the separately available build wrapper ([mpv-build][mpv-build])
+which first compiles FFmpeg libraries and libass, and then compiles the player
+statically linked against those.
 
 If you want to build a Windows binary, you either have to use MSYS2 and MinGW,
 or cross-compile from Linux with MinGW. See
@@ -157,17 +165,6 @@ Generally, mpv should work with the latest release as well as the git version
 of both FFmpeg and Libav. But FFmpeg is preferred, and some mpv features work
 with FFmpeg only (subtitle formats in particular).
 
-
-## Preferred FFmpeg version
-
-Only [ffmpeg-mpv][ffmpeg-mpv] is supported. Upstream FFmpeg can be forced by
-passing a certain switch to configure, but compilation or runtime behavior
-might be broken at times.
-
-_If_ you force upstream FFmpeg, and it doesn't work, please contact upstream
-FFmpeg for help, instead of mpv. See
-[FFmpeg contact][http://ffmpeg.org/contact.html#MailingLists] how to contact
-FFmpeg upstream.
 
 ## FFmpeg ABI compatibility
 
@@ -259,4 +256,3 @@ only if discretion is required.
 [api-changes]: https://github.com/mpv-player/mpv/blob/master/DOCS/client-api-changes.rst
 [restore-old-bindings]: https://github.com/mpv-player/mpv/blob/master/etc/restore-old-bindings.conf
 [contribute.md]: https://github.com/mpv-player/mpv/blob/master/DOCS/contribute.md
-[ffmpeg-mpv]: https://github.com/mpv-player/ffmpeg-mpv

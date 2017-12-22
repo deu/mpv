@@ -69,8 +69,7 @@ static int init(struct ra_hwdec *hw)
         return -1;
 
     p->hwctx = (struct mp_hwdec_ctx){
-        .type = HWDEC_VIDEOTOOLBOX,
-        .ctx = &p->hwctx,
+        .driver_name = hw->driver->name,
     };
 
     av_hwdevice_ctx_create(&p->hwctx.av_device_ref, AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
@@ -85,8 +84,7 @@ static void uninit(struct ra_hwdec *hw)
 {
     struct priv_owner *p = hw->priv;
 
-    if (p->hwctx.ctx)
-        hwdec_devices_remove(hw->devs, &p->hwctx);
+    hwdec_devices_remove(hw->devs, &p->hwctx);
     av_buffer_unref(&p->hwctx.av_device_ref);
 }
 
@@ -262,7 +260,6 @@ static void mapper_uninit(struct ra_hwdec_mapper *mapper)
 const struct ra_hwdec_driver ra_hwdec_videotoolbox = {
     .name = "videotoolbox",
     .priv_size = sizeof(struct priv_owner),
-    .api = HWDEC_VIDEOTOOLBOX,
     .imgfmts = {IMGFMT_VIDEOTOOLBOX, 0},
     .init = init,
     .uninit = uninit,

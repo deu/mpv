@@ -520,7 +520,7 @@ static void free_empty_cached_ranges(struct demux_internal *in)
 
         for (int n = in->num_ranges - 2; n >= 0; n--) {
             struct demux_cached_range *range = in->ranges[n];
-            if (range->seek_start == MP_NOPTS_VALUE) {
+            if (range->seek_start == MP_NOPTS_VALUE || !in->seekable_cache) {
                 clear_cached_range(in, range);
                 MP_TARRAY_REMOVE_AT(in->ranges, in->num_ranges, n);
             } else {
@@ -560,20 +560,6 @@ static void update_stream_selection_state(struct demux_internal *in,
 
     ds_clear_reader_state(ds);
 
-    // Make sure any stream reselection or addition is reflected in the seek
-    // ranges, and also get rid of data that is not needed anymore (or
-    // rather, which can't be kept consistent).
-    for (int n = 0; n < in->num_ranges; n++) {
-        struct demux_cached_range *range = in->ranges[n];
-
-        if (!ds->selected)
-            clear_queue(range->streams[ds->index]);
-
-        update_seek_ranges(range);
-    }
-
-    free_empty_cached_ranges(in);
-
     // We still have to go over the whole stream list to update ds->eager for
     // other streams too, because they depend on other stream's selections.
 
@@ -597,6 +583,21 @@ static void update_stream_selection_state(struct demux_internal *in,
                 s->eager = false;
         }
     }
+
+    // Make sure any stream reselection or addition is reflected in the seek
+    // ranges, and also get rid of data that is not needed anymore (or
+    // rather, which can't be kept consistent). This has to happen after we've
+    // updated all the subtle state (like s->eager).
+    for (int n = 0; n < in->num_ranges; n++) {
+        struct demux_cached_range *range = in->ranges[n];
+
+        if (!ds->selected)
+            clear_queue(range->streams[ds->index]);
+
+        update_seek_ranges(range);
+    }
+
+    free_empty_cached_ranges(in);
 }
 
 void demux_set_ts_offset(struct demuxer *demuxer, double offset)
@@ -1937,6 +1938,7 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         .is_network = stream->is_network,
         .access_references = opts->access_references,
         .events = DEMUX_EVENT_ALL,
+        .duration = -1,
     };
     demuxer->seekable = stream->seekable;
     if (demuxer->stream->underlying && !demuxer->stream->underlying->seekable)
@@ -2004,6 +2006,13 @@ static struct demuxer *open_given_type(struct mpv_global *global,
         demux_update(demuxer);
         stream_control(demuxer->stream, STREAM_CTRL_SET_READAHEAD,
                        &(int){params ? params->initial_readahead : false});
+        int seekable = opts->seekable_cache;
+        if (demuxer->is_network || stream->caching) {
+            in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);
+            if (seekable < 0)
+                seekable = 1;
+        }
+        in->seekable_cache = seekable == 1;
         if (!(params && params->disable_timeline)) {
             struct timeline *tl = timeline_load(global, log, demuxer);
             if (tl) {
@@ -2019,13 +2028,6 @@ static struct demuxer *open_given_type(struct mpv_global *global,
                 }
             }
         }
-        int seekable = opts->seekable_cache;
-        if (demuxer->is_network || stream->caching) {
-            in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);
-            if (seekable < 0)
-                seekable = 1;
-        }
-        in->seekable_cache = seekable == 1;
         return demuxer;
     }
 
@@ -2473,6 +2475,7 @@ void demuxer_select_track(struct demuxer *demuxer, struct sh_stream *stream,
     pthread_mutex_lock(&in->lock);
     // don't flush buffers if stream is already selected / unselected
     if (ds->selected != selected) {
+        MP_VERBOSE(in, "%sselect track %d\n", selected ? "" : "de", stream->index);
         ds->selected = selected;
         update_stream_selection_state(in, ds);
         in->tracks_switched = true;
@@ -2555,6 +2558,24 @@ int demuxer_add_chapter(demuxer_t *demuxer, char *name,
     mp_tags_set_str(new.metadata, "TITLE", name);
     MP_TARRAY_APPEND(demuxer, demuxer->chapters, demuxer->num_chapters, new);
     return demuxer->num_chapters - 1;
+}
+
+void demux_disable_cache(demuxer_t *demuxer)
+{
+    struct demux_internal *in = demuxer->in;
+    assert(demuxer == in->d_user);
+
+    pthread_mutex_lock(&in->lock);
+    if (in->seekable_cache) {
+        MP_VERBOSE(demuxer, "disabling persistent packet cache\n");
+        in->seekable_cache = false;
+
+        // Get rid of potential buffered ranges floating around.
+        free_empty_cached_ranges(in);
+        // Get rid of potential old packets in the current range.
+        prune_old_packets(in);
+    }
+    pthread_mutex_unlock(&in->lock);
 }
 
 // must be called not locked

@@ -25,7 +25,7 @@
 #include "options/m_config.h"
 #include "osdep/windows_utils.h"
 #include "video/hwdec.h"
-#include "video/decode/d3d.h"
+#include "video/d3d.h"
 #include "video/out/d3d11/ra_d3d11.h"
 #include "video/out/gpu/hwdec.h"
 
@@ -66,8 +66,7 @@ struct priv {
 static void uninit(struct ra_hwdec *hw)
 {
     struct priv_owner *p = hw->priv;
-    if (p->hwctx.ctx)
-        hwdec_devices_remove(hw->devs, &p->hwctx);
+    hwdec_devices_remove(hw->devs, &p->hwctx);
     SAFE_RELEASE(p->device);
     SAFE_RELEASE(p->device1);
 }
@@ -106,9 +105,7 @@ static int init(struct ra_hwdec *hw)
     ID3D10Multithread_Release(multithread);
 
     p->hwctx = (struct mp_hwdec_ctx){
-        .type = HWDEC_D3D11VA,
         .driver_name = hw->driver->name,
-        .ctx = p->device,
         .av_device_ref = d3d11_wrap_device_ref(p->device),
     };
     hwdec_devices_add(hw->devs, &p->hwctx);
@@ -239,7 +236,6 @@ static void mapper_unmap(struct ra_hwdec_mapper *mapper)
 const struct ra_hwdec_driver ra_hwdec_d3d11va = {
     .name = "d3d11va",
     .priv_size = sizeof(struct priv_owner),
-    .api = HWDEC_D3D11VA,
     .imgfmts = {IMGFMT_D3D11VA, IMGFMT_D3D11NV12, 0},
     .init = init,
     .uninit = uninit,

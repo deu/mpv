@@ -438,11 +438,11 @@ void execute_queued_seek(struct MPContext *mpctx)
     }
 }
 
-// -1 if unknown
+// NOPTS (i.e. <0) if unknown
 double get_time_length(struct MPContext *mpctx)
 {
     struct demuxer *demuxer = mpctx->demuxer;
-    return demuxer ? demuxer->duration : -1;
+    return demuxer && demuxer->duration >= 0 ? demuxer->duration : MP_NOPTS_VALUE;
 }
 
 double get_current_time(struct MPContext *mpctx)
@@ -482,7 +482,7 @@ double get_current_pos_ratio(struct MPContext *mpctx, bool use_range)
     double start = 0;
     double len = get_time_length(mpctx);
     if (use_range) {
-        double startpos = rel_time_to_abs(mpctx, mpctx->opts->play_start);
+        double startpos = get_play_start_pts(mpctx);
         double endpos = get_play_end_pts(mpctx);
         if (endpos == MP_NOPTS_VALUE || endpos > MPMAX(0, len))
             endpos = MPMAX(0, len);
@@ -768,20 +768,29 @@ static void handle_loop_file(struct MPContext *mpctx)
         // Assumes execute_queued_seek() happens before next audio/video is
         // attempted to be decoded or filtered.
         mpctx->stop_play = KEEP_PLAYING;
-        double start = 0;
-        if (opts->ab_loop[0] != MP_NOPTS_VALUE)
-            start = opts->ab_loop[0];
+        double start = get_ab_loop_start_time(mpctx);
+        if (start == MP_NOPTS_VALUE)
+            start = 0;
         mark_seek(mpctx);
         queue_seek(mpctx, MPSEEK_ABSOLUTE, start, MPSEEK_EXACT,
                    MPSEEK_FLAG_NOFLUSH);
     }
 
-    if (opts->loop_file && mpctx->stop_play == AT_END_OF_FILE) {
-        mpctx->stop_play = KEEP_PLAYING;
-        set_osd_function(mpctx, OSD_FFW);
-        queue_seek(mpctx, MPSEEK_ABSOLUTE, 0, MPSEEK_DEFAULT, MPSEEK_FLAG_NOFLUSH);
-        if (opts->loop_file > 0)
-            opts->loop_file--;
+    // Do not attempt to loop-file if --ab-loop is active.
+    else if (opts->loop_file && mpctx->stop_play == AT_END_OF_FILE) {
+        double play_start_pts = get_play_start_pts(mpctx);
+        if (play_start_pts == MP_NOPTS_VALUE)
+            play_start_pts = 0;
+        double play_end_pts = get_play_end_pts(mpctx);
+        if (play_end_pts == MP_NOPTS_VALUE || play_start_pts < play_end_pts){
+            mpctx->stop_play = KEEP_PLAYING;
+            set_osd_function(mpctx, OSD_FFW);
+            queue_seek(mpctx, MPSEEK_ABSOLUTE, play_start_pts, MPSEEK_EXACT,
+                        MPSEEK_FLAG_NOFLUSH);
+            if (opts->loop_file > 0)
+                opts->loop_file--;
+        }
+
     }
 }
 

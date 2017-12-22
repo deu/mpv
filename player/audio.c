@@ -128,6 +128,57 @@ fail:
     mp_notify(mpctx, MP_EVENT_CHANGE_ALL, NULL);
 }
 
+static int recreate_audio_filters(struct MPContext *mpctx)
+{
+    assert(mpctx->ao_chain);
+
+    struct af_stream *afs = mpctx->ao_chain->af;
+    if (afs->initialized < 1 && af_init(afs) < 0)
+        goto fail;
+
+    recreate_speed_filters(mpctx);
+    if (afs->initialized < 1 && af_init(afs) < 0)
+        goto fail;
+
+    if (mpctx->opts->softvol == SOFTVOL_NO)
+        MP_ERR(mpctx, "--softvol=no is not supported anymore.\n");
+
+    mp_notify(mpctx, MPV_EVENT_AUDIO_RECONFIG, NULL);
+
+    return 0;
+
+fail:
+    MP_ERR(mpctx, "Couldn't find matching filter/ao format!\n");
+    return -1;
+}
+
+int reinit_audio_filters(struct MPContext *mpctx)
+{
+    struct ao_chain *ao_c = mpctx->ao_chain;
+    if (!ao_c)
+        return 0;
+
+    double delay = 0;
+    if (ao_c->af->initialized > 0)
+        delay = af_calc_delay(ao_c->af);
+
+    af_uninit(ao_c->af);
+    if (recreate_audio_filters(mpctx) < 0)
+        return -1;
+
+    // Only force refresh if the amount of dropped buffered data is going to
+    // cause "issues" for the A/V sync logic.
+    if (mpctx->audio_status == STATUS_PLAYING && delay > 0.2)
+        issue_refresh_seek(mpctx, MPSEEK_EXACT);
+    return 1;
+}
+
+#else /* HAVE_LIBAV */
+
+int reinit_audio_filters(struct MPContext *mpctx) { return 0; }
+
+#endif /* else HAVE_LIBAF */
+
 static double db_gain(double db)
 {
     return pow(10.0, db/20.0);
@@ -136,11 +187,13 @@ static double db_gain(double db)
 static float compute_replaygain(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
-    struct ao_chain *ao_c = mpctx->ao_chain;
 
     float rgain = 1.0;
 
-    struct replaygain_data *rg = ao_c->af->replaygain_data;
+    struct replaygain_data *rg = NULL;
+    struct track *track = mpctx->current_track[0][STREAM_AUDIO];
+    if (track)
+        rg = track->stream->codec->replaygain_data;
     if (opts->rgain_mode && rg) {
         MP_VERBOSE(mpctx, "Replaygain: Track=%f/%f Album=%f/%f\n",
                    rg->track_gain, rg->track_peak,
@@ -177,7 +230,7 @@ void audio_update_volume(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
     struct ao_chain *ao_c = mpctx->ao_chain;
-    if (!ao_c || ao_c->af->initialized < 1)
+    if (!ao_c || !ao_c->ao)
         return;
 
     float gain = MPMAX(opts->softvol_volume / 100.0, 0);
@@ -186,113 +239,8 @@ void audio_update_volume(struct MPContext *mpctx)
     if (opts->softvol_mute == 1)
         gain = 0.0;
 
-    if (!af_control_any_rev(ao_c->af, AF_CONTROL_SET_VOLUME, &gain)) {
-        if (gain == 1.0)
-            return;
-        MP_VERBOSE(mpctx, "Inserting volume filter.\n");
-        char *args[] = {"warn", "no", NULL};
-        if (!(af_add(ao_c->af, "volume", "softvol", args)
-              && af_control_any_rev(ao_c->af, AF_CONTROL_SET_VOLUME, &gain)))
-            MP_ERR(mpctx, "No volume control available.\n");
-    }
+    ao_set_gain(ao_c->ao, gain);
 }
-
-/* NOTE: Currently the balance code is seriously buggy: it always changes
- * the af_pan mapping between the first two input channels and first two
- * output channels to particular values. These values make sense for an
- * af_pan instance that was automatically inserted for balance control
- * only and is otherwise an identity transform, but if the filter was
- * there for another reason, then ignoring and overriding the original
- * values is completely wrong.
- */
-void audio_update_balance(struct MPContext *mpctx)
-{
-    struct MPOpts *opts = mpctx->opts;
-    struct ao_chain *ao_c = mpctx->ao_chain;
-    if (!ao_c || ao_c->af->initialized < 1)
-        return;
-
-    float val = opts->balance;
-
-    if (af_control_any_rev(ao_c->af, AF_CONTROL_SET_PAN_BALANCE, &val))
-        return;
-
-    if (val == 0)
-        return;
-
-    struct af_instance *af_pan_balance;
-    if (!(af_pan_balance = af_add(ao_c->af, "pan", "autopan", NULL))) {
-        MP_ERR(mpctx, "No balance control available.\n");
-        return;
-    }
-
-    /* make all other channels pass through since by default pan blocks all */
-    for (int i = 2; i < AF_NCH; i++) {
-        float level[AF_NCH] = {0};
-        level[i] = 1.f;
-        af_control_ext_t arg_ext = { .ch = i, .arg = level };
-        af_pan_balance->control(af_pan_balance, AF_CONTROL_SET_PAN_LEVEL,
-                                &arg_ext);
-    }
-
-    af_pan_balance->control(af_pan_balance, AF_CONTROL_SET_PAN_BALANCE, &val);
-}
-
-static int recreate_audio_filters(struct MPContext *mpctx)
-{
-    assert(mpctx->ao_chain);
-
-    struct af_stream *afs = mpctx->ao_chain->af;
-    if (afs->initialized < 1 && af_init(afs) < 0)
-        goto fail;
-
-    recreate_speed_filters(mpctx);
-    if (afs->initialized < 1 && af_init(afs) < 0)
-        goto fail;
-
-    if (mpctx->opts->softvol == SOFTVOL_NO)
-        MP_ERR(mpctx, "--softvol=no is not supported anymore.\n");
-
-    audio_update_volume(mpctx);
-    audio_update_balance(mpctx);
-
-    mp_notify(mpctx, MPV_EVENT_AUDIO_RECONFIG, NULL);
-
-    return 0;
-
-fail:
-    MP_ERR(mpctx, "Couldn't find matching filter/ao format!\n");
-    return -1;
-}
-
-int reinit_audio_filters(struct MPContext *mpctx)
-{
-    struct ao_chain *ao_c = mpctx->ao_chain;
-    if (!ao_c)
-        return 0;
-
-    double delay = 0;
-    if (ao_c->af->initialized > 0)
-        delay = af_calc_delay(ao_c->af);
-
-    af_uninit(ao_c->af);
-    if (recreate_audio_filters(mpctx) < 0)
-        return -1;
-
-    // Only force refresh if the amount of dropped buffered data is going to
-    // cause "issues" for the A/V sync logic.
-    if (mpctx->audio_status == STATUS_PLAYING && delay > 0.2)
-        issue_refresh_seek(mpctx, MPSEEK_EXACT);
-    return 1;
-}
-
-#else /* HAVE_LIBAV */
-
-void audio_update_volume(struct MPContext *mpctx) {}
-void audio_update_balance(struct MPContext *mpctx) {}
-int reinit_audio_filters(struct MPContext *mpctx) { return 0; }
-
-#endif /* else HAVE_LIBAF */
 
 // Call this if opts->playback_speed or mpctx->speed_factor_* change.
 void update_playback_speed(struct MPContext *mpctx)
@@ -590,6 +538,7 @@ static void reinit_audio_filters_and_output(struct MPContext *mpctx)
 #endif
 
     update_playback_speed(mpctx);
+    audio_update_volume(mpctx);
 
     mp_notify(mpctx, MPV_EVENT_AUDIO_RECONFIG, NULL);
 
@@ -656,8 +605,6 @@ void reinit_audio_chain_src(struct MPContext *mpctx, struct track *track)
     ao_c->log = mpctx->log;
 #if HAVE_LIBAF
     ao_c->af = af_new(mpctx->global);
-    if (track && track->stream)
-        ao_c->af->replaygain_data = track->stream->codec->replaygain_data;
 #else
     ao_c->conv = mp_aconverter_create(mpctx->global, mpctx->log, NULL);
 #endif
@@ -683,6 +630,8 @@ void reinit_audio_chain_src(struct MPContext *mpctx, struct track *track)
         struct mp_chmap channels;
         ao_get_format(mpctx->ao, &rate, &format, &channels);
         mp_audio_buffer_reinit_fmt(ao_c->ao_buffer, format, &channels, rate);
+
+        audio_update_volume(mpctx);
     }
 
     mp_wakeup_core(mpctx);

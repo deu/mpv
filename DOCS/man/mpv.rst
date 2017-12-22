@@ -442,7 +442,7 @@ this is strongly discouraged and deprecated, except for ``-set``.
 
 Without suffix, the action taken is normally ``-set``.
 
-Some options (like ``--sub-file``, ``--audio-file``, ``--opengl-shader``) are
+Some options (like ``--sub-file``, ``--audio-file``, ``--glsl-shader``) are
 aliases for the proper option with ``-append`` action. For example,
 ``--sub-file`` is an alias for ``--sub-files-append``.
 
@@ -732,6 +732,8 @@ PROTOCOLS
     playlist); ``mpls/<number>`` (selects <number>.mpls playlist);
     ``<number>`` (select playlist with the same index). You can list
     the available playlists with ``--msg-level=bd=v``.
+
+    ``bluray://`` is an alias.
 
 ``dvd://[title|[starttitle]-endtitle][/device]`` ``--dvd-device=PATH``
 

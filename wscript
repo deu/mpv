@@ -224,19 +224,6 @@ iconv support use --disable-iconv.",
         'deps': 'os-win32 || os-cygwin',
         'func': check_true
     }, {
-        'name': '--termios',
-        'desc': 'termios',
-        'func': check_headers('termios.h', 'sys/termios.h'),
-    }, {
-        'name': '--shm',
-        'desc': 'shm',
-        'func': check_statement(['sys/types.h', 'sys/ipc.h', 'sys/shm.h'],
-            'shmget(0, 0, 0); shmat(0, 0, 0); shmctl(0, 0, 0)')
-    }, {
-        'name': 'nanosleep',
-        'desc': 'nanosleep',
-        'func': check_statement('time.h', 'nanosleep(0,0)')
-    }, {
         'name': 'posix-spawn-native',
         'desc': 'spawnp()/kill() POSIX support',
         'func': check_statement(['spawn.h', 'signal.h'],
@@ -425,8 +412,8 @@ iconv support use --disable-iconv.",
 ]
 
 ffmpeg_pkg_config_checks = [
-    'libavutil',     '>= 56.0.100',
-    'libavcodec',    '>= 58.4.100',
+    'libavutil',     '>= 56.6.100',
+    'libavcodec',    '>= 58.7.100',
     'libavformat',   '>= 58.0.102',
     'libswscale',    '>= 5.0.101',
     'libavfilter',   '>= 7.0.101',
@@ -434,7 +421,7 @@ ffmpeg_pkg_config_checks = [
 ]
 libav_pkg_config_checks = [
     'libavutil',     '>= 56.6.0',
-    'libavcodec',    '>= 58.5.0',
+    'libavcodec',    '>= 58.8.0',
     'libavformat',   '>= 58.1.0',
     'libswscale',    '>= 5.0.0',
     'libavfilter',   '>= 7.0.0',
@@ -457,20 +444,12 @@ libav_dependencies = [
         'req': True,
         'fmsg': "FFmpeg/Libav development files not found.",
     }, {
-        'name': 'ffmpeg-mpv',
-        'desc': 'libav* is FFmpeg mpv modified version',
-        'func': check_statement('libavcodec/version.h',
-                                'int x[LIBAVCODEC_MPV ? 1 : -1]',
-                                use='libavcodec')
-    }, {
-        'name': '--ffmpeg-upstream',
-        'deps': '!ffmpeg-mpv',
-        'desc': 'libav* is upstream FFmpeg (unsupported)',
+        'name': 'ffmpeg',
+        'desc': 'libav* is FFmpeg',
         # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
         'func': check_statement('libavcodec/version.h',
                                 'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? 1 : -1]',
                                 use='libavcodec'),
-        'default': 'disable',
     }, {
         # This check should always result in the opposite of ffmpeg-*.
         # Run it to make sure is_ffmpeg didn't fail for some other reason than
@@ -484,13 +463,11 @@ libav_dependencies = [
     }, {
         'name': 'libav-any',
         'desc': 'Libav/FFmpeg library versions',
-        'deps': 'ffmpeg-mpv || ffmpeg-upstream || libav',
+        'deps': 'ffmpeg || libav',
         'func': check_ffmpeg_or_libav_versions(),
         'req': True,
         'fmsg': "Unable to find development files for some of the required \
-FFmpeg/Libav libraries. You need git master. For FFmpeg, the mpv fork, that \
-might contain additional fixes and features is required. It is available on \
-https://github.com/mpv-player/ffmpeg-mpv Aborting."
+FFmpeg/Libav libraries. Git master is recommended."
     }, {
         'name': '--libavdevice',
         'desc': 'libavdevice',
@@ -546,7 +523,6 @@ audio_output_features = [
     }, {
         'name': '--alsa',
         'desc': 'ALSA audio output',
-        'deps': 'gpl',
         'func': check_pkg_config('alsa', '>= 1.0.18'),
     }, {
         'name': '--coreaudio',
@@ -773,10 +749,10 @@ video_output_features = [
         'name': '--rpi',
         'desc': 'Raspberry Pi support',
         'func': compose_checks(
-            check_cc(cflags="-isystem/opt/vc/include/ "+
-                            "-isystem/opt/vc/include/interface/vcos/pthreads " +
-                            "-isystem/opt/vc/include/interface/vmcs_host/linux " +
-                            "-fgnu89-inline",
+            check_cc(cflags=["-isystem/opt/vc/include",
+                             "-isystem/opt/vc/include/interface/vcos/pthreads",
+                             "-isystem/opt/vc/include/interface/vmcs_host/linux",
+                             "-fgnu89-inline"],
                      linkflags="-L/opt/vc/lib",
                      header_name="bcm_host.h",
                      lib=['mmal_core', 'mmal_util', 'mmal_vc_client', 'bcm_host']),

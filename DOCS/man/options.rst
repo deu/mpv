@@ -85,6 +85,8 @@ Track Selection
     options), there will be streams with duplicate IDs. In this case, the
     first stream in order is selected.
 
+    Deprecated.
+
 ``--edition=<ID|auto>``
     (Matroska files only)
     Specify the edition (set of chapters) to use, where 0 is the first. If set
@@ -119,6 +121,8 @@ Playback Control
 
     ``#c`` seeks to chapter number c. (Chapters start from 1.)
 
+    ``none`` resets any previously set option (useful for libmpv).
+
     .. admonition:: Examples
 
         ``--start=+56``, ``--start=+00:56``
@@ -144,6 +148,9 @@ Playback Control
 ``--length=<relative time>``
     Stop after a given time relative to the start time.
     See ``--start`` for valid option values and examples.
+
+    If both ``--end`` and ``--length`` are provided, playback will stop when it
+    reaches either of the two endpoints.
 
 ``--rebase-start-time=<yes|no>``
     Whether to move the file start time to ``00:00:00`` (default: yes). This
@@ -331,8 +338,9 @@ Playback Control
     the ``a`` timestamp. Seeking past the ``b`` point doesn't loop (this is
     intentional).
 
-    If both options are set to ``no``, looping is disabled. Otherwise, the
-    start/end of the file is used if one of the options is set to ``no``.
+    If both options are set to ``no`` or unset, looping is disabled.
+    Otherwise, the start/end of playback is used if one of the options
+    is set to ``no`` or unset.
 
     The loop-points can be adjusted at runtime with the corresponding
     properties. See also ``ab-loop`` command.
@@ -371,11 +379,10 @@ Playback Control
         Without ``--hr-seek``, skipping will snap to keyframes.
 
 ``--stop-playback-on-init-failure=<yes|no>``
-    Stop playback if either audio or video fails to initialize. Currently,
-    the default behavior is ``no`` for the command line player, but ``yes``
-    for libmpv. With ``no``, playback will continue in video-only or audio-only
-    mode if one of them fails. This doesn't affect playback of audio-only or
-    video-only files.
+    Stop playback if either audio or video fails to initialize (default: no).
+    With ``no``, playback will continue in video-only or audio-only mode if one
+    of them fails. This doesn't affect playback of audio-only or video-only
+    files.
 
 Program Behavior
 ----------------
@@ -418,9 +425,9 @@ Program Behavior
 
 ``--log-file=<path>``
     Opens the given path for writing, and print log messages to it. Existing
-    files will be truncated. The log level is at least ``-v``, but can be
-    raised via ``--msg-level`` (the option cannot lower it below the forced
-    minimum log level).
+    files will be truncated. The log level is at least ``-v -v``, but
+    can be raised via ``--msg-level`` (the option cannot lower it below the
+    forced minimum log level).
 
 ``--config-dir=<path>``
     Force a different configuration directory. If this is set, the given
@@ -460,7 +467,7 @@ Program Behavior
 ``--idle=<no|yes|once>``
     Makes mpv wait idly instead of quitting when there is no file to play.
     Mostly useful in input mode, where mpv can be controlled through input
-    commands.
+    commands. (Default: ``no``)
 
     ``once`` will only idle at start and let the player close once the
     first playlist has finished playing back.
@@ -535,6 +542,7 @@ Program Behavior
 
 ``--ignore-path-in-watch-later-config``
     Ignore path (i.e. use filename only) when using watch later feature.
+    (Default: disabled)
 
 ``--show-profile=<profile>``
     Show the description and content of a profile.
@@ -691,7 +699,7 @@ Video
     :vdpau:     requires ``--vo=gpu`` or ``--vo=vdpau`` (Linux only)
     :vdpau-copy: copies video back into system RAM (Linux with some GPUs only)
     :vaapi:     requires ``--vo=gpu`` or ``--vo=vaapi`` (Linux only)
-    :vaapi-copy: copies video back into system RAM (Linux with Intel GPUs only)
+    :vaapi-copy: copies video back into system RAM (Linux with some GPUs only)
     :videotoolbox: requires ``--vo=gpu`` (OS X 10.8 and up),
                    or ``--vo=opengl-cb`` (iOS 9.0 and up)
     :videotoolbox-copy: copies video back into system RAM (OS X 10.8 or iOS 9.0 and up)
@@ -703,8 +711,8 @@ Video
     :d3d11va-copy: copies video back to system RAM (Windows 8+ only)
     :mediacodec: requires ``--vo=mediacodec_embed`` (Android only)
     :mediacodec-copy: copies video back to system RAM (Android only)
-    :rpi:       requires ``--vo=gpu`` (Raspberry Pi only - default if available)
-    :rpi-copy:  copies video back to system RAM (Raspberry Pi only)
+    :mmal:      requires ``--vo=gpu`` (Raspberry Pi only - default if available)
+    :mmal-copy: copies video back to system RAM (Raspberry Pi only)
     :cuda:      requires ``--vo=gpu`` (Any platform CUDA is available)
     :cuda-copy: copies video back to system RAM (Any platform CUDA is available)
     :nvdec:     requires ``--vo=gpu`` (Any platform CUDA is available)
@@ -726,8 +734,7 @@ Video
     will allow CPU processing with video filters.
 
     The ``vaapi`` mode, if used with ``--vo=gpu``, requires Mesa 11 and most
-    likely works with Intel GPUs only. It also requires the opengl EGL backend
-    (automatically used if available).
+    likely works with Intel GPUs only. It also requires the opengl EGL backend.
 
     The ``cuda`` and ``cuda-copy`` modes provides deinterlacing in the decoder
     which is useful as there is no other deinterlacing mechanism in the opengl
@@ -741,7 +748,7 @@ Video
     FFmpeg decoders for file parsing. Experimental, is known not to correctly
     check whether decoding is supported by the hardware at all. Deinterlacing
     is not supported. Since this uses FFmpeg's codec parsers, it is expected
-    that this generally causes fewer issues than ``cuda``. Requires ffmpeg-mpv.
+    that this generally causes fewer issues than ``cuda``.
 
     Most video filters will not work with hardware decoding as they are
     primarily implemented on the CPU. Some exceptions are ``vdpaupp``,
@@ -828,34 +835,33 @@ Video
         frame glitches or discoloration, and you have ``--hwdec`` turned on,
         the first thing you should try is disabling it.
 
-``--opengl-hwdec-interop=<name>``
-    This is useful for the ``gpu`` and ``opengl-cb`` VOs for creating the
-    hardware decoding OpenGL interop context, but without actually enabling
-    hardware decoding itself (like ``--hwdec`` does).
+``--gpu-hwdec-interop=<auto|all|no|name>``
+    This option is for troubleshooting hwdec interop issues. Since it's a
+    debugging option, its semantics may change at any time.
 
-    If set to an empty string (default), the ``--hwdec`` option is used.
+    This is useful for the ``gpu`` and ``opengl-cb`` VOs for selecting which
+    hwdec interop context to use exactly. Effectively it also can be used
+    to block loading of certain backends.
 
-    For ``gpu``, if set, do not create the interop context on demand, but
-    when the VO is created.
+    If set to ``auto`` (default), the behavior depends on the VO: for ``gpu``,
+    it does nothing, and the interop context is loaded on demand (when the
+    decoder probes for ``--hwdec`` support). For ``opengl-cb``, which has
+    has no on-demand loading, this is equivalent to ``all``.
 
-    For ``opengl-cb``, if set, load the interop context as soon as the OpenGL
-    context is created. Since ``opengl-cb`` has no on-demand loading, this
-    allows enabling hardware decoding at runtime at all, without having
-    to temporarily set the ``hwdec`` option just during OpenGL context
-    initialization with ``mpv_opengl_cb_init_gl()``.
+    The empty string is equivalent to ``auto``.
 
-    See ``--opengl-hwdec-interop=help`` for accepted values. This lists the
-    interop backend, with the ``--hwdec`` alias after it in ``[...]``. Consider
-    all values except the proper interop backend name, ``auto``, and ``no`` as
-    silently deprecated and subject to change. Also, if you use this in
-    application code (e.g. via libmpv), any value other than ``auto`` and ``no``
-    should be avoided, as backends can change.
+    If set to ``all``, it attempts to load all interop contexts at GL context
+    creation time.
 
-    Currently the option sets a single value. It is possible that the option
-    type changes to a list in the future.
+    Other than that, a specific backend can be set, and the list of them can
+    be queried with ``help`` (mpv CLI only).
 
-    The old alias ``--hwdec-preload`` has different behavior if the option value
-    is ``no``.
+    Runtime changes to this are ignored (the current option value is used
+    whenever the renderer is created).
+
+    The old aliases ``--opengl-hwdec-interop`` and ``--hwdec-preload`` are
+    barely related to this anymore, but will be somewhat compatible in some
+    cases.
 
 ``--hwdec-image-format=<name>``
     Set the internal pixel format used by hardware decoding via ``--hwdec``
@@ -959,8 +965,8 @@ Video
     rotation metadata.)
 
 ``--video-stereo-mode=<no|mode>``
-    Set the stereo 3D output mode (default: ``mono``). This is done by inserting
-    the ``stereo3d`` conversion filter.
+    Set the stereo 3D output mode (default: ``mono``). This is mostly broken and
+    thus deprecated.
 
     The pseudo-mode ``no`` disables automatic conversion completely.
 
@@ -1301,14 +1307,6 @@ Audio
     is always applied if the replaygain logic is somehow inactive. If this
     is applied, no other replaygain options are applied.
 
-``--balance=<value>``
-    How much left/right channels contribute to the audio. (The implementation
-    of this feature is rather odd. It doesn't change the volumes of each
-    channel, but instead sets up a pan matrix to mix the left and right
-    channels.)
-
-    Deprecated.
-
 ``--audio-delay=<sec>``
     Audio delay in seconds (positive or negative float value). Positive values
     delay the audio, and negative values delay the video.
@@ -1601,7 +1599,7 @@ Subtitles
 ``--sub-delay=<sec>``
     Delays subtitles by ``<sec>`` seconds. Can be negative.
 
-``--sub-files=<file-list>``
+``--sub-files=<file-list>``, ``--sub-file=<filename>``
     Add a subtitle file to the list of external subtitles.
 
     If you use ``--sub-file`` only once, this subtitle file is displayed by
@@ -1613,7 +1611,11 @@ Subtitles
     and ``--secondary-sid`` to select the second index. (The index is printed
     on the terminal output after the ``--sid=`` in the list of streams.)
 
-    This is a list option. See `List Options`_ for details.
+    ``--sub-files`` is a list option (see `List Options`_  for details), and
+    can take multiple file names separated by ``:`` (Unix) or ``;`` (Windows),
+    while  ``--sub-file`` takes a single filename, but can be used multiple
+    times to add multiple files. Technically, ``--sub-file`` is a CLI/config
+    file only alias for  ``--sub-files-append``.
 
 ``--secondary-sid=<ID|auto|no>``
     Select a secondary subtitle stream. This is similar to ``--sid``. If a
@@ -2268,6 +2270,13 @@ Window
 
     This option does not affect the framerate used for ``mf://`` or
     ``--merge-files``. For that, use ``--mf-fps`` instead.
+
+    Setting ``--image-display-duration`` hides the OSC and does not track
+    playback time on the command-line output, and also does not duplicate
+    the image frame when encoding. To force the player into "dumb mode"
+    and actually count out seconds, or to duplicate the image when
+    encoding, you need to use ``--demuxer=lavf --demuxer-lavf-o=loop=1``,
+    and use ``--length`` or ``--frames`` to stop after a particular time.
 
 ``--force-window=<yes|no|immediate>``
     Create a video output window even if there is no video. This can be useful
@@ -4069,6 +4078,12 @@ The following video options are currently all specific to ``--vo=gpu`` and
     used if ``--interpolation`` is enabled. The only valid choices for
     ``--tscale`` are separable convolution filters (use ``--tscale=help`` to
     get a list). The default is ``mitchell``.
+
+    Common ``--tscale`` choices include ``oversample``, ``linear``,
+    ``catmull_rom``, ``mitchell``, ``gaussian``, or ``bicubic``. These are
+    listed in increasing order of smoothness/blurriness, with ``bicubic``
+    being the smoothest/blurriest and ``oversample`` being the sharpest/least
+    smooth.
 
 ``--scale-param1=<value>``, ``--scale-param2=<value>``, ``--cscale-param1=<value>``, ``--cscale-param2=<value>``, ``--dscale-param1=<value>``, ``--dscale-param2=<value>``, ``--tscale-param1=<value>``, ``--tscale-param2=<value>``
     Set filter parameters. Ignored if the filter is not tunable. Currently,

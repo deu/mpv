@@ -50,10 +50,8 @@ typedef struct mp_vo_opts {
 
     char *mmcss_profile;
 
-    // vo_wayland, vo_drm
+    // vo_drm
     struct sws_opts *sws_opts;
-    // vo_opengl, vo_opengl_cb
-    char *gl_hwdec_interop;
     // vo_drm
     struct drm_opts *drm_opts;
 } mp_vo_opts;
@@ -107,7 +105,6 @@ typedef struct MPOpts {
     float rgain_preamp;         // Set replaygain pre-amplification
     int rgain_clip;             // Enable/disable clipping prevention
     float rgain_fallback;
-    float balance;
     int softvol_mute;
     float softvol_max;
     int gapless_audio;
@@ -289,7 +286,7 @@ typedef struct MPOpts {
     int sub_clear_on_seek;
     int teletext_page;
 
-    int hwdec_api;
+    char *hwdec_api;
     char *hwdec_codecs;
     int videotoolbox_format;
     int hwdec_image_format;
@@ -352,5 +349,8 @@ extern const struct MPOpts mp_default_opts;
 extern const struct m_sub_options vo_sub_opts;
 extern const struct m_sub_options stream_cache_conf;
 extern const struct m_sub_options dvd_conf;
+
+int hwdec_validate_opt(struct mp_log *log, const m_option_t *opt,
+                       struct bstr name, struct bstr param);
 
 #endif

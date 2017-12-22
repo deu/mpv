@@ -15,12 +15,28 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef MP_WIN32_EXCLUSIVE_HACK_H_
-#define MP_WIN32_EXCLUSIVE_HACK_H_
+#ifndef MPV_DECODE_D3D_H
+#define MPV_DECODE_D3D_H
+
+#include <windows.h>
+#include <d3d11.h>
 
 #include <stdbool.h>
+#include <inttypes.h>
 
-// Returns true if any program on the computer is in exclusive fullscreen mode
-bool mp_w32_is_in_exclusive_mode(void);
+// Must call d3d_load_dlls() before accessing. Once this is done, the DLLs
+// remain loaded forever.
+extern HMODULE d3d11_dll, d3d9_dll, dxva2_dll;
+extern PFN_D3D11_CREATE_DEVICE d3d11_D3D11CreateDevice;
+
+void d3d_load_dlls(void);
+
+bool d3d11_check_decoding(ID3D11Device *dev);
+
+struct AVBufferRef;
+struct IDirect3DDevice9;
+
+struct AVBufferRef *d3d11_wrap_device_ref(ID3D11Device *device);
+struct AVBufferRef *d3d9_wrap_device_ref(struct IDirect3DDevice9 *device);
 
 #endif

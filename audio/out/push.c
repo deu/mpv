@@ -304,12 +304,13 @@ static void ao_play_data(struct ao *ao)
         samples = samples / ao->period_size * ao->period_size;
     }
     MP_STATS(ao, "start ao fill");
+    ao_post_process_data(ao, (void **)planes, samples);
     int r = 0;
     if (samples)
         r = ao->driver->play(ao, (void **)planes, samples, flags);
     MP_STATS(ao, "end ao fill");
     if (r > samples) {
-        MP_ERR(ao, "Audio device returned non-sense value.\n");
+        MP_ERR(ao, "Audio device returned nonsense value.\n");
         r = samples;
     } else if (r < 0) {
         MP_ERR(ao, "Error writing audio to device.\n");

@@ -135,13 +135,18 @@ static int parse_flag(struct mp_log *log, const m_option_t *opt,
             VAL(dst) = 0;
         return 1;
     }
-    mp_fatal(log, "Invalid parameter for %.*s flag: %.*s\n",
-                BSTR_P(name), BSTR_P(param));
-    mp_info(log, "Valid values are:\n");
+    bool is_help = bstr_equals0(param, "help");
+    if (is_help) {
+        mp_info(log, "Valid values for %.*s flag are:\n", BSTR_P(name));
+    } else {
+        mp_fatal(log, "Invalid parameter for %.*s flag: %.*s\n",
+                 BSTR_P(name), BSTR_P(param));
+        mp_info(log, "Valid values are:\n");
+    }
     mp_info(log, "    yes\n");
     mp_info(log, "    no\n");
     mp_info(log, "    (passing nothing)\n");
-    return M_OPT_INVALID;
+    return is_help ? M_OPT_EXIT : M_OPT_INVALID;
 }
 
 static char *print_flag(const m_option_t *opt, const void *val)
@@ -441,6 +446,15 @@ const char *m_opt_choice_str(const struct m_opt_choice_alternatives *choices,
     return NULL;
 }
 
+static void print_choice_values(struct mp_log *log, const struct m_option *opt)
+{
+    struct m_opt_choice_alternatives *alt = opt->priv;
+    for ( ; alt->name; alt++)
+        mp_info(log, "    %s\n", alt->name[0] ? alt->name : "(passing nothing)");
+    if ((opt->flags & M_OPT_MIN) && (opt->flags & M_OPT_MAX))
+        mp_info(log, "    %g-%g (integer range)\n", opt->min, opt->max);
+}
+
 static int parse_choice(struct mp_log *log, const struct m_option *opt,
                         struct bstr name, struct bstr param, void *dst)
 {
@@ -457,6 +471,11 @@ static int parse_choice(struct mp_log *log, const struct m_option *opt,
         }
     }
     if (!alt->name) {
+        if (!bstrcmp0(param, "help")) {
+            mp_info(log, "Valid values for option %.*s are:\n", BSTR_P(name));
+            print_choice_values(log, opt);
+            return M_OPT_EXIT;
+        }
         if (param.len == 0)
             return M_OPT_MISSING_PARAM;
         if ((opt->flags & M_OPT_MIN) && (opt->flags & M_OPT_MAX)) {
@@ -470,10 +489,7 @@ static int parse_choice(struct mp_log *log, const struct m_option *opt,
         mp_fatal(log, "Invalid value for option %.*s: %.*s\n",
                  BSTR_P(name), BSTR_P(param));
         mp_info(log, "Valid values are:\n");
-        for (alt = opt->priv; alt->name; alt++)
-            mp_info(log, "    %s\n", alt->name[0] ? alt->name : "(passing nothing)");
-        if ((opt->flags & M_OPT_MIN) && (opt->flags & M_OPT_MAX))
-            mp_info(log, "    %g-%g (integer range)\n", opt->min, opt->max);
+        print_choice_values(log, opt);
         return M_OPT_INVALID;
     }
     if (dst)
@@ -995,9 +1011,6 @@ static int clamp_str(const m_option_t *opt, void *val)
 static int parse_str(struct mp_log *log, const m_option_t *opt,
                      struct bstr name, struct bstr param, void *dst)
 {
-    if (param.start == NULL)
-        return M_OPT_MISSING_PARAM;
-
     m_opt_string_validate_fn validate = opt->priv;
     if (validate) {
         int r = validate(log, opt, name, param);
@@ -1733,17 +1746,21 @@ static int parse_color(struct mp_log *log, const m_option_t *opt,
     if (param.len == 0)
         return M_OPT_MISSING_PARAM;
 
+    bool is_help = bstr_equals0(param, "help");
+    if (is_help)
+        goto exit;
+
     bstr val = param;
     struct m_color color = {0};
 
     if (bstr_eatstart0(&val, "#")) {
         // #[AA]RRGGBB
         if (val.len != 6 && val.len != 8)
-            goto error;
+            goto exit;
         bool has_alpha = val.len == 8;
         uint32_t c = bstrtoll(val, &val, 16);
         if (val.len)
-            goto error;
+            goto exit;
         color = (struct m_color) {
             (c >> 16) & 0xFF,
             (c >> 8) & 0xFF,
@@ -1754,13 +1771,13 @@ static int parse_color(struct mp_log *log, const m_option_t *opt,
         bstr comp_str[5];
         int num = split_char(param, '/', 5, comp_str);
         if (num < 1 || num > 4)
-            goto error;
+            goto exit;
         double comp[4] = {0, 0, 0, 1};
         for (int n = 0; n < num; n++) {
             bstr rest;
             double d = bstrtod(comp_str[n], &rest);
             if (rest.len || !comp_str[n].len || d < 0 || d > 1 || !isfinite(d))
-                goto error;
+                goto exit;
             comp[n] = d;
         }
         if (num == 2)
@@ -1776,13 +1793,15 @@ static int parse_color(struct mp_log *log, const m_option_t *opt,
 
     return 1;
 
-error:
-    mp_err(log, "Option %.*s: invalid color: '%.*s'\n",
-           BSTR_P(name), BSTR_P(param));
-    mp_err(log, "Valid colors must be in the form #RRGGBB or #AARRGGBB (in hex)\n"
-                "Or in the form 'r/g/b/a', where each component is a value in the\n"
-                "range 0.0-1.0. (Also allowed: 'gray', 'gray/a', 'r/g/b'.\n");
-    return M_OPT_INVALID;
+exit:
+    if (!is_help) {
+        mp_err(log, "Option %.*s: invalid color: '%.*s'\n",
+               BSTR_P(name), BSTR_P(param));
+    }
+    mp_info(log, "Valid colors must be in the form #RRGGBB or #AARRGGBB (in hex)\n"
+            "or in the form 'r/g/b/a', where each component is a value in the\n"
+            "range 0.0-1.0. (Also allowed: 'gray', 'gray/a', 'r/g/b').\n");
+    return is_help ? M_OPT_EXIT : M_OPT_INVALID;
 }
 
 const m_option_type_t m_option_type_color = {
@@ -1943,20 +1962,27 @@ void m_geometry_apply(int *xpos, int *ypos, int *widw, int *widh,
 static int parse_geometry(struct mp_log *log, const m_option_t *opt,
                           struct bstr name, struct bstr param, void *dst)
 {
+    bool is_help = bstr_equals0(param, "help");
+    if (is_help)
+        goto exit;
+
     struct m_geometry gm;
     if (!parse_geometry_str(&gm, param))
-        goto error;
+        goto exit;
 
     if (dst)
         *((struct m_geometry *)dst) = gm;
 
     return 1;
 
-error:
-    mp_err(log, "Option %.*s: invalid geometry: '%.*s'\n",
-           BSTR_P(name), BSTR_P(param));
-    mp_err(log, "Valid format: [W[%%][xH[%%]]][{+-}X[%%]{+-}Y[%%]] | [X[%%]:Y[%%]]\n");
-    return M_OPT_INVALID;
+exit:
+    if (!is_help) {
+        mp_err(log, "Option %.*s: invalid geometry: '%.*s'\n",
+               BSTR_P(name), BSTR_P(param));
+    }
+    mp_info(log,
+         "Valid format: [W[%%][xH[%%]]][{+-}X[%%]{+-}Y[%%]] | [X[%%]:Y[%%]]\n");
+    return is_help ? M_OPT_EXIT : M_OPT_INVALID;
 }
 
 const m_option_type_t m_option_type_geometry = {
@@ -1970,23 +1996,29 @@ const m_option_type_t m_option_type_geometry = {
 static int parse_size_box(struct mp_log *log, const m_option_t *opt,
                           struct bstr name, struct bstr param, void *dst)
 {
+    bool is_help = bstr_equals0(param, "help");
+    if (is_help)
+        goto exit;
+
     struct m_geometry gm;
     if (!parse_geometry_str(&gm, param))
-        goto error;
+        goto exit;
 
     if (gm.xy_valid)
-        goto error;
+        goto exit;
 
     if (dst)
         *((struct m_geometry *)dst) = gm;
 
     return 1;
 
-error:
-    mp_err(log, "Option %.*s: invalid size: '%.*s'\n",
-           BSTR_P(name), BSTR_P(param));
-    mp_err(log, "Valid format: W[%%][xH[%%]] or empty string\n");
-    return M_OPT_INVALID;
+exit:
+    if (!is_help) {
+        mp_err(log, "Option %.*s: invalid size: '%.*s'\n",
+               BSTR_P(name), BSTR_P(param));
+    }
+    mp_info(log, "Valid format: W[%%][xH[%%]] or empty string\n");
+    return is_help ? M_OPT_EXIT : M_OPT_INVALID;
 }
 
 const m_option_type_t m_option_type_size_box = {
@@ -2326,6 +2358,11 @@ static int parse_rel_time(struct mp_log *log, const m_option_t *opt,
 
     if (param.len == 0)
         return M_OPT_MISSING_PARAM;
+
+    if (bstr_equals0(param, "none")) {
+        t.type = REL_TIME_NONE;
+        goto out;
+    }
 
     // Percent pos
     if (bstr_endswith0(param, "%")) {

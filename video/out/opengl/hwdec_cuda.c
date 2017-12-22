@@ -160,11 +160,9 @@ static int cuda_init(struct ra_hwdec *hw)
         goto error;
 
     p->hwctx = (struct mp_hwdec_ctx) {
-        .type = hw->driver->api,
-        .ctx = p->decode_ctx,
+        .driver_name = hw->driver->name,
         .av_device_ref = hw_device_ctx,
     };
-    p->hwctx.driver_name = hw->driver->name;
     hwdec_devices_add(hw->devs, &p->hwctx);
     return 0;
 
@@ -179,8 +177,7 @@ static void cuda_uninit(struct ra_hwdec *hw)
 {
     struct priv_owner *p = hw->priv;
 
-    if (p->hwctx.ctx)
-        hwdec_devices_remove(hw->devs, &p->hwctx);
+    hwdec_devices_remove(hw->devs, &p->hwctx);
     av_buffer_unref(&p->hwctx.av_device_ref);
 
     if (p->decode_ctx && p->decode_ctx != p->display_ctx)
@@ -327,7 +324,6 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
 
 const struct ra_hwdec_driver ra_hwdec_cuda = {
     .name = "cuda-nvdec",
-    .api = HWDEC_CUDA,
     .imgfmts = {IMGFMT_CUDA, 0},
     .priv_size = sizeof(struct priv_owner),
     .init = cuda_init,

@@ -55,8 +55,6 @@
 #include "video/out/drm_common.h"
 #endif
 
-#include "video/out/gpu/hwdec.h"
-
 static void print_version(struct mp_log *log)
 {
     mp_print_version(log, true);
@@ -94,34 +92,6 @@ extern const struct m_sub_options d3d11_conf;
 extern const struct m_sub_options d3d11va_conf;
 extern const struct m_sub_options angle_conf;
 extern const struct m_sub_options cocoa_conf;
-
-const struct m_opt_choice_alternatives mp_hwdec_names[] = {
-    {"no",          HWDEC_NONE},
-    {"auto",        HWDEC_AUTO},
-    {"yes" ,        HWDEC_AUTO},
-    {"auto-copy",   HWDEC_AUTO_COPY},
-    {"vdpau",       HWDEC_VDPAU},
-    {"vdpau-copy",  HWDEC_VDPAU_COPY},
-    {"videotoolbox",HWDEC_VIDEOTOOLBOX},
-    {"videotoolbox-copy",HWDEC_VIDEOTOOLBOX_COPY},
-    {"vaapi",       HWDEC_VAAPI},
-    {"vaapi-copy",  HWDEC_VAAPI_COPY},
-    {"dxva2",       HWDEC_DXVA2},
-    {"dxva2-copy",  HWDEC_DXVA2_COPY},
-    {"d3d11va",     HWDEC_D3D11VA},
-    {"d3d11va-copy",HWDEC_D3D11VA_COPY},
-    {"rpi",         HWDEC_RPI},
-    {"rpi-copy",    HWDEC_RPI_COPY},
-    {"rkmpp",       HWDEC_RKMPP},
-    {"mediacodec",  HWDEC_MEDIACODEC},
-    {"mediacodec-copy",HWDEC_MEDIACODEC_COPY},
-    {"cuda",        HWDEC_CUDA},
-    {"cuda-copy",   HWDEC_CUDA_COPY},
-    {"nvdec",       HWDEC_NVDEC},
-    {"nvdec-copy",  HWDEC_NVDEC_COPY},
-    {"crystalhd",   HWDEC_CRYSTALHD},
-    {0}
-};
 
 static const struct m_sub_options screenshot_conf = {
     .opts = image_writer_opts,
@@ -184,9 +154,6 @@ static const m_option_t mp_vo_opt_list[] = {
 #if HAVE_DRM
     OPT_SUBSTRUCT("", drm_opts, drm_conf, 0),
 #endif
-    OPT_STRING_VALIDATE("opengl-hwdec-interop", gl_hwdec_interop, 0,
-                        ra_hwdec_validate_opt),
-    OPT_REPLACED("hwdec-preload", "opengl-hwdec-interop"),
     {0}
 };
 
@@ -356,9 +323,12 @@ const m_option_t mp_opts[] = {
     OPT_TRACKCHOICE("vid", stream_id[0][STREAM_VIDEO]),
     OPT_TRACKCHOICE("sid", stream_id[0][STREAM_SUB]),
     OPT_TRACKCHOICE("secondary-sid", stream_id[1][STREAM_SUB]),
-    OPT_TRACKCHOICE("ff-aid", stream_id_ff[STREAM_AUDIO]),
-    OPT_TRACKCHOICE("ff-vid", stream_id_ff[STREAM_VIDEO]),
-    OPT_TRACKCHOICE("ff-sid", stream_id_ff[STREAM_SUB]),
+    OPT_TRACKCHOICE("ff-aid", stream_id_ff[STREAM_AUDIO],
+                    .deprecation_message = "no replacement"),
+    OPT_TRACKCHOICE("ff-vid", stream_id_ff[STREAM_VIDEO],
+                    .deprecation_message = "no replacement"),
+    OPT_TRACKCHOICE("ff-sid", stream_id_ff[STREAM_SUB],
+                    .deprecation_message = "no replacement"),
     OPT_ALIAS("sub", "sid"),
     OPT_ALIAS("video", "vid"),
     OPT_ALIAS("audio", "aid"),
@@ -440,7 +410,8 @@ const m_option_t mp_opts[] = {
     OPT_FLAG("ad-spdif-dtshd", dtshd, 0,
              .deprecation_message = "use --audio-spdif instead"),
 
-    OPT_CHOICE_C("hwdec", hwdec_api, 0, mp_hwdec_names),
+    OPT_STRING_VALIDATE("hwdec", hwdec_api, M_OPT_OPTIONAL_PARAM,
+                        hwdec_validate_opt),
     OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
 #if HAVE_VIDEOTOOLBOX_HWACCEL
     OPT_IMAGEFORMAT("videotoolbox-format", videotoolbox_format, 0, .min = -1,
@@ -558,7 +529,6 @@ const m_option_t mp_opts[] = {
                 {"weak", -1})),
     OPT_DOUBLE("audio-buffer", audio_buffer, M_OPT_MIN | M_OPT_MAX,
                .min = 0, .max = 10),
-    OPT_FLOATRANGE("balance", balance, 0, -1, 1),
 
     OPT_STRING("title", wintitle, 0),
     OPT_STRING("force-media-title", media_title, 0),
@@ -567,7 +537,8 @@ const m_option_t mp_opts[] = {
     OPT_CHOICE_OR_INT("video-rotate", video_rotate, UPDATE_IMGPAR, 0, 359,
                       ({"no", -1})),
     OPT_CHOICE_C("video-stereo-mode", video_stereo_mode, UPDATE_IMGPAR,
-                 mp_stereo3d_names),
+                 mp_stereo3d_names,
+                 .deprecation_message = "mostly broken"),
 
     OPT_CHOICE_OR_INT("cursor-autohide", cursor_autohide_delay, 0,
                       0, 30000, ({"no", -1}, {"always", -2})),
@@ -949,7 +920,7 @@ const struct MPOpts mp_default_opts = {
     .use_embedded_fonts = 1,
     .screenshot_template = "mpv-shot%n",
 
-    .hwdec_api = HAVE_RPI ? HWDEC_RPI : 0,
+    .hwdec_api = HAVE_RPI ? "mmal" : "no",
     .hwdec_codecs = "h264,vc1,wmv3,hevc,mpeg2video,vp9",
     .videotoolbox_format = IMGFMT_NV12,
 

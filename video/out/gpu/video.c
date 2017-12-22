@@ -277,8 +277,12 @@ struct gl_video {
     struct cached_file *files;
     int num_files;
 
-    struct ra_hwdec *hwdec;
+    bool hwdec_interop_loading_done;
+    struct ra_hwdec **hwdecs;
+    int num_hwdecs;
+
     struct ra_hwdec_mapper *hwdec_mapper;
+    struct ra_hwdec *hwdec_overlay;
     bool hwdec_active;
 
     bool dsi_warned;
@@ -313,6 +317,7 @@ static const struct gl_video_opts gl_video_opts_def = {
     .tone_mapping_param = NAN,
     .tone_mapping_desat = 1.0,
     .early_flush = -1,
+    .hwdec_interop = "auto",
 };
 
 static int validate_scaler_opt(struct mp_log *log, const m_option_t *opt,
@@ -401,6 +406,10 @@ const struct m_sub_options gl_video_conf = {
         OPT_INTRANGE("gpu-tex-pad-y", tex_pad_y, 0, 0, 4096),
         OPT_SUBSTRUCT("", icc_opts, mp_icc_conf, 0),
         OPT_STRING("gpu-shader-cache-dir", shader_cache_dir, 0),
+        OPT_STRING_VALIDATE("gpu-hwdec-interop", hwdec_interop, 0,
+                             ra_hwdec_validate_opt),
+        OPT_REPLACED("opengl-hwdec-interop", "gpu-hwdec-interop"),
+        OPT_REPLACED("hwdec-preload", "opengl-hwdec-interop"),
         OPT_REPLACED("hdr-tone-mapping", "tone-mapping"),
         OPT_REPLACED("opengl-shaders", "glsl-shaders"),
         OPT_REPLACED("opengl-shader", "glsl-shader"),
@@ -803,18 +812,27 @@ static void init_video(struct gl_video *p)
 {
     p->use_integer_conversion = false;
 
-    if (p->hwdec && ra_hwdec_test_format(p->hwdec, p->image_params.imgfmt)) {
-        if (p->hwdec->driver->overlay_frame) {
+    struct ra_hwdec *hwdec = NULL;
+    for (int n = 0; n < p->num_hwdecs; n++) {
+        if (ra_hwdec_test_format(p->hwdecs[n], p->image_params.imgfmt)) {
+            hwdec = p->hwdecs[n];
+            break;
+        }
+    }
+
+    if (hwdec) {
+        if (hwdec->driver->overlay_frame) {
             MP_WARN(p, "Using HW-overlay mode. No GL filtering is performed "
                        "on the video!\n");
+            p->hwdec_overlay = hwdec;
         } else {
-            p->hwdec_mapper = ra_hwdec_mapper_create(p->hwdec, &p->image_params);
+            p->hwdec_mapper = ra_hwdec_mapper_create(hwdec, &p->image_params);
             if (!p->hwdec_mapper)
                 MP_ERR(p, "Initializing texture for hardware decoding failed.\n");
         }
         if (p->hwdec_mapper)
             p->image_params = p->hwdec_mapper->dst_params;
-        const char **exts = p->hwdec->glsl_extensions;
+        const char **exts = hwdec->glsl_extensions;
         for (int n = 0; exts && exts[n]; n++)
             gl_sc_enable_extension(p->sc, (char *)exts[n]);
         p->hwdec_active = true;
@@ -957,8 +975,8 @@ static void unref_current_image(struct gl_video *p)
 // lead to flickering artifacts.
 static void unmap_overlay(struct gl_video *p)
 {
-    if (p->hwdec_active && p->hwdec->driver->overlay_frame)
-        p->hwdec->driver->overlay_frame(p->hwdec, NULL, NULL, NULL, true);
+    if (p->hwdec_overlay)
+        p->hwdec_overlay->driver->overlay_frame(p->hwdec_overlay, NULL, NULL, NULL, true);
 }
 
 static void uninit_video(struct gl_video *p)
@@ -981,6 +999,7 @@ static void uninit_video(struct gl_video *p)
     p->real_image_params = (struct mp_image_params){0};
     p->image_params = p->real_image_params;
     p->hwdec_active = false;
+    p->hwdec_overlay = NULL;
     ra_hwdec_mapper_free(&p->hwdec_mapper);
 }
 
@@ -1034,11 +1053,11 @@ static void pass_report_performance(struct gl_video *p)
     for (int i = 0; i < VO_PASS_PERF_MAX; i++) {
         struct pass_info *pass = &p->pass[i];
         if (pass->desc.len) {
-            MP_DBG(p, "pass '%.*s': last %dus avg %dus peak %dus\n",
-                   BSTR_P(pass->desc),
-                   (int)pass->perf.last/1000,
-                   (int)pass->perf.avg/1000,
-                   (int)pass->perf.peak/1000);
+            MP_TRACE(p, "pass '%.*s': last %dus avg %dus peak %dus\n",
+                     BSTR_P(pass->desc),
+                     (int)pass->perf.last/1000,
+                     (int)pass->perf.avg/1000,
+                     (int)pass->perf.peak/1000);
         }
     }
 }
@@ -1374,8 +1393,8 @@ static bool pass_hook_setup_binds(struct gl_video *p, const char *name,
         struct image bind_img;
         if (!saved_img_find(p, bind_name, &bind_img)) {
             // Clean up texture bindings and move on to the next hook
-            MP_DBG(p, "Skipping hook on %s due to no texture named %s.\n",
-                   name, bind_name);
+            MP_TRACE(p, "Skipping hook on %s due to no texture named %s.\n",
+                     name, bind_name);
             p->num_pass_imgs -= t;
             return false;
         }
@@ -1406,7 +1425,7 @@ static struct image pass_hook(struct gl_video *p, const char *name,
 
     saved_img_store(p, name, img);
 
-    MP_DBG(p, "Running hooks for %s\n", name);
+    MP_TRACE(p, "Running hooks for %s\n", name);
     for (int i = 0; i < p->num_tex_hooks; i++) {
         struct tex_hook *hook = &p->tex_hooks[i];
 
@@ -1421,7 +1440,7 @@ static struct image pass_hook(struct gl_video *p, const char *name,
 found:
         // Check the hook's condition
         if (hook->cond && !hook->cond(p, img, hook->priv)) {
-            MP_DBG(p, "Skipping hook on %s due to condition.\n", name);
+            MP_TRACE(p, "Skipping hook on %s due to condition.\n", name);
             continue;
         }
 
@@ -2054,7 +2073,6 @@ static void pass_read_video(struct gl_video *p)
     struct mp_rect_f src = {0.0, 0.0, p->image_params.w, p->image_params.h};
     struct mp_rect_f ref = src;
     gl_transform_rect(p->texture_offset, &ref);
-    MP_DBG(p, "ref rect: {%f %f} {%f %f}\n", ref.x0, ref.y0, ref.x1, ref.y1);
 
     // Explicitly scale all of the textures that don't match
     for (int n = 0; n < 4; n++) {
@@ -2065,9 +2083,6 @@ static void pass_read_video(struct gl_video *p)
         // exact same source rectangle.
         struct mp_rect_f rect = src;
         gl_transform_rect(offsets[n], &rect);
-        MP_DBG(p, "rect[%d]: {%f %f} {%f %f}\n", n,
-               rect.x0, rect.y0, rect.x1, rect.y1);
-
         if (mp_rect_f_seq(ref, rect))
             continue;
 
@@ -2079,8 +2094,6 @@ static void pass_read_video(struct gl_video *p)
                   {0.0, (ref.y1 - ref.y0) / (rect.y1 - rect.y0)}},
             .t = {ref.x0, ref.y0},
         };
-        MP_DBG(p, "-> fix[%d] = {%f %f} + off {%f %f}\n", n,
-               fix.m[0][0], fix.m[1][1], fix.t[0], fix.t[1]);
 
         // Since the scale in texture space is different from the scale in
         // absolute terms, we have to scale the coefficients down to be
@@ -2094,8 +2107,6 @@ static void pass_read_video(struct gl_video *p)
             MPSWAP(double, scale.m[0][0], scale.m[1][1]);
 
         gl_transform_trans(scale, &fix);
-        MP_DBG(p, "-> scaled[%d] = {%f %f} + off {%f %f}\n", n,
-               fix.m[0][0], fix.m[1][1], fix.t[0], fix.t[1]);
 
         // Since the texture transform is a function of the texture coordinates
         // to texture space, rather than the other way around, we have to
@@ -2979,8 +2990,8 @@ static void gl_video_interpolate_frame(struct gl_video *p, struct vo_frame *t,
             assert(id == i);
         }
 
-        MP_DBG(p, "inter frame dur: %f vsync: %f, mix: %f\n",
-               t->ideal_frame_duration, t->vsync_interval, mix);
+        MP_TRACE(p, "inter frame dur: %f vsync: %f, mix: %f\n",
+                 t->ideal_frame_duration, t->vsync_interval, mix);
         p->is_interpolated = true;
     }
     pass_draw_to_screen(p, fbo);
@@ -3005,15 +3016,15 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
         p->ra->fns->clear(p->ra, fbo.tex, color, &target_rc);
     }
 
-    if (p->hwdec_active && p->hwdec->driver->overlay_frame) {
+    if (p->hwdec_overlay) {
         if (has_frame) {
-            float *color = p->hwdec->overlay_colorkey;
+            float *color = p->hwdec_overlay->overlay_colorkey;
             p->ra->fns->clear(p->ra, fbo.tex, color, &p->dst_rect);
         }
 
-        p->hwdec->driver->overlay_frame(p->hwdec, frame->current,
-                                        &p->src_rect, &p->dst_rect,
-                                        frame->frame_id != p->image.id);
+        p->hwdec_overlay->driver->overlay_frame(p->hwdec_overlay, frame->current,
+                                                &p->src_rect, &p->dst_rect,
+                                                frame->frame_id != p->image.id);
 
         if (frame->current)
             p->osd_pts = frame->current->pts;
@@ -3415,6 +3426,7 @@ static void check_gl_features(struct gl_video *p)
             .tone_mapping_desat = p->opts.tone_mapping_desat,
             .early_flush = p->opts.early_flush,
             .icc_opts = p->opts.icc_opts,
+            .hwdec_interop = p->opts.hwdec_interop,
         };
         for (int n = 0; n < SCALER_COUNT; n++)
             p->opts.scaler[n] = gl_video_opts_def.scaler[n];
@@ -3507,6 +3519,10 @@ void gl_video_uninit(struct gl_video *p)
 
     uninit_video(p);
 
+    for (int n = 0; n < p->num_hwdecs; n++)
+        ra_hwdec_uninit(p->hwdecs[n]);
+    p->num_hwdecs = 0;
+
     gl_sc_destroy(p->sc);
 
     ra_tex_free(p->ra, &p->lut_3d_texture);
@@ -3561,8 +3577,10 @@ bool gl_video_check_format(struct gl_video *p, int mp_format)
     if (ra_get_imgfmt_desc(p->ra, mp_format, &desc) &&
         is_imgfmt_desc_supported(p, &desc))
         return true;
-    if (p->hwdec && ra_hwdec_test_format(p->hwdec, mp_format))
-        return true;
+    for (int n = 0; n < p->num_hwdecs; n++) {
+        if (ra_hwdec_test_format(p->hwdecs[n], mp_format))
+            return true;
+    }
     return false;
 }
 
@@ -3777,16 +3795,9 @@ void gl_video_set_ambient_lux(struct gl_video *p, int lux)
 {
     if (p->opts.gamma_auto) {
         p->opts.gamma = gl_video_scale_ambient_lux(16.0, 256.0, 1.0, 1.2, lux);
-        MP_VERBOSE(p, "ambient light changed: %d lux (gamma: %f)\n", lux,
-                   p->opts.gamma);
+        MP_TRACE(p, "ambient light changed: %d lux (gamma: %f)\n", lux,
+                 p->opts.gamma);
     }
-}
-
-void gl_video_set_hwdec(struct gl_video *p, struct ra_hwdec *hwdec)
-{
-    unref_current_image(p);
-    ra_hwdec_mapper_free(&p->hwdec_mapper);
-    p->hwdec = hwdec;
 }
 
 static void *gl_video_dr_alloc_buffer(struct gl_video *p, size_t size)
@@ -3844,4 +3855,47 @@ struct mp_image *gl_video_get_image(struct gl_video *p, int imgfmt, int w, int h
     if (!res)
         gl_video_dr_free_buffer(p, ptr);
     return res;
+}
+
+static void load_add_hwdec(struct gl_video *p, struct mp_hwdec_devices *devs,
+                           const struct ra_hwdec_driver *drv, bool is_auto)
+{
+    struct ra_hwdec *hwdec =
+        ra_hwdec_load_driver(p->ra, p->log, p->global, devs, drv, is_auto);
+    if (hwdec)
+        MP_TARRAY_APPEND(p, p->hwdecs, p->num_hwdecs, hwdec);
+}
+
+void gl_video_load_hwdecs(struct gl_video *p, struct mp_hwdec_devices *devs,
+                          bool load_all_by_default)
+{
+    char *type = p->opts.hwdec_interop;
+    if (!type || !type[0] || strcmp(type, "auto") == 0) {
+        if (!load_all_by_default)
+            return;
+        type = "all";
+    }
+    if (strcmp(type, "no") == 0) {
+        // do nothing, just block further loading
+    } else if (strcmp(type, "all") == 0) {
+        gl_video_load_hwdecs_all(p, devs);
+    } else {
+        for (int n = 0; ra_hwdec_drivers[n]; n++) {
+            const struct ra_hwdec_driver *drv = ra_hwdec_drivers[n];
+            if (strcmp(type, drv->name) == 0) {
+                load_add_hwdec(p, devs, drv, false);
+                break;
+            }
+        }
+    }
+    p->hwdec_interop_loading_done = true;
+}
+
+void gl_video_load_hwdecs_all(struct gl_video *p, struct mp_hwdec_devices *devs)
+{
+    if (!p->hwdec_interop_loading_done) {
+        for (int n = 0; ra_hwdec_drivers[n]; n++)
+            load_add_hwdec(p, devs, ra_hwdec_drivers[n], true);
+        p->hwdec_interop_loading_done = true;
+    }
 }
