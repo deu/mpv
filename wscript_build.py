@@ -384,6 +384,7 @@ def build(ctx):
         ( "video/out/filter_kernels.c" ),
         ( "video/out/d3d11/context.c",           "d3d11" ),
         ( "video/out/d3d11/hwdec_d3d11va.c",     "d3d11 && d3d-hwaccel" ),
+        ( "video/out/d3d11/hwdec_dxva2dxgi.c",   "d3d11 && d3d9-hwaccel" ),
         ( "video/out/d3d11/ra_d3d11.c",          "d3d11" ),
         ( "video/out/opengl/angle_dynamic.c",    "egl-angle" ),
         ( "video/out/gpu/context.c" ),
@@ -514,7 +515,8 @@ def build(ctx):
 
         ctx.env.WINDRES_FLAGS = [
             '--include-dir={0}'.format(ctx.bldnode.abspath()),
-            '--include-dir={0}'.format(ctx.srcnode.abspath())
+            '--include-dir={0}'.format(ctx.srcnode.abspath()),
+            '--codepage=65001' # Unicode codepage
         ]
 
         for node in 'osdep/mpv.exe.manifest etc/mpv-icon.ico'.split():

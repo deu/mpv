@@ -53,6 +53,9 @@ struct demux_ctrl_reader_state {
     double ts_end; // approx. timestamp of end of buffered range
     int64_t total_bytes;
     int64_t fw_bytes;
+    double seeking; // current low level seek target, or NOPTS
+    int low_level_seeks; // number of started low level seeks
+    double ts_last; // approx. timestamp of demuxer position
     // Positions that can be seeked to without incurring the latency of a low
     // level seek.
     int num_seek_ranges;
@@ -68,6 +71,7 @@ struct demux_ctrl_stream_ctrl {
 #define SEEK_FACTOR   (1 << 1)      // argument is in range [0,1]
 #define SEEK_FORWARD  (1 << 2)      // prefer later time if not exact
                                     // (if unset, prefer earlier time)
+#define SEEK_CACHED   (1 << 3)      // allow packet cache seeks only
 #define SEEK_HR       (1 << 5)      // hr-seek (this is a weak hint only)
 
 // Strictness of the demuxer open format check.
@@ -90,6 +94,7 @@ enum demux_event {
     DEMUX_EVENT_INIT = 1 << 0,      // complete (re-)initialization
     DEMUX_EVENT_STREAMS = 1 << 1,   // a stream was added
     DEMUX_EVENT_METADATA = 1 << 2,  // metadata or stream_metadata changed
+    DEMUX_EVENT_DURATION = 1 << 3,  // duration updated
     DEMUX_EVENT_ALL = 0xFFFF,
 };
 

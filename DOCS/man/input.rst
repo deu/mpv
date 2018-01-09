@@ -790,6 +790,13 @@ The following hooks are currently defined:
     ``file-local-options/<option name>``. The player will wait until all
     hooks are run.
 
+``on_load_fail``
+    Called after after a file has been opened, but failed to. This can be
+    used to provide a fallback in case native demuxers failed to recognize
+    the file, instead of always running before the native demuxers like
+    ``on_load``. Demux will only be retried if ``stream-open-filename``
+    was changed.
+
 ``on_preloaded``
     Called after a file has been opened, and before tracks are selected and
     decoders are created. This has some usefulness if an API users wants
@@ -1273,6 +1280,9 @@ Property list
     buffering amount, while the seek ranges represent the buffered data that
     can actually be used for cached seeking.
 
+    ``fw-bytes`` is the number of bytes of packets buffered in the range
+    starting from the current decoding position.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1284,6 +1294,7 @@ Property list
                 MPV_FORMAT_NODE_MAP
                     "start"             MPV_FORMAT_DOUBLE
                     "end"               MPV_FORMAT_DOUBLE
+            "fw-bytes"          MPV_FORMAT_INT64
 
     Other fields (might be changed or removed in the future):
 
@@ -2107,6 +2118,10 @@ Property list
     List of libavcodec encoders. This has the same format as ``decoder-list``.
     The encoder names (``driver`` entries) can be passed to ``--ovc`` and
     ``--oac`` (without the ``lavc:`` prefix required by ``--vd`` and ``--ad``).
+
+``demuxer-lavf-list``
+    List of available libavformat demuxers' names. This can be used to check
+    for support for a specific format or use with ``--demuxer-lavf-format``.
 
 ``mpv-version``
     Return the mpv version/copyright string. Depending on how the binary was

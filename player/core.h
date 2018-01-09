@@ -141,6 +141,7 @@ struct track {
     // If this track is from an external file (e.g. subtitle file).
     bool is_external;
     bool no_default;            // pretend it's not external for auto-selection
+    bool no_auto_select;
     char *external_filename;
     bool auto_loaded;
 
@@ -432,7 +433,7 @@ typedef struct MPContext {
     bool playing_msg_shown;
 
     bool paused_for_cache;
-    double cache_stop_time, cache_wait_time;
+    double cache_stop_time;
     int cache_buffer;
 
     // Set after showing warning about decoding being too slow for realtime
@@ -631,12 +632,5 @@ void uninit_video_chain(struct MPContext *mpctx);
 double calc_average_frame_duration(struct MPContext *mpctx);
 int init_video_decoder(struct MPContext *mpctx, struct track *track);
 void recreate_auto_filters(struct MPContext *mpctx);
-
-// Values of MPOpts.softvol
-enum {
-    SOFTVOL_NO = 0,
-    SOFTVOL_YES = 1,
-    SOFTVOL_AUTO = 2,
-};
 
 #endif /* MPLAYER_MP_CORE_H */

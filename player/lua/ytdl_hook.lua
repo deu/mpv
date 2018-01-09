@@ -3,7 +3,8 @@ local msg = require 'mp.msg'
 local options = require 'mp.options'
 
 local o = {
-    exclude = ""
+    exclude = "",
+    try_ytdl_first = false
 }
 options.read_options(o)
 
@@ -301,7 +302,7 @@ local function add_single_video(json)
     end
 end
 
-mp.add_hook("on_load", 10, function ()
+mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
     local url = mp.get_property("stream-open-filename")
     local start_time = os.clock()
     if (url:find("ytdl://") == 1) or
@@ -366,7 +367,7 @@ mp.add_hook("on_load", 10, function ()
 
         if (es < 0) or (json == nil) or (json == "") then
             if not result.killed_by_us then
-                msg.warn("youtube-dl failed, trying to play URL directly ...")
+                msg.error("youtube-dl failed")
             end
             return
         end
@@ -396,12 +397,16 @@ mp.add_hook("on_load", 10, function ()
                 return
             end
 
+            local self_redirecting_url =
+                json.entries[1]["_type"] ~= "url_transparent" and
+                json.entries[1]["webpage_url"] and
+                json.entries[1]["webpage_url"] == json["webpage_url"]
+
 
             -- some funky guessing to detect multi-arc videos
-            if (not (json.entries[1]["_type"] == "url_transparent")) and
-                (not (json.entries[1]["webpage_url"] == nil)
-                and (json.entries[1]["webpage_url"] == json["webpage_url"]))
-                and not (json.entries[1].url == nil) then
+            if self_redirecting_url and #json.entries > 1
+                and json.entries[1].protocol == "m3u8_native"
+                and json.entries[1].url then
                 msg.verbose("multi-arc video detected, building EDL")
 
                 local playlist = edl_track_joined(json.entries)
@@ -446,39 +451,39 @@ mp.add_hook("on_load", 10, function ()
                     end
                 end
 
-            elseif (not (json.entries[1]["_type"] == "url_transparent")) and
-                (not (json.entries[1]["webpage_url"] == nil)
-                and (json.entries[1]["webpage_url"] == json["webpage_url"]))
-                and (#json.entries == 1) then
-
+            elseif self_redirecting_url and #json.entries == 1 then
                 msg.verbose("Playlist with single entry detected.")
                 add_single_video(json.entries[1])
             else
-
-                local playlist = "#EXTM3U\n"
+                local playlist = {"#EXTM3U"}
                 for i, entry in pairs(json.entries) do
                     local site = entry.url
                     local title = entry.title
 
                     if not (title == nil) then
                         title = string.gsub(title, '%s+', ' ')
-                        playlist = playlist .. "#EXTINF:0," .. title .. "\n"
+                        table.insert(playlist, "#EXTINF:0," .. title)
                     end
 
-                    -- some extractors will still return the full info for
-                    -- all clips in the playlist and the URL will point
-                    -- directly to the file in that case, which we don't
-                    -- want so get the webpage URL instead, which is what
-                    -- we want
-                    if not (json.entries[1]["_type"] == "url_transparent")
-                        and not (entry["webpage_url"] == nil) then
+                    --[[ some extractors will still return the full info for
+                         all clips in the playlist and the URL will point
+                         directly to the file in that case, which we don't
+                         want so get the webpage URL instead, which is what
+                         we want, but only if we aren't going to trigger an
+                         infinite loop
+                    --]]
+                    if not self_redirecting_url then
                         site = entry["webpage_url"]
                     end
 
-                    playlist = playlist .. "ytdl://" .. site .. "\n"
+                    if not (site:find("https?://") == 1) then
+                        site = "ytdl://" .. site
+                    end
+                    table.insert(playlist, site)
+
                 end
 
-                mp.set_property("stream-open-filename", "memory://" .. playlist)
+                mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
             end
 
         else -- probably a video

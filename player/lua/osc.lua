@@ -34,11 +34,13 @@ local user_opts = {
     layout = "bottombar",
     seekbarstyle = "bar",       -- slider (diamond marker), knob (circle
                                 -- marker with guide), or bar (fill)
+    seekbarkeyframes = true,    -- use keyframes when dragging the seekbar
     title = "${media-title}",   -- string compatible with property-expansion
                                 -- to be shown as OSC title
     tooltipborder = 1,          -- border of tooltip in bottom/topbar
     timetotal = false,          -- display total time instead of remaining time?
     timems = false,             -- display timecodes with milliseconds?
+    seekranges = true,          -- display seek ranges?
     visibility = "auto",        -- only used at init to set visibility_mode(...)
     boxmaxchars = 80,           -- title crop threshold for box layout
 }
@@ -1761,6 +1763,9 @@ function osc_init()
         end
     end
     ne.slider.seekRangesF = function()
+        if not (user_opts.seekranges) then
+            return nil
+        end
         local cache_state = mp.get_property_native("demuxer-cache-state", nil)
         if not cache_state then
             return nil
@@ -1784,8 +1789,8 @@ function osc_init()
             local seekto = get_slider_value(element)
             if (element.state.lastseek == nil) or
                 (not (element.state.lastseek == seekto)) then
-                    mp.commandv("seek", seekto,
-                        "absolute-percent", "keyframes")
+                    mp.commandv("seek", seekto, "absolute-percent",
+                        user_opts.seekbarkeyframes and "keyframes" or "exact")
                     element.state.lastseek = seekto
             end
 
@@ -1840,25 +1845,23 @@ function osc_init()
     ne.content = function ()
         local dmx_cache = mp.get_property_number("demuxer-cache-duration")
         local cache_used = mp.get_property_number("cache-used")
+        local dmx_cache_state = mp.get_property_native("demuxer-cache-state", {})
         local is_network = mp.get_property_native("demuxer-via-network")
+        local show_cache = cache_used and not dmx_cache_state["eof"]
         if dmx_cache then
             dmx_cache = string.format("%3.0fs", dmx_cache)
         end
-        if cache_used then
-            local suffix = " KiB"
-            if (cache_used >= 1024) then
-                cache_used = cache_used/1024
-                suffix = " MiB"
-            end
-            cache_used = string.format("%5.1f%s", cache_used, suffix)
+        if dmx_cache_state["fw-bytes"] then
+            cache_used = (cache_used or 0)*1024 + dmx_cache_state["fw-bytes"]
         end
-        if (is_network and dmx_cache) or cache_used then
+        if (is_network and dmx_cache) or show_cache then
             -- Only show dmx-cache-duration by itself if it's a network file.
             -- Cache can be forced even for local files, so always show that.
             return string.format("Cache: %s%s%s",
                 (dmx_cache and dmx_cache or ""),
-                ((dmx_cache and cache_used) and " + " or ""),
-                (cache_used or ""))
+                ((dmx_cache and show_cache) and " | " or ""),
+                (show_cache and
+                    utils.format_bytes_humanized(cache_used) or ""))
         else
             return ""
         end

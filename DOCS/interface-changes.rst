@@ -19,6 +19,11 @@ Interface changes
 
 ::
 
+ --- mpv 0.29.0 ---
+    - drop deprecated --videotoolbox-format, --ff-aid, --ff-vid, --ff-sid,
+      --ad-spdif-dtshd, --softvol options
+    - fix --external-files: strictly never select any tracks from them, unless
+      explicitly selected (this may or may not be expected)
  --- mpv 0.28.0 ---
     - rename --hwdec=mediacodec option to mediacodec-copy, to reflect
       conventions followed by other hardware video decoding APIs
@@ -59,11 +64,12 @@ Interface changes
       now.
     - change the --hwdec option from a choice to a plain string (affects
       introspection of the option/property), also affects some properties
-    - rename --hwdec=rpi to --hwdec=mmal, sane for the -copy variant (no
+    - rename --hwdec=rpi to --hwdec=mmal, same for the -copy variant (no
       backwards compatibility)
-    - deprecate the --ff-aid, --ff-vid, -ff-sid options and properties (there is
+    - deprecate the --ff-aid, --ff-vid, --ff-sid options and properties (there is
       no replacement, but you can manually query the track property and use the
       "ff-index" field to find the mpv track ID to imitate this behavior)
+    - rename --no-ometadata to --no-ocopy-metadata
  --- mpv 0.27.0 ---
     - drop previously deprecated --field-dominance option
     - drop previously deprecated "osd" command

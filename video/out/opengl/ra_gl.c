@@ -283,6 +283,8 @@ static struct ra_tex *gl_tex_create(struct ra *ra,
                                     const struct ra_tex_params *params)
 {
     GL *gl = ra_gl_get(ra);
+    assert(!params->format->dummy_format);
+
     struct ra_tex *tex = gl_tex_create_blank(ra, params);
     if (!tex)
         return NULL;
@@ -382,6 +384,7 @@ static const struct ra_format fbo_dummy_format = {
         .flags = F_CR,
     },
     .renderable = true,
+    .dummy_format = true,
 };
 
 // Create a ra_tex that merely wraps an existing framebuffer. gl_fbo can be 0
@@ -996,6 +999,10 @@ static void gl_renderpass_run(struct ra *ra,
         assert(params->target->params.render_dst);
         assert(params->target->params.format == pass->params.target_format);
         gl->BindFramebuffer(GL_FRAMEBUFFER, target_gl->fbo);
+        if (pass->params.invalidate_target && gl->InvalidateFramebuffer) {
+            GLenum fb = target_gl->fbo ? GL_COLOR_ATTACHMENT0 : GL_COLOR;
+            gl->InvalidateFramebuffer(GL_FRAMEBUFFER, 1, &fb);
+        }
         gl->Viewport(params->viewport.x0, params->viewport.y0,
                      mp_rect_w(params->viewport),
                      mp_rect_h(params->viewport));

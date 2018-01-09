@@ -49,7 +49,9 @@ struct encode_opts {
     int neverdrop;
     int video_first;
     int audio_first;
-    int metadata;
+    int copy_metadata;
+    char **set_metadata;
+    char **remove_metadata;
 };
 
 // interface for mplayer.c

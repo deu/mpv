@@ -1153,7 +1153,7 @@ static void dispatch_compute(struct gl_video *p, int w, int h,
 }
 
 static struct mp_pass_perf render_pass_quad(struct gl_video *p,
-                                            struct ra_fbo fbo,
+                                            struct ra_fbo fbo, bool discard,
                                             const struct mp_rect *dst)
 {
     // The first element is reserved for `vec2 position`
@@ -1211,15 +1211,15 @@ static struct mp_pass_perf render_pass_quad(struct gl_video *p,
             &p->tmp_vertex[num_vertex_attribs * 1],
             vertex_stride);
 
-    return gl_sc_dispatch_draw(p->sc, fbo.tex, p->vao, num_vertex_attribs,
+    return gl_sc_dispatch_draw(p->sc, fbo.tex, discard, p->vao, num_vertex_attribs,
                                vertex_stride, p->tmp_vertex, num_vertices);
 }
 
 static void finish_pass_fbo(struct gl_video *p, struct ra_fbo fbo,
-                            const struct mp_rect *dst)
+                            bool discard, const struct mp_rect *dst)
 {
     pass_prepare_src_tex(p);
-    pass_record(p, render_pass_quad(p, fbo, dst));
+    pass_record(p, render_pass_quad(p, fbo, discard, dst));
     debug_check_gl(p, "after rendering");
     cleanup_binds(p);
 }
@@ -1237,6 +1237,11 @@ static void finish_pass_tex(struct gl_video *p, struct ra_tex **dst_tex,
         return;
     }
 
+    // If RA_CAP_PARALLEL_COMPUTE is set, try to prefer compute shaders
+    // over fragment shaders wherever possible.
+    if (!p->pass_compute.active && (p->ra->caps & RA_CAP_PARALLEL_COMPUTE))
+        pass_is_compute(p, 16, 16);
+
     if (p->pass_compute.active) {
         gl_sc_uniform_image2D_wo(p->sc, "out_image", *dst_tex);
         if (!p->pass_compute.directly_writes)
@@ -1248,7 +1253,7 @@ static void finish_pass_tex(struct gl_video *p, struct ra_tex **dst_tex,
         debug_check_gl(p, "after dispatching compute shader");
     } else {
         struct ra_fbo fbo = { .tex = *dst_tex, };
-        finish_pass_fbo(p, fbo, &(struct mp_rect){0, 0, w, h});
+        finish_pass_fbo(p, fbo, true, &(struct mp_rect){0, 0, w, h});
     }
 }
 
@@ -2799,7 +2804,7 @@ static void pass_draw_to_screen(struct gl_video *p, struct ra_fbo fbo)
 
     pass_dither(p);
     pass_describe(p, "output to screen");
-    finish_pass_fbo(p, fbo, &p->dst_rect);
+    finish_pass_fbo(p, fbo, false, &p->dst_rect);
 }
 
 static bool update_surface(struct gl_video *p, struct mp_image *mpi,
@@ -3064,9 +3069,15 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                 if (frame->num_vsyncs > 1 && frame->display_synced &&
                     !p->dumb_mode && (p->ra->caps & RA_CAP_BLIT))
                 {
+                    // Attempt to use the same format as the destination FBO
+                    // if possible. Some RAs use a wrapped dummy format here,
+                    // so fall back to the fbo_format in that case.
+                    const struct ra_format *fmt = fbo.tex->params.format;
+                    if (fmt->dummy_format)
+                        fmt = p->fbo_format;
                     bool r = ra_tex_resize(p->ra, p->log, &p->output_tex,
                                            fbo.tex->params.w, fbo.tex->params.h,
-                                           p->fbo_format);
+                                           fmt);
                     if (r) {
                         dest_fbo = (struct ra_fbo) { p->output_tex };
                         p->output_tex_valid = true;
@@ -3205,7 +3216,7 @@ static void reinterleave_vdpau(struct gl_video *p,
         const struct ra_format *fmt = ra_find_unorm_format(p->ra, 1, comps);
         ra_tex_resize(p->ra, p->log, tex, w, h * 2, fmt);
         struct ra_fbo fbo = { *tex };
-        finish_pass_fbo(p, fbo, &(struct mp_rect){0, 0, w, h * 2});
+        finish_pass_fbo(p, fbo, true, &(struct mp_rect){0, 0, w, h * 2});
 
         output[n] = *tex;
     }

@@ -729,9 +729,23 @@ video_output_features = [
         'deps': 'win32-desktop && gpl',
         'func': check_cc(header_name='d3d9.h'),
     }, {
+        'name': 'shaderc-shared',
+        'desc': 'libshaderc SPIR-V compiler (shared library)',
+        'deps': '!static-build',
+        'groups': ['shaderc'],
+        'func': check_cc(header_name='shaderc/shaderc.h', lib='shaderc_shared'),
+    }, {
+        'name': 'shaderc-static',
+        'desc': 'libshaderc SPIR-V compiler (static library)',
+        'deps': '!shaderc-shared',
+        'groups': ['shaderc'],
+        'func': check_cc(header_name='shaderc/shaderc.h',
+                         lib=['shaderc_combined', 'stdc++']),
+    }, {
         'name': '--shaderc',
         'desc': 'libshaderc SPIR-V compiler',
-        'func': check_cc(header_name='shaderc/shaderc.h', lib='shaderc_shared'),
+        'deps': 'shaderc-shared || shaderc-static',
+        'func': check_true,
     }, {
         'name': '--crossc',
         'desc': 'libcrossc SPIR-V translator',
@@ -1047,7 +1061,12 @@ def build(ctx):
             'The project was not configured: run "waf --variant={0} configure" first!'
                 .format(ctx.options.variant))
     ctx.unpack_dependencies_lists()
+    ctx.add_group('versionh')
+    ctx.add_group('sources')
+
+    ctx.set_group('versionh')
     __write_version__(ctx)
+    ctx.set_group('sources')
     ctx.load('wscript_build')
 
 def init(ctx):

@@ -140,9 +140,6 @@ static int recreate_audio_filters(struct MPContext *mpctx)
     if (afs->initialized < 1 && af_init(afs) < 0)
         goto fail;
 
-    if (mpctx->opts->softvol == SOFTVOL_NO)
-        MP_ERR(mpctx, "--softvol=no is not supported anymore.\n");
-
     mp_notify(mpctx, MPV_EVENT_AUDIO_RECONFIG, NULL);
 
     return 0;
@@ -1228,10 +1225,8 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
     // Even if we're done decoding and syncing, let video start first - this is
     // required, because sending audio to the AO already starts playback.
     if (mpctx->audio_status == STATUS_READY) {
-        if (mpctx->vo_chain && !mpctx->vo_chain->is_coverart &&
-            mpctx->video_status <= STATUS_READY)
-            return;
-        MP_VERBOSE(mpctx, "starting audio playback\n");
+        // Warning: relies on handle_playback_restart() being called afterwards.
+        return;
     }
 
     bool audio_eof = status == AD_EOF;

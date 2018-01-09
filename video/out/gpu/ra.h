@@ -53,6 +53,7 @@ enum {
     RA_CAP_GLOBAL_UNIFORM = 1 << 8, // supports using "naked" uniforms (not UBO)
     RA_CAP_GATHER         = 1 << 9, // supports textureGather in GLSL
     RA_CAP_FRAGCOORD      = 1 << 10, // supports reading from gl_FragCoord
+    RA_CAP_PARALLEL_COMPUTE  = 1 << 11, // supports parallel compute shaders
 };
 
 enum ra_ctype {
@@ -84,6 +85,8 @@ struct ra_format {
                             // only applies to 2-component textures
     bool linear_filter;     // linear filtering available from shader
     bool renderable;        // can be used for render targets
+    bool dummy_format;      // is not a real ra_format but a fake one (e.g. FBO).
+                            // dummy formats cannot be used to create textures
 
     // If not 0, the format represents some sort of packed fringe format, whose
     // shader representation is given by the special_imgfmt_desc pointer.
@@ -284,6 +287,9 @@ struct ra_renderpass_params {
     enum ra_blend blend_dst_rgb;
     enum ra_blend blend_src_alpha;
     enum ra_blend blend_dst_alpha;
+
+    // If true, the contents of `target` not written to will become undefined
+    bool invalidate_target;
 
     // --- type==RA_RENDERPASS_TYPE_COMPUTE only
 

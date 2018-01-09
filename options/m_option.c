@@ -1427,6 +1427,20 @@ static int parse_keyvalue_list(struct mp_log *log, const m_option_t *opt,
     char **lst = NULL;
     int num = 0;
     int r = 0;
+    bool append = false;
+    bool full_value = false;
+
+    if (bstr_endswith0(name, "-add")) {
+        append = true;
+    } else if (bstr_endswith0(name, "-append")) {
+        append = full_value = true;
+    }
+
+    if (append && dst) {
+        lst = VAL(dst);
+        for (int n = 0; lst && lst[n]; n++)
+            num++;
+    }
 
     while (param.len) {
         bstr key, val;
@@ -1438,9 +1452,14 @@ static int parse_keyvalue_list(struct mp_log *log, const m_option_t *opt,
             r = M_OPT_INVALID;
             break;
         }
-        r = read_subparam(log, name, ",:", &param, &val);
-        if (r < 0)
-            break;
+        if (full_value) {
+            val = param;
+            param.len = 0;
+        } else {
+            r = read_subparam(log, name, ",:", &param, &val);
+            if (r < 0)
+                break;
+        }
         if (dst) {
             MP_TARRAY_APPEND(NULL, lst, num, bstrto0(NULL, key));
             MP_TARRAY_APPEND(NULL, lst, num, bstrto0(NULL, val));
@@ -1459,7 +1478,8 @@ static int parse_keyvalue_list(struct mp_log *log, const m_option_t *opt,
     }
 
     if (dst) {
-        free_str_list(dst);
+        if (!append)
+            free_str_list(dst);
         VAL(dst) = lst;
         if (r < 0)
             free_str_list(dst);
@@ -1532,6 +1552,12 @@ const m_option_type_t m_option_type_keyvalue_list = {
     .free  = free_str_list,
     .get   = keyvalue_list_get,
     .set   = keyvalue_list_set,
+    .actions = (const struct m_option_action[]){
+        {"add"},
+        {"append"},
+        {"set"},
+        {0}
+    },
 };
 
 
@@ -2405,10 +2431,28 @@ out:
     return 1;
 }
 
+static char *print_rel_time(const m_option_t *opt, const void *val)
+{
+    const struct m_rel_time *t = val;
+    switch(t->type) {
+    case REL_TIME_ABSOLUTE:
+        return talloc_asprintf(NULL, "%g", t->pos);
+    case REL_TIME_RELATIVE:
+        return talloc_asprintf(NULL, "%s%g",
+            (t->pos >= 0) ? "+" : "-", fabs(t->pos));
+    case REL_TIME_CHAPTER:
+        return talloc_asprintf(NULL, "#%g", t->pos);
+    case REL_TIME_PERCENT:
+        return talloc_asprintf(NULL, "%g%%", t->pos);
+    }
+    return talloc_strdup(NULL, "none");
+}
+
 const m_option_type_t m_option_type_rel_time = {
     .name  = "Relative time or percent position",
     .size  = sizeof(struct m_rel_time),
     .parse = parse_rel_time,
+    .print = print_rel_time,
     .copy  = copy_opt,
 };
 

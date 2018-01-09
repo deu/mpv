@@ -212,6 +212,8 @@ void update_demuxer_properties(struct MPContext *mpctx)
         mpctx->filtered_tags = info;
         mp_notify(mpctx, MPV_EVENT_METADATA_UPDATE, NULL);
     }
+    if (events & DEMUX_EVENT_DURATION)
+        mp_notify(mpctx, MP_EVENT_DURATION_UPDATE, NULL);
     demuxer->events = 0;
 }
 
@@ -296,7 +298,7 @@ void add_demuxer_tracks(struct MPContext *mpctx, struct demuxer *demuxer)
 static int match_lang(char **langs, char *lang)
 {
     for (int idx = 0; langs && langs[idx]; idx++) {
-        if (lang && strcmp(langs[idx], lang) == 0)
+        if (lang && strcasecmp(langs[idx], lang) == 0)
             return INT_MAX - idx;
     }
     return 0;
@@ -322,6 +324,7 @@ static int match_achans(char **achans, uint8_t tachans)
  * Sort tracks based on the following criteria, and pick the first:
  * 0a) track matches ff-index (always wins)
  * 0b) track matches tid (almost always wins)
+ * 0c) track is not from --external-file
  * 1) track is external (no_default cancels this)
  * 1b) track was passed explicitly (is not an auto-loaded subtitle)
  * 2) earlier match in lang list
@@ -380,12 +383,9 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
 {
     struct MPOpts *opts = mpctx->opts;
     int tid = opts->stream_id[order][type];
-    int ffid = order == 0 ? opts->stream_id_ff[type] : -1;
     char **langs = order == 0 ? opts->stream_lang[type] : NULL;
     char **achans = order == 0 ? opts->stream_achans : NULL;
-    if (ffid != -1)
-        tid = -1; // prefer selecting ffid
-    if (tid == -2 || ffid == -2)
+    if (tid == -2)
         return NULL;
     bool select_fallback = type == STREAM_VIDEO || type == STREAM_AUDIO;
     struct track *pick = NULL;
@@ -395,8 +395,8 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
             continue;
         if (track->user_tid == tid)
             return track;
-        if (track->ff_index == ffid)
-            return track;
+        if (track->no_auto_select)
+            continue;
         if (!pick || compare_track(track, pick, langs, achans, mpctx->opts))
             pick = track;
     }
@@ -650,6 +650,7 @@ struct track *mp_add_external_file(struct MPContext *mpctx, char *filename,
         t->title = talloc_strdup(t, mp_basename(disp_filename));
         t->external_filename = talloc_strdup(t, filename);
         t->no_default = sh->type != filter;
+        t->no_auto_select = filter == STREAM_TYPE_COUNT;
         if (!first && (filter == STREAM_TYPE_COUNT || sh->type == filter))
             first = t;
     }
@@ -760,12 +761,12 @@ static void transfer_playlist(struct MPContext *mpctx, struct playlist *pl)
     }
 }
 
-static int process_open_hooks(struct MPContext *mpctx)
+static int process_open_hooks(struct MPContext *mpctx, char *name)
 {
 
-    mp_hook_run(mpctx, NULL, "on_load");
+    mp_hook_run(mpctx, NULL, name);
 
-    while (!mp_hook_test_completion(mpctx, "on_load")) {
+    while (!mp_hook_test_completion(mpctx, name)) {
         mp_idle(mpctx);
         if (mpctx->stop_play) {
             // Can't exit immediately, the script would interfere with the
@@ -1185,8 +1186,6 @@ static void play_current_file(struct MPContext *mpctx)
     mpctx->last_chapter_pts = MP_NOPTS_VALUE;
     mpctx->last_chapter = -2;
     mpctx->paused = false;
-    mpctx->paused_for_cache = false;
-    mpctx->cache_buffer = -1;
     mpctx->playing_msg_shown = false;
     mpctx->max_frames = -1;
     mpctx->video_speed = mpctx->audio_speed = opts->playback_speed;
@@ -1240,7 +1239,7 @@ reopen_file:
 
     assert(mpctx->demuxer == NULL);
 
-    if (process_open_hooks(mpctx) < 0)
+    if (process_open_hooks(mpctx, "on_load") < 0)
         goto terminate_playback;
 
     if (opts->stream_dump && opts->stream_dump[0]) {
@@ -1250,6 +1249,13 @@ reopen_file:
     }
 
     open_demux_reentrant(mpctx);
+    if (!mpctx->stop_play && !mpctx->demuxer &&
+        process_open_hooks(mpctx, "on_load_fail") >= 0 &&
+        strcmp(mpctx->stream_open_filename, mpctx->filename) != 0)
+    {
+        mpctx->error_playing = MPV_ERROR_LOADING_FAILED;
+        open_demux_reentrant(mpctx);
+    }
     if (!mpctx->demuxer || mpctx->stop_play)
         goto terminate_playback;
 

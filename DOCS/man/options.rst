@@ -564,6 +564,11 @@ Program Behavior
 
     If the script can't do anything with an URL, it will do nothing.
 
+    The `try_ytdl_first` script option accepts a boolean 'yes' or 'no', and if
+    'yes' will try parsing the URL with youtube-dl first, instead of the default
+    where it's only after mpv failed to open it. This mostly depends on whether
+    most of your URLs need youtube-dl parsing.
+
     The `exclude` script option accepts a ``|``-separated list of URL patterns
     which mpv should not use with youtube-dl. The patterns are matched after
     the ``http(s)://`` part of the URL.
@@ -703,8 +708,9 @@ Video
     :videotoolbox: requires ``--vo=gpu`` (OS X 10.8 and up),
                    or ``--vo=opengl-cb`` (iOS 9.0 and up)
     :videotoolbox-copy: copies video back into system RAM (OS X 10.8 or iOS 9.0 and up)
-    :dxva2:     requires ``--vo=gpu`` with ``--gpu-context=angle`` or
-                ``--gpu-context=dxinterop`` (Windows only)
+    :dxva2:     requires ``--vo=gpu`` with ``--gpu-context=d3d11``,
+                ``--gpu-context=angle`` or ``--gpu-context=dxinterop``
+                (Windows only)
     :dxva2-copy: copies video back to system RAM (Windows only)
     :d3d11va:   requires ``--vo=gpu`` with ``--gpu-context=d3d11`` or
                 ``--gpu-context=angle`` (Windows 8+ only)
@@ -1171,6 +1177,18 @@ Video
     on the machine and use that, up to the maximum of 16. You can set more than
     16 threads manually.
 
+``--vd-lavc-assume-old-x264=<yes|no>``
+    Assume the video was encoded by an old, buggy x264 version (default: no).
+    Normally, this is autodetected by libavcodec. But if the bitstream contains
+    no x264 version info (or it was somehow skipped), and the stream was in fact
+    encoded by an old x264 version (build 150 or earlier), and if the stream
+    uses ``4:4:4`` chroma, then libavcodec will by default show corrupted video.
+    This option sets the libavcodec ``x264_build`` option to ``150``, which
+    means that if the stream contains no version info, or was not encoded by
+    x264 at all, it assumes it was encoded by the old version. Enabling this
+    option is pretty safe if you want your broken files to work, but in theory
+    this can break on streams not encoded by x264, or if a stream encoded by a
+    newer x264 version contains no version info.
 
 
 Audio
@@ -3096,8 +3114,7 @@ OSD
     Whether to load the on-screen-controller (default: yes).
 
 ``--no-osd-bar``, ``--osd-bar``
-    Disable display of the OSD bar. This will make some things (like seeking)
-    use OSD text messages instead of the bar.
+    Disable display of the OSD bar.
 
     You can configure this on a per-command basis in input.conf using ``osd-``
     prefixes, see ``Input command prefixes``. If you want to disable the OSD
@@ -3121,30 +3138,29 @@ OSD
 
 ``--osd-msg1=<string>``
     Show this string as message on OSD with OSD level 1 (visible by default).
-    The message will be visible by default, and as long no other message
+    The message will be visible by default, and as long as no other message
     covers it, and the OSD level isn't changed (see ``--osd-level``).
     Expands properties; see `Property Expansion`_.
 
 ``--osd-msg2=<string>``
-    Similar as ``--osd-msg1``, but for OSD level 2. If this is an empty string
+    Similar to ``--osd-msg1``, but for OSD level 2. If this is an empty string
     (default), then the playback time is shown.
 
 ``--osd-msg3=<string>``
-    Similar as ``--osd-msg1``, but for OSD level 3. If this is an empty string
+    Similar to ``--osd-msg1``, but for OSD level 3. If this is an empty string
     (default), then the playback time, duration, and some more information is
     shown.
 
     This is also used for the ``show-progress`` command (by default mapped to
-    ``P``), or in some non-default cases when seeking.
+    ``P``), when toggling pause, and when seeking.
 
     ``--osd-status-msg`` is a legacy equivalent (but with a minor difference).
 
 ``--osd-status-msg=<string>``
     Show a custom string during playback instead of the standard status text.
     This overrides the status text used for ``--osd-level=3``, when using the
-    ``show-progress`` command (by default mapped to ``P``), or in some
-    non-default cases when seeking. Expands properties. See
-    `Property Expansion`_.
+    ``show-progress`` command (by default mapped to ``P``), when toggling pause,
+    and when seeking. Expands properties. See `Property Expansion`_.
 
     This option has been replaced with ``--osd-msg3``. The only difference is
     that this option implicitly includes ``${osd-sym-cc}``. This option is
@@ -3768,7 +3784,7 @@ Cache
     between readahead and backbuffer sizes.
 
 ``--cache-default=<kBytes|no>``
-    Set the size of the cache in kilobytes (default: 75000 KB). Using ``no``
+    Set the size of the cache in kilobytes (default: 10000 KB). Using ``no``
     will not automatically enable the cache e.g. when playing from a network
     stream. Note that using ``--cache`` will always override this option.
 
@@ -3789,7 +3805,7 @@ Cache
     This option allows control over this.
 
 ``--cache-backbuffer=<kBytes>``
-    Size of the cache back buffer (default: 75000 KB). This will add to the total
+    Size of the cache back buffer (default: 10000 KB). This will add to the total
     cache size, and reserved the amount for seeking back. The reserved amount
     will not be used for readahead, and instead preserves already read data to
     enable fast seeking back.
@@ -3847,11 +3863,37 @@ Cache
 ``--cache-secs=<seconds>``
     How many seconds of audio/video to prefetch if the cache is active. This
     overrides the ``--demuxer-readahead-secs`` option if and only if the cache
-    is enabled and the value is larger. (Default: 120.)
+    is enabled and the value is larger. The default value is set to something
+    very high, so the actually achieved readahead will usually be limited by
+    the value of the ``--demuxer-max-bytes`` option.
 
-``--cache-pause``, ``--no-cache-pause``
-    Whether the player should automatically pause when the cache runs low,
-    and unpause once more data is available ("buffering").
+``--cache-pause=<yes|no>``
+    Whether the player should automatically pause when the cache runs out of
+    data and stalls decoding/playback (default: yes). If enabled, it will
+    pause and unpause once more data is available, aka "buffering".
+
+``--cache-pause-wait=<seconds>``
+    Number of seconds the packet cache should have buffered before starting
+    playback again if "buffering" was entered (default: 1). This can be used
+    to control how long the player rebuffers if ``--cache-pause`` is enabled,
+    and the demuxer underruns. If the given time is higher than the maximum
+    set with ``--cache-secs`` or  ``--demuxer-readahead-secs``, or prefetching
+    ends before that for some other reason (like file end), playback resumes
+    earlier.
+
+``--cache-pause-initial=<yes|no>``
+    Enter "buffering" mode before starting playback (default: no). This can be
+    used to ensure playback starts smoothly, in exchange for waiting some time
+    to prefetch network data (as controlled by ``--cache-pause-wait``). For
+    example, some common behavior is that playback starts, but network caches
+    immediately underrun when trying to decode more data as playback progresses.
+
+    Another thing that can happen is that the network prefetching is so CPU
+    demanding (due to demuxing in the background) that playback drops frames
+    at first. In these cases, it helps enabling this option, and setting
+    ``--cache-secs`` and ``--cache-pause-wait`` to roughly the same value.
+
+    This option also triggers when playback is restarted after seeking.
 
 
 Network
@@ -4305,11 +4347,25 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Controls the number of VkQueues used for rendering (limited by how many
     your device supports). In theory, using more queues could enable some
     parallelism between frames (when using a ``--swapchain-depth`` higher than
-    1). (Default: 1)
+    1), but it can also slow things down on hardware where there's no true
+    parallelism between queues. (Default: 1)
 
-    NOTE: Setting this to a value higher than 1 may cause graphical corruption,
-    as mpv's vulkan implementation currently does not try and protect textures
-    against concurrent access.
+``--vulkan-async-transfer``
+    Enables the use of async transfer queues on supported vulkan devices. Using
+    them allows transfer operations like texture uploads and blits to happen
+    concurrently with the actual rendering, thus improving overall throughput
+    and power consumption. Enabled by default, and should be relatively safe.
+
+``--vulkan-async-compute``
+    Enables the use of async compute queues on supported vulkan devices. Using
+    this, in theory, allows out-of-order scheduling of compute shaders with
+    graphics shaders, thus enabling the hardware to do more effective work while
+    waiting for pipeline bubbles and memory operations. Not beneficial on all
+    GPUs. It's worth noting that if async compute is enabled, and the device
+    supports more compute queues than graphics queues (bound by the restrictions
+    set by ``--vulkan-queue-count``), mpv will internally try and prefer the
+    use of compute shaders over fragment shaders wherever possible. Not enabled
+    by default, since it seems to cause issues with some drivers.
 
 ``--d3d11-warp=<yes|no|auto>``
     Use WARP (Windows Advanced Rasterization Platform) with the D3D11 GPU
@@ -4736,6 +4792,13 @@ The following video options are currently all specific to ``--vo=gpu`` and
     (default: no)
 
     OS X only.
+
+``--android-surface-size=<WxH>``
+    Set dimensions of the rendering surface used by the Android gpu context.
+    Needs to be set by the embedding application if the dimensions change during
+    runtime (i.e. if the device is rotated), via the surfaceChanged callback.
+
+    Android with ``--gpu-context=android`` only.
 
 ``--swapchain-depth=<N>``
     Allow up to N in-flight frames. This essentially controls the frame
@@ -5328,7 +5391,8 @@ Miscellaneous
 
     Unlike ``--sub-files`` and ``--audio-files``, this includes all tracks, and
     does not cause default stream selection over the "proper" file. This makes
-    it slightly less intrusive.
+    it slightly less intrusive. (In mpv 0.28.0 and before, this was not quite
+    strictly enforced.)
 
     This is a list option. See `List Options`_ for details.
 

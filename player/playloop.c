@@ -234,15 +234,17 @@ void reset_playback_state(struct MPContext *mpctx)
     mpctx->current_seek = (struct seek_params){0};
     mpctx->playback_pts = MP_NOPTS_VALUE;
     mpctx->last_seek_pts = MP_NOPTS_VALUE;
-    mpctx->cache_wait_time = 0;
     mpctx->step_frames = 0;
     mpctx->ab_loop_clip = true;
     mpctx->restart_complete = false;
+    mpctx->paused_for_cache = false;
+    mpctx->cache_buffer = 100;
 
 #if HAVE_ENCODING
     encode_lavc_discontinuity(mpctx->encode_lavc_ctx);
 #endif
 
+    update_internal_pause_state(mpctx);
     update_core_idle_state(mpctx);
 }
 
@@ -252,12 +254,6 @@ static void mp_seek(MPContext *mpctx, struct seek_params seek)
 
     if (!mpctx->demuxer || seek.type == MPSEEK_NONE || seek.amount == MP_NOPTS_VALUE)
         return;
-
-    if (!mpctx->demuxer->seekable) {
-        MP_ERR(mpctx, "Cannot seek in this file.\n");
-        MP_ERR(mpctx, "You can forcibly enable it with '--force-seekable=yes'.\n");
-        return;
-    }
 
     bool hr_seek_very_exact = seek.exact == MPSEEK_VERY_EXACT;
     double current_time = get_current_time(mpctx);
@@ -325,7 +321,16 @@ static void mp_seek(MPContext *mpctx, struct seek_params seek)
         demux_flags = (demux_flags | SEEK_HR) & ~SEEK_FORWARD;
     }
 
-    demux_seek(mpctx->demuxer, demux_pts, demux_flags);
+    if (!mpctx->demuxer->seekable)
+        demux_flags |= SEEK_CACHED;
+
+    if (!demux_seek(mpctx->demuxer, demux_pts, demux_flags)) {
+        if (!mpctx->demuxer->seekable) {
+            MP_ERR(mpctx, "Cannot seek in this file.\n");
+            MP_ERR(mpctx, "You can force it with '--force-seekable=yes'.\n");
+        }
+        return;
+    }
 
     // Seek external, extra files too:
     for (int t = 0; t < mpctx->num_tracks; t++) {
@@ -612,37 +617,38 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
     demux_control(mpctx->demuxer, DEMUXER_CTRL_GET_READER_STATE, &s);
 
     int cache_buffer = 100;
-    bool use_pause_on_low_cache = c.size > 0 || mpctx->demuxer->is_network;
+    bool use_pause_on_low_cache = (c.size > 0 || mpctx->demuxer->is_network) &&
+                                  opts->cache_pause;
 
-    if (mpctx->restart_complete && use_pause_on_low_cache) {
-        if (mpctx->paused && mpctx->paused_for_cache) {
-            if (!s.underrun && (!opts->cache_pausing || s.idle ||
-                                s.ts_duration >= mpctx->cache_wait_time))
-            {
-                double elapsed_time = now - mpctx->cache_stop_time;
-                if (elapsed_time > mpctx->cache_wait_time) {
-                    mpctx->cache_wait_time *= 1.5 + 0.1;
-                } else {
-                    mpctx->cache_wait_time /= 1.5 - 0.1;
-                }
-                mpctx->paused_for_cache = false;
-                update_internal_pause_state(mpctx);
-                force_update = true;
-            }
-            mp_set_timeout(mpctx, 0.2);
-        } else {
-            if (opts->cache_pausing && s.underrun) {
-                mpctx->paused_for_cache = true;
-                update_internal_pause_state(mpctx);
-                mpctx->cache_stop_time = now;
-                force_update = true;
-            }
-        }
-        mpctx->cache_wait_time = MPCLAMP(mpctx->cache_wait_time, 1, 10);
-        if (mpctx->paused_for_cache) {
-            cache_buffer =
-                100 * MPCLAMP(s.ts_duration / mpctx->cache_wait_time, 0, 0.99);
-        }
+    if (!mpctx->restart_complete) {
+        // Audio or video is restarting, and initial buffering is enabled. Make
+        // sure we actually restart them in paused mode, so no audio gets
+        // dropped and video technically doesn't start yet.
+        use_pause_on_low_cache &= opts->cache_pause_initial &&
+                                    (mpctx->video_status == STATUS_READY ||
+                                     mpctx->audio_status == STATUS_READY);
+    }
+
+    bool is_low = use_pause_on_low_cache && !s.idle &&
+                  s.ts_duration < opts->cache_pause_wait;
+
+    // Enter buffering state only if there actually was an underrun (or if
+    // initial caching before playback restart is used).
+    if (is_low && !mpctx->paused_for_cache && mpctx->restart_complete)
+        is_low = s.underrun;
+
+    if (mpctx->paused_for_cache != is_low) {
+        mpctx->paused_for_cache = is_low;
+        update_internal_pause_state(mpctx);
+        force_update = true;
+        if (is_low)
+            mpctx->cache_stop_time = now;
+    }
+
+    if (mpctx->paused_for_cache) {
+        cache_buffer =
+            100 * MPCLAMP(s.ts_duration / opts->cache_pause_wait, 0, 0.99);
+        mp_set_timeout(mpctx, 0.2);
     }
 
     // Also update cache properties.
@@ -657,9 +663,7 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
     }
 
     if (mpctx->cache_buffer != cache_buffer) {
-        if (mpctx->cache_buffer >= 0 &&
-            (mpctx->cache_buffer == 100) != (cache_buffer == 100))
-        {
+        if ((mpctx->cache_buffer == 100) != (cache_buffer == 100)) {
             if (cache_buffer < 100) {
                 MP_VERBOSE(mpctx, "Enter buffering.\n");
             } else {
@@ -778,19 +782,11 @@ static void handle_loop_file(struct MPContext *mpctx)
 
     // Do not attempt to loop-file if --ab-loop is active.
     else if (opts->loop_file && mpctx->stop_play == AT_END_OF_FILE) {
-        double play_start_pts = get_play_start_pts(mpctx);
-        if (play_start_pts == MP_NOPTS_VALUE)
-            play_start_pts = 0;
-        double play_end_pts = get_play_end_pts(mpctx);
-        if (play_end_pts == MP_NOPTS_VALUE || play_start_pts < play_end_pts){
-            mpctx->stop_play = KEEP_PLAYING;
-            set_osd_function(mpctx, OSD_FFW);
-            queue_seek(mpctx, MPSEEK_ABSOLUTE, play_start_pts, MPSEEK_EXACT,
-                        MPSEEK_FLAG_NOFLUSH);
-            if (opts->loop_file > 0)
-                opts->loop_file--;
-        }
-
+        mpctx->stop_play = KEEP_PLAYING;
+        set_osd_function(mpctx, OSD_FFW);
+        queue_seek(mpctx, MPSEEK_ABSOLUTE, 0, MPSEEK_DEFAULT, MPSEEK_FLAG_NOFLUSH);
+        if (opts->loop_file > 0)
+            opts->loop_file--;
     }
 }
 
@@ -963,6 +959,8 @@ static void handle_playback_restart(struct MPContext *mpctx)
         mpctx->video_status < STATUS_READY)
         return;
 
+    handle_pause_on_low_cache(mpctx);
+
     if (mpctx->video_status == STATUS_READY) {
         mpctx->video_status = STATUS_PLAYING;
         get_relative_time(mpctx);
@@ -978,7 +976,15 @@ static void handle_playback_restart(struct MPContext *mpctx)
             return;
         }
 
+        // Video needed, but not started yet -> wait.
+        if (mpctx->vo_chain && !mpctx->vo_chain->is_coverart &&
+            mpctx->video_status <= STATUS_READY)
+            return;
+
+        MP_VERBOSE(mpctx, "starting audio playback\n");
+        mpctx->audio_status = STATUS_PLAYING;
         fill_audio_out_buffers(mpctx); // actually play prepared buffer
+        mp_wakeup_core(mpctx);
     }
 
     if (!mpctx->restart_complete) {
