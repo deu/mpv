@@ -63,6 +63,7 @@ static bool get_desc(struct m_obj_desc *dst, int index)
         .priv_size = af->priv_size,
         .priv_defaults = af->priv_defaults,
         .options = af->options,
+        .set_defaults = af->set_defaults,
         .p = af,
     };
     return true;
@@ -170,7 +171,7 @@ static struct af_instance *af_create(struct af_stream *s, char *name,
         .out_pool = mp_audio_pool_create(af),
     };
     struct m_config *config =
-        m_config_from_obj_desc_and_args(af, s->log, NULL, &desc,
+        m_config_from_obj_desc_and_args(af, s->log, s->global, &desc,
                                         name, s->opts->af_defs, args);
     if (!config)
         goto error;
@@ -340,8 +341,9 @@ static int filter_reinit_with_conversion(struct af_stream *s, struct af_instance
         }
         if (!mp_audio_config_equals(af->prev->data, &in)) {
             // Retry with conversion filter added.
+            char *opts[] = {"deprecation-warning", "no", NULL};
             struct af_instance *new =
-                af_prepend(s, af, "lavrresample", NULL);
+                af_prepend(s, af, "lavrresample", opts);
             if (!new)
                 return AF_ERROR;
             new->auto_inserted = true;
@@ -407,7 +409,8 @@ static int af_do_reinit(struct af_stream *s, bool second_pass)
     s->first->fmt_in = s->first->fmt_out = s->input;
 
     if (mp_audio_config_valid(&convert_early)) {
-        struct af_instance *new = af_prepend(s, s->first, "lavrresample", NULL);
+        char *opts[] = {"deprecation-warning", "no", NULL};
+        struct af_instance *new = af_prepend(s, s->first, "lavrresample", opts);
         if (!new)
             return AF_ERROR;
         new->auto_inserted = true;

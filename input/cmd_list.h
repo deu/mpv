@@ -21,14 +21,14 @@
 #include <stdbool.h>
 #include "options/m_option.h"
 
-#define MP_CMD_MAX_ARGS 10
+#define MP_CMD_DEF_MAX_ARGS 9
 
 #define MP_CMD_OPT_ARG 0x1000
 
 struct mp_cmd_def {
     int id;             // one of MP_CMD_...
     const char *name;   // user-visible name (as used in input.conf)
-    const struct m_option args[MP_CMD_MAX_ARGS];
+    const struct m_option args[MP_CMD_DEF_MAX_ARGS];
     bool allow_auto_repeat; // react to repeated key events
     bool on_updown;     // always emit it on both up and down key events
     bool vararg;        // last argument can be given 0 to multiple times
@@ -65,6 +65,7 @@ enum mp_command_type {
     MP_CMD_SUB_REMOVE,
     MP_CMD_SUB_RELOAD,
     MP_CMD_SET,
+    MP_CMD_CHANGE_LIST,
     MP_CMD_PRINT_TEXT,
     MP_CMD_SHOW_TEXT,
     MP_CMD_EXPAND_TEXT,

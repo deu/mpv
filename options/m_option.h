@@ -32,6 +32,7 @@ typedef struct m_option m_option_t;
 struct m_config;
 struct mp_log;
 struct mpv_node;
+struct mpv_global;
 
 ///////////////////////////// Options types declarations ////////////////////
 
@@ -40,6 +41,7 @@ extern const m_option_type_t m_option_type_flag;
 extern const m_option_type_t m_option_type_dummy_flag;
 extern const m_option_type_t m_option_type_int;
 extern const m_option_type_t m_option_type_int64;
+extern const m_option_type_t m_option_type_byte_size;
 extern const m_option_type_t m_option_type_intpair;
 extern const m_option_type_t m_option_type_float;
 extern const m_option_type_t m_option_type_double;
@@ -129,6 +131,10 @@ struct m_obj_desc {
     bool hidden;
     // Callback to print custom help if "help" is passed
     void (*print_help)(struct mp_log *log);
+    // Callback that allows you to override the static default values. The
+    // pointer p points to the struct described by options/priv_size, with
+    // priv_defaults already applied. You can write to it to set any defaults.
+    void (*set_defaults)(struct mpv_global *global, void *p);
     // Set by m_obj_list_find(). If the requested name is an old alias, this
     // is set to the old name (while the name field uses the new name).
     const char *replaced_name;
@@ -366,6 +372,7 @@ struct m_option {
     const char *deprecation_message;
 };
 
+char *format_file_size(int64_t size);
 
 // The option has a minimum set in \ref m_option::min.
 #define M_OPT_MIN               (1 << 0)
@@ -664,6 +671,9 @@ extern const char m_option_path_separator;
 
 #define OPT_COLOR(...) \
     OPT_GENERAL(struct m_color, __VA_ARGS__, .type = &m_option_type_color)
+
+#define OPT_BYTE_SIZE(...) \
+    OPT_RANGE_(int64_t, __VA_ARGS__, .type = &m_option_type_byte_size)
 
 #define OPT_GEOMETRY(...) \
     OPT_GENERAL(struct m_geometry, __VA_ARGS__, .type = &m_option_type_geometry)

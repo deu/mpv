@@ -320,24 +320,6 @@ static char *cut_osd_list(struct MPContext *mpctx, char *text, int pos)
     return new;
 }
 
-static char *format_file_size(int64_t size)
-{
-    double s = size;
-    if (size < 1024)
-        return talloc_asprintf(NULL, "%.0f", s);
-
-    if (size < (1024 * 1024))
-        return talloc_asprintf(NULL, "%.3f KiB", s / (1024.0));
-
-    if (size < (1024 * 1024 * 1024))
-        return talloc_asprintf(NULL, "%.3f MiB", s / (1024.0 * 1024.0));
-
-    if (size < (1024LL * 1024LL * 1024LL * 1024LL))
-        return talloc_asprintf(NULL, "%.3f GiB", s / (1024.0 * 1024.0 * 1024.0));
-
-    return talloc_asprintf(NULL, "%.3f TiB", s / (1024.0 * 1024.0 * 1024.0 * 1024.0));
-}
-
 static char *format_delay(double time)
 {
     return talloc_asprintf(NULL, "%d ms", (int)lrint(time * 1000));
@@ -4586,6 +4568,7 @@ done:
     }
 
     osd_set_external2(mpctx->osd, new);
+    mp_wakeup_core(mpctx);
     cmd->overlay_osd_current = overlay_next;
 }
 
@@ -4935,6 +4918,38 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         break;
     }
 
+    case MP_CMD_CHANGE_LIST: {
+        char *name = cmd->args[0].v.s;
+        char *op = cmd->args[1].v.s;
+        char *value = cmd->args[2].v.s;
+        struct m_config_option *co = m_config_get_co(mpctx->mconfig, bstr0(name));
+        if (!co) {
+            set_osd_msg(mpctx, osdl, osd_duration, "Unknown option: '%s'", name);
+            return -1;
+        }
+        const struct m_option_type *type = co->opt->type;
+        bool found = false;
+        for (int i = 0; type->actions && type->actions[i].name; i++) {
+            const struct m_option_action *action = &type->actions[i];
+            if (strcmp(action->name, op) == 0)
+                found = true;
+        }
+        if (!found) {
+            set_osd_msg(mpctx, osdl, osd_duration, "Unknown action: '%s'", op);
+            return -1;
+        }
+        char *optname = mp_tprintf(80, "%s-%s", name, op); // the dirty truth
+        int r = m_config_set_option_cli(mpctx->mconfig, bstr0(optname),
+                                        bstr0(value), M_SETOPT_RUNTIME);
+        if (r < 0) {
+            set_osd_msg(mpctx, osdl, osd_duration,
+                        "Failed setting option: '%s'", name);
+            return -1;
+        }
+        show_property_osd(mpctx, name, on_osd);
+        break;
+    }
+
     case MP_CMD_ADD:
     case MP_CMD_CYCLE:
     {
@@ -4991,7 +5006,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
     }
 
     case MP_CMD_CYCLE_VALUES: {
-        char *args[MP_CMD_MAX_ARGS + 1] = {0};
+        char **args = talloc_zero_array(NULL, char *, cmd->nargs + 1);
         for (int n = 0; n < cmd->nargs; n++)
             args[n] = cmd->args[n].v.s;
         int first = 1, dir = 1;
@@ -5015,14 +5030,17 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
             } else if (r == M_PROPERTY_UNKNOWN) {
                 set_osd_msg(mpctx, osdl, osd_duration,
                             "Unknown property: '%s'", property);
+                talloc_free(args);
                 return -1;
             } else if (r <= 0) {
                 set_osd_msg(mpctx, osdl, osd_duration,
                             "Failed to set property '%s' to '%s'",
                             property, value);
+                talloc_free(args);
                 return -1;
             }
         }
+        talloc_free(args);
         break;
     }
 
@@ -5390,10 +5408,11 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
     }
 
     case MP_CMD_RUN: {
-        char *args[MP_CMD_MAX_ARGS + 1] = {0};
+        char **args = talloc_zero_array(NULL, char *, cmd->nargs + 1);
         for (int n = 0; n < cmd->nargs; n++)
             args[n] = cmd->args[n].v.s;
         mp_subprocess_detached(mpctx->log, args);
+        talloc_free(args);
         break;
     }
 
@@ -5510,11 +5529,12 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         break;
     }
     case MP_CMD_SCRIPT_MESSAGE: {
-        const char *args[MP_CMD_MAX_ARGS];
+        const char **args = talloc_array(NULL, const char *, cmd->nargs);
         mpv_event_client_message event = {.args = args};
         for (int n = 0; n < cmd->nargs; n++)
             event.args[event.num_args++] = cmd->args[n].v.s;
         mp_client_broadcast_event(mpctx, MPV_EVENT_CLIENT_MESSAGE, &event);
+        talloc_free(args);
         break;
     }
 

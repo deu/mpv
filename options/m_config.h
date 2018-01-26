@@ -123,9 +123,6 @@ struct m_config *m_config_new(void *talloc_ctx, struct mp_log *log,
 // mpv_global. Expected to be called at early init on the main m_config.
 void m_config_create_shadow(struct m_config *config);
 
-struct m_config *m_config_from_obj_desc(void *talloc_ctx, struct mp_log *log,
-                                        struct m_obj_desc *desc);
-
 struct m_config *m_config_from_obj_desc_noalloc(void *talloc_ctx,
                                                 struct mp_log *log,
                                                 struct m_obj_desc *desc);
@@ -328,8 +325,6 @@ bool m_config_cache_update(struct m_config_cache *cache);
 // Like m_config_cache_alloc(), but return the struct (m_config_cache->opts)
 // directly, with no way to update the config. Basically this returns a copy
 // with a snapshot of the current option values.
-// Warning: does currently not set the child as its own talloc root, which
-//          means the only way to free the struct is by freeing ta_parent.
 void *mp_get_config_group(void *ta_parent, struct mpv_global *global,
                           const struct m_sub_options *group);
 

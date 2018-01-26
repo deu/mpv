@@ -862,9 +862,6 @@ static void init_video(struct gl_video *p)
     }
     p->color_swizzle[4] = '\0';
 
-    // Format-dependent checks.
-    check_gl_features(p);
-
     mp_image_params_guess_csp(&p->image_params);
 
     av_lfg_init(&p->lfg, 1);
@@ -908,6 +905,9 @@ static void init_video(struct gl_video *p)
     }
 
     debug_check_gl(p, "after video texture creation");
+
+    // Format-dependent checks.
+    check_gl_features(p);
 
     gl_video_setup_hooks(p);
 }
@@ -3344,7 +3344,7 @@ static bool test_fbo(struct gl_video *p, const struct ra_format *fmt)
 }
 
 // Return whether dumb-mode can be used without disabling any features.
-// Essentially, vo_opengl with mostly default settings will return true.
+// Essentially, vo_gpu with mostly default settings will return true.
 static bool check_dumb_mode(struct gl_video *p)
 {
     struct gl_video_opts *o = &p->opts;
@@ -3849,6 +3849,9 @@ static void gl_video_dr_free_buffer(void *opaque, uint8_t *data)
 struct mp_image *gl_video_get_image(struct gl_video *p, int imgfmt, int w, int h,
                                     int stride_align)
 {
+    if (!gl_video_check_format(p, imgfmt))
+        return NULL;
+
     int size = mp_image_get_alloc_size(imgfmt, w, h, stride_align);
     if (size < 0)
         return NULL;

@@ -41,7 +41,6 @@
 #include "vd.h"
 #include "video/hwdec.h"
 #include "video/img_format.h"
-#include "video/filter/vf.h"
 #include "video/mp_image.h"
 #include "video/mp_image_pool.h"
 #include "video/decode/dec_video.h"
@@ -65,7 +64,7 @@ static enum AVPixelFormat get_format_hwdec(struct AVCodecContext *avctx,
 
 // Maximum number of surfaces the player wants to buffer.
 // This number might require adjustment depending on whatever the player does;
-// for example, if vo_opengl increases the number of reference surfaces for
+// for example, if vo_gpu increases the number of reference surfaces for
 // interpolation, this value has to be increased too.
 #define HWDEC_EXTRA_SURFACES 6
 
@@ -546,8 +545,8 @@ static int init(struct dec_video *vd, const char *decoder)
     ctx->opts = vd->opts;
     ctx->decoder = talloc_strdup(ctx, decoder);
     ctx->hwdec_devs = vd->hwdec_devs;
-    ctx->hwdec_swpool = talloc_steal(ctx, mp_image_pool_new(17));
-    ctx->dr_pool = talloc_steal(ctx, mp_image_pool_new(INT_MAX));
+    ctx->hwdec_swpool = mp_image_pool_new(ctx);
+    ctx->dr_pool = mp_image_pool_new(ctx);
 
     pthread_mutex_init(&ctx->dr_lock, NULL);
 

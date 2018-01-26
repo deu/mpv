@@ -231,7 +231,7 @@ static inline bool IMGFMT_IS_RGB(int fmt)
 }
 
 #define IMGFMT_RGB_DEPTH(fmt) (mp_imgfmt_get_desc(fmt).plane_bits)
-#define IMGFMT_IS_HWACCEL(fmt) (mp_imgfmt_get_desc(fmt).flags & MP_IMGFLAG_HWACCEL)
+#define IMGFMT_IS_HWACCEL(fmt) (!!(mp_imgfmt_get_desc(fmt).flags & MP_IMGFLAG_HWACCEL))
 
 int mp_imgfmt_from_name(bstr name);
 char *mp_imgfmt_to_name_buf(char *buf, size_t buf_size, int fmt);
@@ -244,5 +244,6 @@ char **mp_imgfmt_name_list(void);
 int mp_imgfmt_find(int xs, int ys, int planes, int component_bits, int flags);
 
 int mp_imgfmt_select_best(int dst1, int dst2, int src);
+int mp_imgfmt_select_best_list(int *dst, int num_dst, int src);
 
 #endif /* MPLAYER_IMG_FORMAT_H */

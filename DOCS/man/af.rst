@@ -29,6 +29,12 @@ Available filters are:
     This filter is automatically enabled if the audio output does not support
     the audio configuration of the file being played.
 
+    .. warning::
+
+        Deprecated. Either use the ``--audio-resample-...`` options to customize
+        resampling, or the libavfilter ``--af=aresample`` filter, which has its
+        own options.
+
     It supports only the following sample formats: u8, s16, s32, float.
 
     ``filter-size=<length>``
@@ -218,6 +224,12 @@ Available filters are:
         Set the ``<pitch-scale>`` argument dynamically. This can be used to
         change the playback pitch at runtime. Note that speed is controlled
         using the standard ``speed`` property, not ``af-command``.
+
+    ``multiply-pitch <factor>``
+        Multiply the current value of ``<pitch-scale>`` dynamically.  For
+        example: 0.5 to go down by an octave, 1.5 to go up by a perfect fifth.
+        If you want to go up or down by semi-tones, use 1.059463094352953 and
+        0.9438743126816935
 
 ``lavfi=graph``
     Filter audio using FFmpeg's libavfilter.

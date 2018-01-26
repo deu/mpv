@@ -156,28 +156,12 @@ static bool is_busy(struct MPContext *mpctx)
     return !mpctx->restart_complete && mp_time_sec() - mpctx->start_timestamp > 0.3;
 }
 
-static void term_osd_print_status_lazy(struct MPContext *mpctx)
+static char *get_term_status_msg(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
 
-    update_window_title(mpctx, false);
-    update_vo_playback_state(mpctx);
-
-    if (!opts->use_terminal)
-        return;
-
-    if (opts->quiet || !mpctx->playback_initialized || !mpctx->playing_msg_shown)
-    {
-        term_osd_set_status_lazy(mpctx, "");
-        return;
-    }
-
-    if (opts->status_msg) {
-        char *r = mp_property_expand_escaped_string(mpctx, opts->status_msg);
-        term_osd_set_status_lazy(mpctx, r);
-        talloc_free(r);
-        return;
-    }
+    if (opts->status_msg)
+        return mp_property_expand_escaped_string(mpctx, opts->status_msg);
 
     char *line = NULL;
 
@@ -197,9 +181,9 @@ static void term_osd_print_status_lazy(struct MPContext *mpctx)
     saddf(&line, ": ");
 
     // Playback position
-    sadd_hhmmssff(&line, get_playback_time(mpctx), mpctx->opts->osd_fractions);
+    sadd_hhmmssff(&line, get_playback_time(mpctx), opts->osd_fractions);
     saddf(&line, " / ");
-    sadd_hhmmssff(&line, get_time_length(mpctx), mpctx->opts->osd_fractions);
+    sadd_hhmmssff(&line, get_time_length(mpctx), opts->osd_fractions);
 
     sadd_percentage(&line, get_percent_pos(mpctx));
 
@@ -272,6 +256,27 @@ static void term_osd_print_status_lazy(struct MPContext *mpctx)
         }
     }
 
+    return line;
+}
+
+static void term_osd_print_status_lazy(struct MPContext *mpctx)
+{
+    struct MPOpts *opts = mpctx->opts;
+
+    update_window_title(mpctx, false);
+    update_vo_playback_state(mpctx);
+
+    if (!opts->use_terminal)
+        return;
+
+    if (opts->quiet || !mpctx->playback_initialized || !mpctx->playing_msg_shown)
+    {
+        term_osd_set_status_lazy(mpctx, "");
+        return;
+    }
+
+    char *line = get_term_status_msg(mpctx);
+
     if (opts->term_osd_bar) {
         saddf(&line, "\n");
         int w = 80, h = 24;
@@ -279,7 +284,6 @@ static void term_osd_print_status_lazy(struct MPContext *mpctx)
         add_term_osd_bar(mpctx, &line, w);
     }
 
-    // end
     term_osd_set_status_lazy(mpctx, line);
     talloc_free(line);
 }

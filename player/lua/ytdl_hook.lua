@@ -16,6 +16,18 @@ local ytdl = {
 
 local chapter_list = {}
 
+function Set (t)
+    local set = {}
+    for _, v in pairs(t) do set[v] = true end
+    return set
+end
+
+local safe_protos = Set {
+    "http", "https", "ftp", "ftps",
+    "rtmp", "rtmps", "rtmpe", "rtmpt", "rtmpts", "rtmpte",
+    "data"
+}
+
 local function exec(args)
     local ret = utils.subprocess({args = args})
     return ret.status, ret.stdout, ret
@@ -70,6 +82,15 @@ end
 
 local function edl_escape(url)
     return "%" .. string.len(url) .. "%" .. url
+end
+
+local function url_is_safe(url)
+    local proto = type(url) == "string" and url:match("^(.+)://") or nil
+    local safe = proto and safe_protos[proto]
+    if not safe then
+        msg.error(("Ignoring potentially unsafe url: '%s'"):format(url))
+    end
+    return safe
 end
 
 local function time_to_secs(time_string)
@@ -183,6 +204,9 @@ local function edl_track_joined(fragments, protocol, is_live, base)
 
     for i = offset, #fragments do
         local fragment = fragments[i]
+        if not url_is_safe(join_url(base, fragment)) then
+            return nil
+        end
         table.insert(parts, edl_escape(join_url(base, fragment)))
         if fragment.duration then
             parts[#parts] =
@@ -192,24 +216,66 @@ local function edl_track_joined(fragments, protocol, is_live, base)
     return edl .. table.concat(parts, ";") .. ";"
 end
 
+local function has_native_dash_demuxer()
+    local demuxers = mp.get_property_native("demuxer-lavf-list")
+    for _,v in ipairs(demuxers) do
+        if v == "dash" then
+            return true
+        end
+    end
+    return false
+end
+
+local function proto_is_dash(json)
+    local reqfmts = json["requested_formats"]
+    return (reqfmts ~= nil and reqfmts[1]["protocol"] == "http_dash_segments")
+           or json["protocol"] == "http_dash_segments"
+end
+
 local function add_single_video(json)
     local streamurl = ""
+    local max_bitrate = 0
+
+    if has_native_dash_demuxer() and proto_is_dash(json) then
+        local mpd_url = json["requested_formats"][1]["manifest_url"] or
+            json["manifest_url"]
+        if not mpd_url then
+            msg.error("No manifest URL found in JSON data.")
+            return
+        elseif not url_is_safe(mpd_url) then
+            return
+        end
+
+        streamurl = mpd_url
+
+        if json.requested_formats then
+            for _, track in pairs(json.requested_formats) do
+                max_bitrate = track.tbr > max_bitrate and
+                    track.tbr or max_bitrate
+            end
+        elseif json.tbr then
+            max_bitrate = json.tbr > max_bitrate and json.tbr or max_bitrate
+        end
 
     -- DASH/split tracks
-    if not (json["requested_formats"] == nil) then
+    elseif not (json["requested_formats"] == nil) then
         for _, track in pairs(json.requested_formats) do
             local edl_track = nil
             edl_track = edl_track_joined(track.fragments,
                 track.protocol, json.is_live,
                 track.fragment_base_url)
+            local url = edl_track or track.url
+            if not url_is_safe(url) then
+                return
+            end
             if track.acodec and track.acodec ~= "none" then
                 -- audio track
                 mp.commandv("audio-add",
-                    edl_track or track.url, "auto",
+                    url, "auto",
                     track.format_note or "")
             elseif track.vcodec and track.vcodec ~= "none" then
                 -- video track
-                streamurl = edl_track or track.url
+                streamurl = url
             end
         end
 
@@ -228,9 +294,22 @@ local function add_single_video(json)
 
     msg.debug("streamurl: " .. streamurl)
 
-    mp.set_property("stream-open-filename", streamurl:gsub("^data:", "data://", 1))
+    streamurl = streamurl:gsub("^data:", "data://", 1)
+
+    if not url_is_safe(streamurl) then
+        return
+    end
+
+    mp.set_property("stream-open-filename", streamurl)
 
     mp.set_property("file-local-options/force-media-title", json.title)
+
+    -- set hls-bitrate for dash track selection
+    if max_bitrate > 0 and
+        not option_was_set("hls-bitrate") and
+        not option_was_set_locally("hls-bitrate") then
+        mp.set_property_native('file-local-options/hls-bitrate', max_bitrate*1000)
+    end
 
     -- add subtitles
     if not (json.requested_subtitles == nil) then
@@ -310,7 +389,8 @@ mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
 
         -- check for youtube-dl in mpv's config dir
         if not (ytdl.searched) then
-            local ytdl_mcd = mp.find_config_file("youtube-dl")
+            local exesuf = (package.config:sub(1,1) == '\\') and '.exe' or ''
+            local ytdl_mcd = mp.find_config_file("youtube-dl" .. exesuf)
             if not (ytdl_mcd == nil) then
                 msg.verbose("found youtube-dl at: " .. ytdl_mcd)
                 ytdl.path = ytdl_mcd
@@ -366,9 +446,15 @@ mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
         local es, json, result = exec(command)
 
         if (es < 0) or (json == nil) or (json == "") then
-            if not result.killed_by_us then
-                msg.error("youtube-dl failed")
+            local err = "youtube-dl failed: "
+            if result.error and result.error == "init" then
+                err = err .. "not found or not enough permissions"
+            elseif not result.killed_by_us then
+                err = err .. "unexpected error ocurred"
+            else
+                err = string.format("%s returned '%d'", err, es)
             end
+            msg.error(err)
             return
         end
 
@@ -472,18 +558,22 @@ mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
                          we want, but only if we aren't going to trigger an
                          infinite loop
                     --]]
-                    if not self_redirecting_url then
+                    if entry["webpage_url"] and not self_redirecting_url then
                         site = entry["webpage_url"]
                     end
 
-                    if not (site:find("https?://") == 1) then
-                        site = "ytdl://" .. site
+                    -- links with only youtube id as returned by --flat-playlist
+                    if not site:find("://") then
+                        table.insert(playlist, "ytdl://" .. site)
+                    elseif url_is_safe(site) then
+                        table.insert(playlist, site)
                     end
-                    table.insert(playlist, site)
 
                 end
 
-                mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
+                if #playlist > 0 then
+                    mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
+                end
             end
 
         else -- probably a video

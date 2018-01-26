@@ -32,6 +32,7 @@
 
 #include "common/av_common.h"
 #include "common/msg.h"
+#include "options/m_config.h"
 #include "options/m_option.h"
 #include "audio/filter/af.h"
 #include "audio/fmt-conversion.h"
@@ -42,7 +43,9 @@ struct af_resample {
     int allow_detach;
     double playback_speed;
     struct mp_resample_opts opts;
+    int global_normalize;
     struct mp_aconverter *converter;
+    int deprecation_warning;
 };
 
 static int control(struct af_instance *af, int cmd, void *arg)
@@ -142,9 +145,37 @@ static int af_open(struct af_instance *af)
     af->filter_frame = filter;
     af->filter_out = filter_out;
 
+    if (s->opts.normalize < 0)
+        s->opts.normalize = s->global_normalize;
+
     s->converter = mp_aconverter_create(af->global, af->log, &s->opts);
 
+    if (s->deprecation_warning) {
+        MP_WARN(af, "This filter is deprecated! Use the --audio-resample- options"
+                " to customize resampling, or the --af=aresample filter.\n");
+    }
+
     return AF_OK;
+}
+
+static void set_defaults(struct mpv_global *global, void *p)
+{
+    struct af_resample *s = p;
+
+    struct mp_resample_opts *opts = &s->opts;
+
+    struct mp_resample_opts *src_opts =
+        mp_get_config_group(s, global, &resample_config);
+
+    s->global_normalize = src_opts->normalize;
+
+    assert(!opts->avopts); // we don't set a default value, so it must be NULL
+
+    *opts = *src_opts;
+
+    opts->avopts = NULL;
+    struct m_option dummy = {.type = &m_option_type_keyvalue_list};
+    m_option_copy(&dummy, &opts->avopts, &src_opts->avopts);
 }
 
 #define OPT_BASE_STRUCT struct af_resample
@@ -158,6 +189,7 @@ const struct af_info af_info_lavrresample = {
         .opts = MP_RESAMPLE_OPTS_DEF,
         .playback_speed = 1.0,
         .allow_detach = 1,
+        .deprecation_warning = 1,
     },
     .options = (const struct m_option[]) {
         OPT_INTRANGE("filter-size", opts.filter_size, 0, 0, 32),
@@ -168,6 +200,8 @@ const struct af_info af_info_lavrresample = {
         OPT_CHOICE("normalize", opts.normalize, 0,
                    ({"no", 0}, {"yes", 1}, {"auto", -1})),
         OPT_KEYVALUELIST("o", opts.avopts, 0),
+        OPT_FLAG("deprecation-warning", deprecation_warning, 0),
         {0}
     },
+    .set_defaults = set_defaults,
 };

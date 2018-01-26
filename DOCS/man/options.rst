@@ -559,8 +559,7 @@ Program Behavior
     Enable the youtube-dl hook-script. It will look at the input URL, and will
     play the video located on the website. This works with many streaming sites,
     not just the one that the script is named after. This requires a recent
-    version of youtube-dl to be installed on the system. (Enabled by default,
-    except when the client API / libmpv is used.)
+    version of youtube-dl to be installed on the system. (Enabled by default.)
 
     If the script can't do anything with an URL, it will do nothing.
 
@@ -1454,16 +1453,6 @@ Audio
         want. For example, most A/V receivers connected via HDMI and that can
         do 7.1 would  be served by: ``--audio-channels=7.1,5.1,stereo``
 
-``--audio-normalize-downmix=<yes|no>``
-    Enable/disable normalization if surround audio is downmixed to stereo
-    (default: no). If this is disabled, downmix can cause clipping. If it's
-    enabled, the output might be too silent. It depends on the source audio.
-
-    Technically, this changes the ``normalize`` suboption of the
-    ``lavrresample`` audio filter, which performs the downmixing.
-
-    If downmix happens outside of mpv for some reason, this has no effect.
-
 ``--audio-display=<no|attachment>``
     Setting this option to ``attachment`` (default) will display image
     attachments (e.g. album cover art) when playing audio files. It will
@@ -2043,7 +2032,8 @@ Subtitles
     Default: 55.
 
 ``--sub-back-color=<color>``
-    See ``--sub-color``. Color used for sub text background.
+    See ``--sub-color``. Color used for sub text background. You can use
+    ``--sub-shadow-offset`` to change its size relative to the text.
 
 ``--sub-blur=<0..20.0>``
     Gaussian blur factor. 0 means no blur applied (default).
@@ -2890,7 +2880,7 @@ Demuxer
 ``--demuxer-rawvideo-size=<value>``
     Frame size in bytes when using ``--demuxer=rawvideo``.
 
-``--demuxer-max-bytes=<bytes>``
+``--demuxer-max-bytes=<bytesize>``
     This controls how much the demuxer is allowed to buffer ahead. The demuxer
     will normally try to read ahead as much as necessary, or as much is
     requested with ``--demuxer-readahead-secs``. The option can be used to
@@ -2902,9 +2892,10 @@ Demuxer
     Set these limits higher if you get a packet queue overflow warning, and
     you think normal playback would be possible with a larger packet queue.
 
-    See ``--list-options`` for defaults and value range.
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
 
-``--demuxer-max-back-bytes=<value>``
+``--demuxer-max-back-bytes=<bytesize>``
     This controls how much past data the demuxer is allowed to preserve. This
     is useful only if the ``--demuxer-seekable-cache`` option is enabled.
     Unlike the forward cache, there is no control how many seconds are actually
@@ -3466,6 +3457,44 @@ Software Scaler
 ``--sws-cvs=<v>``
     Software scaler chroma vertical shifting. See ``--sws-scaler``.
 
+Audio Resampler
+---------------
+
+This controls the default options of any resampling done by mpv (but not within
+libavfilter, within the system audio API resampler, or any other places).
+
+It also sets the defaults for the ``lavrresample`` audio filter.
+
+``--audio-resample-filter-size=<length>``
+    Length of the filter with respect to the lower sampling rate. (default:
+    16)
+
+``--audio-resample-phase-shift=<count>``
+    Log2 of the number of polyphase entries. (..., 10->1024, 11->2048,
+    12->4096, ...) (default: 10->1024)
+
+``--audio-resample-cutoff=<cutoff>``
+    Cutoff frequency (0.0-1.0), default set depending upon filter length.
+
+``--audio-resample-linear=<yes|no>``
+    If set then filters will be linearly interpolated between polyphase
+    entries. (default: no)
+
+``--audio-normalize-downmix=<yes|no>``
+    Enable/disable normalization if surround audio is downmixed to stereo
+    (default: no). If this is disabled, downmix can cause clipping. If it's
+    enabled, the output might be too quiet. It depends on the source audio.
+
+    Technically, this changes the ``normalize`` suboption of the
+    ``lavrresample`` audio filter, which performs the downmixing.
+
+    If downmix happens outside of mpv for some reason, or in the decoder
+    (decoder downmixing), or in the audio output (system mixer), this has no
+    effect.
+
+``--audio-swresample-o=<string>``
+    Set AVOptions on the SwrContext or AVAudioResampleContext. These should
+    be documented by FFmpeg or Libav.
 
 Terminal
 --------
@@ -3951,6 +3980,16 @@ Network
     Specify the network timeout in seconds. This affects at least HTTP. The
     special value 0 (default) uses the FFmpeg/Libav defaults. If a protocol
     is used which does not support timeouts, this option is silently ignored.
+
+    .. warning::
+
+        This breaks the RTSP protocol, because of inconsistent FFmpeg API
+        regarding its internal timeout option. Not only does the RTSP timeout
+        option accept different units (seconds instead of microseconds, causing
+        mpv to pass it huge values), it will also overflow FFmpeg internal
+        calculations. The worst is that merely setting the option will put RTSP
+        into listening mode, which breaks any client uses. Do not use this
+        option with RTSP URLs.
 
 ``--rtsp-transport=<lavf|udp|tcp|http>``
     Select RTSP transport method (default: tcp). This selects the underlying

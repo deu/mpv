@@ -194,11 +194,18 @@ struct m_config *m_config_new(void *talloc_ctx, struct mp_log *log,
     return config;
 }
 
-struct m_config *m_config_from_obj_desc(void *talloc_ctx, struct mp_log *log,
-                                        struct m_obj_desc *desc)
+static struct m_config *m_config_from_obj_desc(void *talloc_ctx,
+                                               struct mp_log *log,
+                                               struct mpv_global *global,
+                                               struct m_obj_desc *desc)
 {
-    return m_config_new(talloc_ctx, log, desc->priv_size, desc->priv_defaults,
-                        desc->options);
+    struct m_config *c =
+        m_config_new(talloc_ctx, log, desc->priv_size, desc->priv_defaults,
+                     desc->options);
+    c->global = global;
+    if (desc->set_defaults && c->global)
+        desc->set_defaults(c->global, c->optstruct);
+    return c;
 }
 
 // Like m_config_from_obj_desc(), but don't allocate option struct.
@@ -260,7 +267,7 @@ struct m_config *m_config_from_obj_desc_and_args(void *ta_parent,
     struct mp_log *log, struct mpv_global *global, struct m_obj_desc *desc,
     const char *name, struct m_obj_settings *defaults, char **args)
 {
-    struct m_config *config = m_config_from_obj_desc(ta_parent, log, desc);
+    struct m_config *config = m_config_from_obj_desc(ta_parent, log, global, desc);
 
     for (int n = 0; defaults && defaults[n].name; n++) {
         struct m_obj_settings *entry = &defaults[n];
@@ -1430,8 +1437,10 @@ bool m_config_is_in_group(struct m_config *config,
 void *mp_get_config_group(void *ta_parent, struct mpv_global *global,
                           const struct m_sub_options *group)
 {
-    assert(ta_parent); // without you'd necessarily leak memory
-    struct m_config_cache *cache = m_config_cache_alloc(ta_parent, global, group);
+    struct m_config_cache *cache = m_config_cache_alloc(NULL, global, group);
+    // Make talloc_free(cache->opts) free the entire cache.
+    ta_set_parent(cache->opts, ta_parent);
+    ta_set_parent(cache, cache->opts);
     return cache->opts;
 }
 
@@ -1439,7 +1448,7 @@ void mp_read_option_raw(struct mpv_global *global, const char *name,
                         const struct m_option_type *type, void *dst)
 {
     struct m_config_shadow *shadow = global->config;
-    struct m_config_option *co = m_config_get_co(shadow->root, bstr0(name));
+    struct m_config_option *co = m_config_get_co_raw(shadow->root, bstr0(name));
     assert(co);
     assert(co->shadow_offset >= 0);
     assert(co->opt->type == type);

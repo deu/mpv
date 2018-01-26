@@ -40,8 +40,6 @@
 #include "sws_utils.h"
 #include "fmt-conversion.h"
 
-#include "video/filter/vf.h"
-
 const struct m_opt_choice_alternatives mp_spherical_names[] = {
     {"auto",        MP_SPHERICAL_AUTO},
     {"none",        MP_SPHERICAL_NONE},
@@ -67,7 +65,7 @@ static int mp_image_layout(int imgfmt, int w, int h, int stride_align,
 
     // Note: for non-mod-2 4:2:0 YUV frames, we have to allocate an additional
     //       top/right border. This is needed for correct handling of such
-    //       images in filter and VO code (e.g. vo_vdpau or vo_opengl).
+    //       images in filter and VO code (e.g. vo_vdpau or vo_gpu).
 
     for (int n = 0; n < MP_MAX_PLANES; n++) {
         int alloc_w = mp_chroma_div_up(w, desc.xs[n]);
@@ -622,11 +620,12 @@ char *mp_image_params_to_str_buf(char *b, size_t bs,
             mp_snprintf_cat(b, bs, "[%s]", mp_imgfmt_to_name(p->hw_subfmt));
         if (p->hw_flags)
             mp_snprintf_cat(b, bs, "[0x%x]", p->hw_flags);
-        mp_snprintf_cat(b, bs, " %s/%s/%s/%s",
+        mp_snprintf_cat(b, bs, " %s/%s/%s/%s/%s",
                         m_opt_choice_str(mp_csp_names, p->color.space),
                         m_opt_choice_str(mp_csp_prim_names, p->color.primaries),
                         m_opt_choice_str(mp_csp_trc_names, p->color.gamma),
-                        m_opt_choice_str(mp_csp_levels_names, p->color.levels));
+                        m_opt_choice_str(mp_csp_levels_names, p->color.levels),
+                        m_opt_choice_str(mp_csp_light_names, p->color.light));
         if (p->color.sig_peak)
             mp_snprintf_cat(b, bs, " SP=%f", p->color.sig_peak);
         mp_snprintf_cat(b, bs, " CL=%s",
@@ -870,6 +869,9 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
         dst->params.rotate = p->rotate;
         dst->params.stereo_in = p->stereo_in;
         dst->params.stereo_out = p->stereo_out;
+        dst->params.spherical = p->spherical;
+        // Might be incorrect if colorspace changes.
+        dst->params.color.light = p->color.light;
     }
 
 #if LIBAVUTIL_VERSION_MICRO >= 100
@@ -966,6 +968,14 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
         if (!sd)
             abort();
         new_ref->icc_profile = NULL;
+    }
+
+    if (src->params.color.sig_peak) {
+        AVContentLightMetadata *clm =
+            av_content_light_metadata_create_side_data(dst);
+        if (!clm)
+            abort();
+        clm->MaxCLL = src->params.color.sig_peak * MP_REF_WHITE;
     }
 #endif
 

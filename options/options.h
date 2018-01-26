@@ -276,7 +276,6 @@ typedef struct MPOpts {
 
     struct m_channels audio_output_channels;
     int audio_output_format;
-    int audio_normalize;
     int force_srate;
     double playback_speed;
     int pitch_correction;
@@ -331,6 +330,8 @@ typedef struct MPOpts {
     char *input_file;
 
     int wingl_dwm_flush;
+
+    struct mp_resample_opts *resample_opts;
 
     struct gl_video_opts *gl_video_opts;
     struct angle_opts *angle_opts;

@@ -149,6 +149,7 @@ static const struct format_hack format_hacks[] = {
     {"mp3", NULL,         24, .max_probe = true},
 
     {"hls", .no_stream = true, .clear_filepos = true},
+    {"dash", .no_stream = true, .clear_filepos = true},
     {"mpeg", .use_stream_ids = true},
     {"mpegts", .use_stream_ids = true},
 
@@ -937,6 +938,19 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
         double duration = av_duration > 0 ? av_duration : total_duration;
         if (duration > 0)
             demuxer->duration = duration;
+    }
+
+    // In some cases, libavformat will export bogus bullshit timestamps anyway,
+    // such as with mjpeg.
+    if (priv->avif_flags & AVFMT_NOTIMESTAMPS) {
+        MP_WARN(demuxer,
+                "This format is marked by FFmpeg as having no timestamps!\n"
+                "FFmpeg will likely make up its own broken timestamps. For\n"
+                "video streams you can correct this with:\n"
+                "    --no-correct-pts --fps=VALUE\n"
+                "with VALUE being the real framerate of the stream. You can\n"
+                "expect seeking and buffering estimation to be generally\n"
+                "broken as well.\n");
     }
 
     return 0;

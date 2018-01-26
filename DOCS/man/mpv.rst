@@ -435,6 +435,7 @@ Suffix        Meaning
 -del          Delete an existing item by integer index
 -pre          Prepend 1 or more items
 -set          Set a list of items
+-toggle       Append an item, or remove if if it already exists
 ============= ===============================================
 
 Although some operations allow specifying multiple ``,``-separated items, using
@@ -447,6 +448,9 @@ aliases for the proper option with ``-append`` action. For example,
 ``--sub-file`` is an alias for ``--sub-files-append``.
 
 Some options only support a subset of the above.
+
+Options of this type can be changed at runtime using the ``change-list``
+command, which takes the suffix as separate operation parameter.
 
 Playing DVDs
 ------------
@@ -728,14 +732,13 @@ PROTOCOLS
 
 ``bd://[title][/device]`` ``--bluray-device=PATH``
 
-    Play a Blu-ray disc. Currently, this does not accept ISO files. Instead,
-    you must mount the ISO file as filesystem, and point ``--bluray-device``
-    to the mounted directory directly.
+    Play a Blu-ray disc. Since libbluray 1.0.1, you can read from ISO files
+    by passing them to ``--bluray-device``.
 
     ``title`` can be: ``longest`` or ``first`` (selects the default
     playlist); ``mpls/<number>`` (selects <number>.mpls playlist);
-    ``<number>`` (select playlist with the same index). You can list
-    the available playlists with ``--msg-level=bd=v``.
+    ``<number>`` (select playlist with the same index). mpv will list
+    the available playlists on loading.
 
     ``bluray://`` is an alias.
 
@@ -750,7 +753,7 @@ PROTOCOLS
 ``dvdread://...:``
 
     Play a DVD using the old libdvdread code. This is what MPlayer and
-    older mpv versions use for ``dvd://``. Use is discouraged. It's
+    older mpv versions used for ``dvd://``. Use is discouraged. It's
     provided only for compatibility and for transition, and to work
     around outstanding dvdnav bugs (see "DVD library choices" above).
 

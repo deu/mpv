@@ -499,17 +499,18 @@ Input Commands that are Possibly Subject to Change
 
         - ``a vf set flip`` turn video upside-down on the ``a`` key
         - ``b vf set ""`` remove all video filters on ``b``
-        - ``c vf toggle lavfi=gradfun`` toggle debanding on ``c``
+        - ``c vf toggle gradfun`` toggle debanding on ``c``
 
     .. admonition:: Example how to toggle disabled filters at runtime
 
-        - Add something ``vf-add=@deband:!lavfi=[gradfun]`` to ``mpv.conf``. The
-          ``@deband:`` is the label, and ``deband`` is an arbitrary, user-given
-          name for this filter entry. The ``!`` before the filter name disables
-          the filter by default. Everything after this is the normal filter name
-          and the filter parameters.
+        - Add something like ``vf-add=@deband:!gradfun`` to ``mpv.conf``.
+          The ``@deband:`` is the label, an arbitrary, user-given name for this
+          filter entry. The ``!`` before the filter name disables the filter by
+          default. Everything after this is the normal filter name and possibly
+          filter parameters, like in the normal ``--vf`` syntax.
         - Add ``a vf toggle @deband`` to ``input.conf``. This toggles the
-          "disabled" flag for the filter identified with ``deband``.
+          "disabled" flag for the filter with the label ``deband`` when the
+          ``a`` key is hit.
 
 ``cycle-values ["!reverse"] <property> "<value1>" "<value2>" ...``
     Cycle through a list of values. Each invocation of the command will set the
@@ -730,6 +731,23 @@ Input Commands that are Possibly Subject to Change
 
 ``load-script "<path>"``
     Load a script, similar to the ``--script`` option.
+
+``change-list "<option>" "<operation>" "<value>"``
+    This command changes list options as described in `List Options`_. The
+    ``<option>`` parameter is the normal option name, while ``<operation>`` is
+    the suffix or action used on the option.
+
+    Some operations take no value, but the command still requires the value
+    parameter. In these cases, the value must be an empty string.
+
+    .. admonition:: Example
+
+        ``change-list glsl-shaders append file.glsl``
+
+        Add a filename to the ``glsl-shaders`` list. The command line
+        equivalent is ``--glsl-shaders-append=file.glsl`` or alternatively
+        ``--glsl-shader=file.glsl``.
+
 
 Undocumented commands: ``tv-last-channel`` (TV/DVB only),
 ``ao-reload`` (experimental/internal).
@@ -1442,7 +1460,7 @@ Property list
 ``hwdec-interop``
     This returns the currently loaded hardware decoding/output interop driver.
     This is known only once the VO has opened (and possibly later). With some
-    VOs (like ``opengl``), this might be never known in advance, but only when
+    VOs (like ``gpu``), this might be never known in advance, but only when
     the decoder attempted to create the hw decoder successfully. (Using
     ``--gpu-hwdec-interop`` can load it eagerly.) If there are multiple
     drivers loaded, they will be separated by ``,``.
