@@ -226,18 +226,24 @@ local function has_native_dash_demuxer()
     return false
 end
 
-local function proto_is_dash(json)
-    local reqfmts = json["requested_formats"]
-    return (reqfmts ~= nil and reqfmts[1]["protocol"] == "http_dash_segments")
-           or json["protocol"] == "http_dash_segments"
+local function valid_manifest(json)
+    local reqfmt = json["requested_formats"] and json["requested_formats"][1] or {}
+    if not reqfmt["manifest_url"] and not json["manifest_url"] then
+        return false
+    end
+    local proto = reqfmt["protocol"] or json["protocol"] or ""
+    return (has_native_dash_demuxer() and proto == "http_dash_segments") or
+        proto:find("^m3u8")
 end
 
 local function add_single_video(json)
     local streamurl = ""
     local max_bitrate = 0
+    local reqfmts = json["requested_formats"]
 
-    if has_native_dash_demuxer() and proto_is_dash(json) then
-        local mpd_url = json["requested_formats"][1]["manifest_url"] or
+    -- prefer manifest_url if present
+    if valid_manifest(json) then
+        local mpd_url = reqfmts and reqfmts[1]["manifest_url"] or
             json["manifest_url"]
         if not mpd_url then
             msg.error("No manifest URL found in JSON data.")
@@ -248,8 +254,8 @@ local function add_single_video(json)
 
         streamurl = mpd_url
 
-        if json.requested_formats then
-            for _, track in pairs(json.requested_formats) do
+        if reqfmts then
+            for _, track in pairs(reqfmts) do
                 max_bitrate = track.tbr > max_bitrate and
                     track.tbr or max_bitrate
             end
@@ -258,24 +264,23 @@ local function add_single_video(json)
         end
 
     -- DASH/split tracks
-    elseif not (json["requested_formats"] == nil) then
-        for _, track in pairs(json.requested_formats) do
+    elseif reqfmts then
+        for _, track in pairs(reqfmts) do
             local edl_track = nil
             edl_track = edl_track_joined(track.fragments,
                 track.protocol, json.is_live,
                 track.fragment_base_url)
-            local url = edl_track or track.url
-            if not url_is_safe(url) then
+            if not edl_track and not url_is_safe(track.url) then
                 return
             end
             if track.acodec and track.acodec ~= "none" then
                 -- audio track
                 mp.commandv("audio-add",
-                    url, "auto",
+                    edl_track or track.url, "auto",
                     track.format_note or "")
             elseif track.vcodec and track.vcodec ~= "none" then
                 -- video track
-                streamurl = url
+                streamurl = edl_track or track.url
             end
         end
 
@@ -284,6 +289,9 @@ local function add_single_video(json)
         edl_track = edl_track_joined(json.fragments, json.protocol,
             json.is_live, json.fragment_base_url)
 
+        if not edl_track and not url_is_safe(json.url) then
+            return
+        end
         -- normal video or single track
         streamurl = edl_track or json.url
         set_http_headers(json.http_headers)
@@ -294,13 +302,7 @@ local function add_single_video(json)
 
     msg.debug("streamurl: " .. streamurl)
 
-    streamurl = streamurl:gsub("^data:", "data://", 1)
-
-    if not url_is_safe(streamurl) then
-        return
-    end
-
-    mp.set_property("stream-open-filename", streamurl)
+    mp.set_property("stream-open-filename", streamurl:gsub("^data:", "data://", 1))
 
     mp.set_property("file-local-options/force-media-title", json.title)
 
@@ -498,6 +500,10 @@ mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
                 local playlist = edl_track_joined(json.entries)
 
                 msg.debug("EDL: " .. playlist)
+
+                if not playlist then
+                    return
+                end
 
                 -- can't change the http headers for each entry, so use the 1st
                 if json.entries[1] then
