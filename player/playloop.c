@@ -29,6 +29,7 @@
 #include "common/common.h"
 #include "common/encode.h"
 #include "common/recorder.h"
+#include "filters/f_decoder_wrapper.h"
 #include "options/m_config.h"
 #include "options/m_property.h"
 #include "common/playlist.h"
@@ -38,13 +39,10 @@
 #include "osdep/terminal.h"
 #include "osdep/timer.h"
 
-#include "audio/decode/dec_audio.h"
 #include "audio/out/ao.h"
 #include "demux/demux.h"
 #include "stream/stream.h"
 #include "sub/osd.h"
-#include "video/filter/vf.h"
-#include "video/decode/dec_video.h"
 #include "video/out/vo.h"
 
 #include "core.h"
@@ -213,22 +211,13 @@ void add_step_frame(struct MPContext *mpctx, int dir)
 // Clear some playback-related fields on file loading or after seeks.
 void reset_playback_state(struct MPContext *mpctx)
 {
-    if (mpctx->lavfi)
-        lavfi_seek_reset(mpctx->lavfi);
-
-    for (int n = 0; n < mpctx->num_tracks; n++) {
-        if (mpctx->tracks[n]->d_video)
-            video_reset(mpctx->tracks[n]->d_video);
-        if (mpctx->tracks[n]->d_audio)
-            audio_reset_decoding(mpctx->tracks[n]->d_audio);
-    }
+    mp_filter_reset(mpctx->filter_root);
 
     reset_video_state(mpctx);
     reset_audio_state(mpctx);
     reset_subtitle_state(mpctx);
 
     mpctx->hrseek_active = false;
-    mpctx->hrseek_framedrop = false;
     mpctx->hrseek_lastframe = false;
     mpctx->hrseek_backstep = false;
     mpctx->current_seek = (struct seek_params){0};
@@ -377,13 +366,22 @@ static void mp_seek(MPContext *mpctx, struct seek_params seek)
 
     if (hr_seek) {
         mpctx->hrseek_active = true;
-        mpctx->hrseek_framedrop = !hr_seek_very_exact && opts->hr_seek_framedrop;
         mpctx->hrseek_backstep = seek.type == MPSEEK_BACKSTEP;
         mpctx->hrseek_pts = seek_pts;
 
+        // allow decoder to drop frames before hrseek_pts
+        bool hrseek_framedrop = !hr_seek_very_exact && opts->hr_seek_framedrop;
+
         MP_VERBOSE(mpctx, "hr-seek, skipping to %f%s%s\n", mpctx->hrseek_pts,
-                   mpctx->hrseek_framedrop ? "" : " (no framedrop)",
+                   hrseek_framedrop ? "" : " (no framedrop)",
                    mpctx->hrseek_backstep ? " (backstep)" : "");
+
+        for (int n = 0; n < mpctx->num_tracks; n++) {
+            struct track *track = mpctx->tracks[n];
+            struct mp_decoder_wrapper *dec = track->dec;
+            if (dec && hrseek_framedrop)
+                mp_decoder_wrapper_set_start_pts(dec, mpctx->hrseek_pts);
+        }
     }
 
     if (mpctx->stop_play == AT_END_OF_FILE)
@@ -1071,40 +1069,6 @@ static void handle_eof(struct MPContext *mpctx)
     }
 }
 
-static void handle_complex_filter_decoders(struct MPContext *mpctx)
-{
-    if (!mpctx->lavfi)
-        return;
-
-    for (int n = 0; n < mpctx->num_tracks; n++) {
-        struct track *track = mpctx->tracks[n];
-        if (!track->selected)
-            continue;
-        if (!track->sink || !lavfi_needs_input(track->sink))
-            continue;
-        if (track->d_audio) {
-            audio_work(track->d_audio);
-            struct mp_aframe *fr;
-            int res = audio_get_frame(track->d_audio, &fr);
-            if (res == DATA_OK) {
-                lavfi_send_frame_a(track->sink, fr);
-            } else {
-                lavfi_send_status(track->sink, res);
-            }
-        }
-        if (track->d_video) {
-            video_work(track->d_video);
-            struct mp_image *fr;
-            int res = video_get_frame(track->d_video, &fr);
-            if (res == DATA_OK) {
-                lavfi_send_frame_v(track->sink, fr);
-            } else {
-                lavfi_send_status(track->sink, res);
-            }
-        }
-    }
-}
-
 void run_playloop(struct MPContext *mpctx)
 {
 #if HAVE_ENCODING
@@ -1116,18 +1080,12 @@ void run_playloop(struct MPContext *mpctx)
 
     update_demuxer_properties(mpctx);
 
-    handle_complex_filter_decoders(mpctx);
-
     handle_cursor_autohide(mpctx);
     handle_vo_events(mpctx);
     handle_command_updates(mpctx);
 
-    if (mpctx->lavfi) {
-        if (lavfi_process(mpctx->lavfi))
-            mp_wakeup_core(mpctx);
-        if (lavfi_has_failed(mpctx->lavfi))
-            mpctx->stop_play = AT_END_OF_FILE;
-    }
+    if (mpctx->lavfi && mp_filter_has_failed(mpctx->lavfi))
+        mpctx->stop_play = AT_END_OF_FILE;
 
     fill_audio_out_buffers(mpctx);
     write_video(mpctx);
@@ -1159,6 +1117,8 @@ void run_playloop(struct MPContext *mpctx)
 
     handle_osd_redraw(mpctx);
 
+    if (mp_filter_run(mpctx->filter_root))
+        mp_wakeup_core(mpctx);
     mp_wait_events(mpctx);
 
     handle_pause_on_low_cache(mpctx);

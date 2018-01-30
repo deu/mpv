@@ -33,8 +33,6 @@
 #include "sub/dec_sub.h"
 #include "demux/demux.h"
 #include "video/mp_image.h"
-#include "video/decode/dec_video.h"
-#include "video/filter/vf.h"
 
 #include "core.h"
 
@@ -90,7 +88,7 @@ static bool update_subtitle(struct MPContext *mpctx, double video_pts,
         return true;
 
     if (mpctx->vo_chain) {
-        struct mp_image_params params = mpctx->vo_chain->vf->input_params;
+        struct mp_image_params params = mpctx->vo_chain->filter->input_params;
         if (params.imgfmt)
             sub_control(dec_sub, SD_CTRL_SET_VIDEO_PARAMS, &params);
     }

@@ -26,13 +26,13 @@
 #include "libmpv/client.h"
 
 #include "common/common.h"
+#include "filters/filter.h"
+#include "filters/f_output_chain.h"
 #include "options/options.h"
 #include "sub/osd.h"
 #include "audio/aframe.h"
 #include "video/mp_image.h"
 #include "video/out/vo.h"
-
-#include "lavfi.h"
 
 // definitions used internally by the core player code
 
@@ -153,13 +153,12 @@ struct track {
     struct dec_sub *d_sub;
 
     // Current decoding state (NULL if selected==false)
-    struct dec_video *d_video;
-    struct dec_audio *d_audio;
+    struct mp_decoder_wrapper *dec;
 
     // Where the decoded result goes to (one of them is not NULL if active)
     struct vo_chain *vo_c;
     struct ao_chain *ao_c;
-    struct lavfi_pad *sink;
+    struct mp_pin *sink;
 
     // For stream recording (remuxing mode).
     struct mp_recorder_sink *remux_sink;
@@ -169,57 +168,44 @@ struct track {
 struct vo_chain {
     struct mp_log *log;
 
-    struct mp_hwdec_devices *hwdec_devs;
     double container_fps;
 
-    struct vf_chain *vf;
+    struct mp_output_chain *filter;
+
+    //struct vf_chain *vf;
     struct vo *vo;
 
-    // 1-element input frame queue.
-    struct mp_image *input_mpi;
-
-    // Last known input_mpi format (so vf can be reinitialized any time).
-    struct mp_image_params input_format;
-
     struct track *track;
-    struct lavfi_pad *filter_src;
-    struct dec_video *video_src;
+    struct mp_pin *filter_src;
+    struct mp_pin *dec_src;
 
     // - video consists of a single picture, which should be shown only once
     // - do not sync audio to video in any way
     bool is_coverart;
-    // Just to avoid decoding the coverart picture again after a seek.
-    struct mp_image *cached_coverart;
 };
 
 // Like vo_chain, for audio.
 struct ao_chain {
     struct mp_log *log;
 
-    double pts; // timestamp of first sample output by decoder
     bool spdif_passthrough, spdif_failed;
     bool pts_reset;
 
-    struct af_stream *af;
-    struct mp_aconverter *conv; // if af unavailable
+    struct mp_output_chain *filter;
+
     struct ao *ao;
     struct mp_audio_buffer *ao_buffer;
     double ao_resume_time;
 
-    // 1-element input frame queue.
-    struct mp_aframe *input_frame;
-
     // 1-element output frame queue.
     struct mp_aframe *output_frame;
+    bool out_eof;
 
-    // Last known input_mpi format (so af can be reinitialized any time).
-    struct mp_aframe *input_format;
-
-    struct mp_aframe *filter_input_format;
+    double last_out_pts;
 
     struct track *track;
-    struct lavfi_pad *filter_src;
-    struct dec_audio *audio_src;
+    struct mp_pin *filter_src;
+    struct mp_pin *dec_src;
 };
 
 /* Note that playback can be paused, stopped, etc. at any time. While paused,
@@ -317,10 +303,13 @@ typedef struct MPContext {
     // Currently, this is used for the secondary subtitle track only.
     struct track *current_track[NUM_PTRACKS][STREAM_TYPE_COUNT];
 
-    struct lavfi *lavfi;
+    struct mp_filter *filter_root;
+
+    struct mp_filter *lavfi;
+    char *lavfi_graph;
 
     struct ao *ao;
-    struct mp_aframe *ao_decoder_fmt; // for weak gapless audio check
+    struct mp_aframe *ao_filter_fmt; // for weak gapless audio check
     struct ao_chain *ao_chain;
 
     struct vo_chain *vo_chain;
@@ -349,7 +338,6 @@ typedef struct MPContext {
     // Number of mistimed frames.
     int mistimed_frames_total;
     bool hrseek_active;     // skip all data until hrseek_pts
-    bool hrseek_framedrop;  // allow decoder to drop frames before hrseek_pts
     bool hrseek_lastframe;  // drop everything until last frame reached
     bool hrseek_backstep;   // go to frame before seek target
     double hrseek_pts;
@@ -364,8 +352,6 @@ typedef struct MPContext {
     // How much video timing has been changed to make it match the audio
     // timeline. Used for status line information only.
     double total_avsync_change;
-    // Used to compute the number of frames dropped in a row.
-    int dropped_frames_start;
     // A-V sync difference when last frame was displayed. Kept to display
     // the same value if the status line is updated at a time where no new
     // video frame is shown.
@@ -631,6 +617,5 @@ void uninit_video_out(struct MPContext *mpctx);
 void uninit_video_chain(struct MPContext *mpctx);
 double calc_average_frame_duration(struct MPContext *mpctx);
 int init_video_decoder(struct MPContext *mpctx, struct track *track);
-void recreate_auto_filters(struct MPContext *mpctx);
 
 #endif /* MPLAYER_MP_CORE_H */

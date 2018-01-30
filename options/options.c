@@ -42,14 +42,9 @@
 #include "video/hwdec.h"
 #include "video/image_writer.h"
 #include "sub/osd.h"
-#include "audio/decode/dec_audio.h"
 #include "player/core.h"
 #include "player/command.h"
 #include "stream/stream.h"
-
-#if HAVE_LIBAF
-#include "audio/filter/af.h"
-#endif
 
 #if HAVE_DRM
 #include "video/out/drm_common.h"
@@ -93,8 +88,6 @@ extern const struct m_sub_options d3d11va_conf;
 extern const struct m_sub_options angle_conf;
 extern const struct m_sub_options cocoa_conf;
 extern const struct m_sub_options android_conf;
-
-extern const struct m_sub_options resample_config;
 
 static const struct m_sub_options screenshot_conf = {
     .opts = image_writer_opts,
@@ -297,6 +290,18 @@ const struct m_sub_options dvd_conf = {
 };
 
 #undef OPT_BASE_STRUCT
+#define OPT_BASE_STRUCT struct filter_opts
+
+const struct m_sub_options filter_conf = {
+    .opts = (const struct m_option[]){
+        OPT_FLAG("deinterlace", deinterlace, 0),
+        {0}
+    },
+    .size = sizeof(OPT_BASE_STRUCT),
+    .change_flags = UPDATE_IMGPAR,
+};
+
+#undef OPT_BASE_STRUCT
 #define OPT_BASE_STRUCT struct MPOpts
 
 const m_option_t mp_opts[] = {
@@ -474,7 +479,7 @@ const m_option_t mp_opts[] = {
 
     // force video/audio rate:
     OPT_DOUBLE("fps", force_fps, CONF_MIN, .min = 0),
-    OPT_INTRANGE("audio-samplerate", force_srate, UPDATE_AUDIO, 1000, 16*48000),
+    OPT_INTRANGE("audio-samplerate", force_srate, UPDATE_AUDIO, 0, 16*48000),
     OPT_CHANNELS("audio-channels", audio_output_channels, UPDATE_AUDIO),
     OPT_AUDIOFORMAT("audio-format", audio_output_format, UPDATE_AUDIO),
     OPT_DOUBLE("speed", playback_speed, M_OPT_RANGE, .min = 0.01, .max = 100.0),
@@ -486,16 +491,14 @@ const m_option_t mp_opts[] = {
 
 // ------------------------- codec/vfilter options --------------------
 
-#if HAVE_LIBAF
     OPT_SETTINGSLIST("af-defaults", af_defs, 0, &af_obj_list,
                      .deprecation_message = "use --af + enable/disable flags"),
     OPT_SETTINGSLIST("af", af_settings, 0, &af_obj_list, ),
-#endif
     OPT_SETTINGSLIST("vf-defaults", vf_defs, 0, &vf_obj_list,
                      .deprecation_message = "use --vf + enable/disable flags"),
     OPT_SETTINGSLIST("vf", vf_settings, 0, &vf_obj_list, ),
 
-    OPT_FLAG("deinterlace", deinterlace, UPDATE_DEINT),
+    OPT_SUBSTRUCT("", filter_opts, filter_conf, 0),
 
     OPT_STRING("ad", audio_decoders, 0),
     OPT_STRING("vd", video_decoders, 0),
@@ -700,7 +703,7 @@ const m_option_t mp_opts[] = {
 
     OPT_STRING("record-file", record_file, M_OPT_FILE),
 
-    OPT_SUBSTRUCT("", resample_opts, resample_config, 0),
+    OPT_SUBSTRUCT("", resample_opts, resample_conf, 0),
 
     OPT_SUBSTRUCT("", input_opts, input_config, 0),
 

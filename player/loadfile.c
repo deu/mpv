@@ -43,13 +43,14 @@
 #include "common/recorder.h"
 #include "input/input.h"
 
-#include "audio/decode/dec_audio.h"
 #include "audio/out/ao.h"
+#include "filters/f_decoder_wrapper.h"
+#include "filters/f_lavfi.h"
+#include "filters/filter_internal.h"
 #include "demux/demux.h"
 #include "stream/stream.h"
 #include "sub/dec_sub.h"
 #include "external_files.h"
-#include "video/decode/dec_video.h"
 #include "video/out/vo.h"
 
 #include "core.h"
@@ -994,8 +995,8 @@ static void deassociate_complex_filters(struct MPContext *mpctx)
         mpctx->vo_chain->filter_src = NULL;
     if (mpctx->ao_chain)
         mpctx->ao_chain->filter_src = NULL;
-    lavfi_destroy(mpctx->lavfi);
-    mpctx->lavfi = NULL;
+    TA_FREEP(&mpctx->lavfi);
+    TA_FREEP(&mpctx->lavfi_graph);
 }
 
 // Close all decoders and sinks (AO/VO) that are not connected to either
@@ -1005,24 +1006,20 @@ static void cleanup_deassociated_complex_filters(struct MPContext *mpctx)
     for (int n = 0; n < mpctx->num_tracks; n++) {
         struct track *track = mpctx->tracks[n];
         if (!(track->sink || track->vo_c || track->ao_c)) {
-            if (track->d_video && !track->vo_c) {
-                video_uninit(track->d_video);
-                track->d_video = NULL;
-            }
-            if (track->d_audio && !track->ao_c) {
-                audio_uninit(track->d_audio);
-                track->d_audio = NULL;
+            if (track->dec && !track->vo_c && !track->ao_c) {
+                talloc_free(track->dec->f);
+                track->dec->f = NULL;
             }
             track->selected = false;
         }
     }
 
-    if (mpctx->vo_chain && !mpctx->vo_chain->video_src &&
+    if (mpctx->vo_chain && !mpctx->vo_chain->dec_src &&
         !mpctx->vo_chain->filter_src)
     {
         uninit_video_chain(mpctx);
     }
-    if (mpctx->ao_chain && !mpctx->ao_chain->audio_src &&
+    if (mpctx->ao_chain && !mpctx->ao_chain->dec_src &&
         !mpctx->ao_chain->filter_src)
     {
         uninit_audio_chain(mpctx);
@@ -1035,8 +1032,8 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
     char *graph = mpctx->opts->lavfi_complex;
     bool have_graph = graph && graph[0] && !force_uninit;
     if (have_graph && mpctx->lavfi &&
-        strcmp(graph, lavfi_get_graph(mpctx->lavfi)) == 0 &&
-        !lavfi_has_failed(mpctx->lavfi))
+        strcmp(graph, mpctx->lavfi_graph) == 0 &&
+        !mp_filter_has_failed(mpctx->lavfi))
         return 0;
     if (!mpctx->lavfi && !have_graph)
         return 0;
@@ -1054,12 +1051,17 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
         goto done;
     }
 
-    mpctx->lavfi = lavfi_create(mpctx->log, graph);
-    if (!mpctx->lavfi)
+    struct mp_lavfi *l =
+        mp_lavfi_create_graph(mpctx->filter_root, 0, false, NULL, graph);
+    if (!l)
         goto done;
+    mpctx->lavfi = l->f;
+    mpctx->lavfi_graph = talloc_strdup(NULL, graph);
 
-    if (lavfi_has_failed(mpctx->lavfi))
-        goto done;
+    mp_filter_set_error_handler(mpctx->lavfi, mpctx->filter_root);
+
+    for (int n = 0; n < mpctx->lavfi->num_pins; n++)
+        mp_pin_disconnect(mpctx->lavfi->pins[n]);
 
     for (int n = 0; n < mpctx->num_tracks; n++) {
         struct track *track = mpctx->tracks[n];
@@ -1073,14 +1075,12 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
         }
         snprintf(label, sizeof(label), "%cid%d", prefix, track->user_tid);
 
-        struct lavfi_pad *pad = lavfi_find_pad(mpctx->lavfi, label);
+        struct mp_pin *pad = mp_filter_get_named_pin(mpctx->lavfi, label);
         if (!pad)
             continue;
-        if (lavfi_pad_type(pad) != track->type)
+        if (mp_pin_get_dir(pad) != MP_PIN_IN)
             continue;
-        if (lavfi_pad_direction(pad) != LAVFI_IN)
-            continue;
-        if (lavfi_get_connected(pad))
+        if (mp_pin_is_connected(pad))
             continue;
 
         assert(!track->sink);
@@ -1090,57 +1090,62 @@ static int reinit_complex_filters(struct MPContext *mpctx, bool force_uninit)
             goto done;
         }
         track->sink = pad;
-        lavfi_set_connected(pad, true);
+        mp_pin_set_manual_connection(pad, true);
         track->selected = true;
     }
 
-    struct lavfi_pad *pad = lavfi_find_pad(mpctx->lavfi, "vo");
-    if (pad && lavfi_pad_type(pad) == STREAM_VIDEO &&
-        lavfi_pad_direction(pad) == LAVFI_OUT)
-    {
+    struct mp_pin *pad = mp_filter_get_named_pin(mpctx->lavfi, "vo");
+    if (pad && mp_pin_get_dir(pad) == MP_PIN_OUT) {
         if (mpctx->vo_chain) {
-            if (mpctx->vo_chain->video_src) {
-                MP_ERR(mpctx, "Pad vo tries to connect to already used VO.\n");
-                goto done;
-            }
+            MP_ERR(mpctx, "Pad vo tries to connect to already used VO.\n");
+            goto done;
         } else {
             reinit_video_chain_src(mpctx, NULL);
             if (!mpctx->vo_chain)
                 goto done;
         }
-        lavfi_set_connected(pad, true);
         struct vo_chain *vo_c = mpctx->vo_chain;
         vo_c->filter_src = pad;
-        lavfi_pad_set_hwdec_devs(vo_c->filter_src, vo_c->hwdec_devs);
+        mp_pin_connect(vo_c->filter->f->pins[0], vo_c->filter_src);
     }
 
-    pad = lavfi_find_pad(mpctx->lavfi, "ao");
-    if (pad && lavfi_pad_type(pad) == STREAM_AUDIO &&
-        lavfi_pad_direction(pad) == LAVFI_OUT)
-    {
+    pad = mp_filter_get_named_pin(mpctx->lavfi, "ao");
+    if (pad && mp_pin_get_dir(pad) == MP_PIN_OUT) {
         if (mpctx->ao_chain) {
-            if (mpctx->ao_chain->audio_src) {
-                MP_ERR(mpctx, "Pad ao tries to connect to already used AO.\n");
-                goto done;
-            }
+            MP_ERR(mpctx, "Pad ao tries to connect to already used AO.\n");
+            goto done;
         } else {
             reinit_audio_chain_src(mpctx, NULL);
             if (!mpctx->ao_chain)
                 goto done;
         }
-        lavfi_set_connected(pad, true);
-        mpctx->ao_chain->filter_src = pad;
+        struct ao_chain *ao_c = mpctx->ao_chain;
+        ao_c->filter_src = pad;
+        mp_pin_connect(ao_c->filter->f->pins[0], ao_c->filter_src);
     }
 
     for (int n = 0; n < mpctx->num_tracks; n++) {
         struct track *track = mpctx->tracks[n];
         if (track->sink && track->type == STREAM_VIDEO) {
-            if (!track->d_video && !init_video_decoder(mpctx, track))
+            if (!track->dec && !init_video_decoder(mpctx, track))
                 goto done;
+            mp_pin_connect(track->sink, track->dec->f->pins[0]);
         }
         if (track->sink && track->type == STREAM_AUDIO) {
-            if (!track->d_audio && !init_audio_decoder(mpctx, track))
+            if (!track->dec && !init_audio_decoder(mpctx, track))
                 goto done;
+            mp_pin_connect(track->sink, track->dec->f->pins[0]);
+        }
+    }
+
+    // Don't allow unconnected pins. Libavfilter would make the data flow a
+    // real pain anyway.
+    for (int n = 0; n < mpctx->lavfi->num_pins; n++) {
+        struct mp_pin *pin = mpctx->lavfi->pins[n];
+        if (!mp_pin_is_connected(pin)) {
+            MP_ERR(mpctx, "Pad %s is not connected to anything.\n",
+                   mp_pin_get_name(pin));
+            goto done;
         }
     }
 
@@ -1198,6 +1203,8 @@ static void play_current_file(struct MPContext *mpctx)
     mpctx->display_sync_error = 0.0;
     mpctx->display_sync_active = false;
     mpctx->seek = (struct seek_params){ 0 };
+    mpctx->filter_root = mp_filter_create_root(mpctx->global);
+    mp_filter_root_set_wakeup_cb(mpctx->filter_root, mp_wakeup_core_cb, mpctx);
 
     reset_playback_state(mpctx);
 
@@ -1428,6 +1435,7 @@ terminate_playback:
     uninit_demuxer(mpctx);
     if (!opts->gapless_audio && !mpctx->encode_lavc_ctx)
         uninit_audio_out(mpctx);
+    TA_FREEP(&mpctx->filter_root);
 
     mpctx->playback_initialized = false;
 
@@ -1596,10 +1604,8 @@ static void set_track_recorder_sink(struct track *track,
 {
     if (track->d_sub)
         sub_set_recorder_sink(track->d_sub, sink);
-    if (track->d_video)
-        track->d_video->recorder_sink = sink;
-    if (track->d_audio)
-        track->d_audio->recorder_sink = sink;
+    if (track->dec)
+        track->dec->recorder_sink = sink;
     track->remux_sink = sink;
 }
 
@@ -1641,11 +1647,8 @@ void open_recorder(struct MPContext *mpctx, bool on_init)
 
     for (int n = 0; n < mpctx->num_tracks; n++) {
         struct track *track = mpctx->tracks[n];
-        if (track->stream && track->selected &&
-            (track->d_sub || track->d_video || track->d_audio))
-        {
+        if (track->stream && track->selected && (track->d_sub || track->dec))
             MP_TARRAY_APPEND(NULL, streams, num_streams, track->stream);
-        }
     }
 
     mpctx->recorder = mp_recorder_create(mpctx->global, mpctx->opts->record_file,
