@@ -173,8 +173,6 @@ bool ra_gl_ctx_init(struct ra_ctx *ctx, GL *gl, struct ra_gl_ctx_params params)
     if (ext) {
         if (ext->color_depth)
             p->fns.color_depth = ext->color_depth;
-        if (ext->screenshot)
-            p->fns.screenshot = ext->screenshot;
         if (ext->start_frame)
             p->fns.start_frame = ext->start_frame;
         if (ext->submit_frame)
@@ -245,24 +243,6 @@ int ra_gl_ctx_color_depth(struct ra_swapchain *sw)
     gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
 
     return depth_g;
-}
-
-struct mp_image *ra_gl_ctx_screenshot(struct ra_swapchain *sw)
-{
-    struct priv *p = sw->priv;
-
-    assert(p->wrapped_fb);
-    struct mp_image *screen = gl_read_fbo_contents(p->gl, p->main_fb,
-                                                   p->wrapped_fb->params.w,
-                                                   p->wrapped_fb->params.h);
-
-    // OpenGL FB is also read in flipped order, so we need to flip when the
-    // rendering is *not* flipped, which in our case is whenever
-    // p->params.flipped is true. I hope that made sense
-    if (screen && p->params.flipped)
-        mp_image_vflip(screen);
-
-    return screen;
 }
 
 bool ra_gl_ctx_start_frame(struct ra_swapchain *sw, struct ra_fbo *out_fbo)
@@ -348,7 +328,6 @@ void ra_gl_ctx_swap_buffers(struct ra_swapchain *sw)
 
 static const struct ra_swapchain_fns ra_gl_swapchain_fns = {
     .color_depth   = ra_gl_ctx_color_depth,
-    .screenshot    = ra_gl_ctx_screenshot,
     .start_frame   = ra_gl_ctx_start_frame,
     .submit_frame  = ra_gl_ctx_submit_frame,
     .swap_buffers  = ra_gl_ctx_swap_buffers,

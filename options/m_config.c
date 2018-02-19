@@ -819,16 +819,16 @@ static struct m_config_option *m_config_mogrify_cli_opt(struct m_config *config,
         return co;
 
     // Turn "--no-foo" into "foo" + set *out_negate.
-    if (!co && bstr_eatstart0(name, "no-")) {
-        co = m_config_get_co(config, *name);
+    bstr no_name = *name;
+    if (!co && bstr_eatstart0(&no_name, "no-")) {
+        co = m_config_get_co(config, no_name);
 
         // Not all choice types have this value - if they don't, then parsing
         // them will simply result in an error. Good enough.
-        if (co && co->opt->type != CONF_TYPE_FLAG &&
-                  co->opt->type != CONF_TYPE_CHOICE &&
-                  co->opt->type != &m_option_type_aspect)
+        if (!co || !(co->opt->type->flags & M_OPT_TYPE_CHOICE))
             return NULL;
 
+        *name = no_name;
         *out_negate = true;
         return co;
     }
@@ -1032,7 +1032,7 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
         }
         char *def = NULL;
         if (co->default_data)
-            def = m_option_print(opt, co->default_data);
+            def = m_option_pretty_print(opt, co->default_data);
         if (def) {
             MP_INFO(config, " (default: %s)", def);
             talloc_free(def);
@@ -1046,7 +1046,7 @@ void m_config_print_option_list(const struct m_config *config, const char *name)
         if (opt->type == &m_option_type_alias)
             MP_INFO(config, " for %s", (char *)opt->priv);
         if (opt->type == &m_option_type_cli_alias)
-            MP_INFO(config, " for %s (CLI/config files only)", (char *)opt->priv);
+            MP_INFO(config, " for --%s (CLI/config files only)", (char *)opt->priv);
         MP_INFO(config, "\n");
         for (int n = 0; opt->type->actions && opt->type->actions[n].name; n++) {
             const struct m_option_action *action = &opt->type->actions[n];

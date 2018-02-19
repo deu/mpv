@@ -66,6 +66,9 @@ extern const struct vo_driver video_out_tct;
 
 const struct vo_driver *const video_out_drivers[] =
 {
+#if HAVE_GL
+    &video_out_opengl_cb,
+#endif
 #if HAVE_ANDROID
     &video_out_mediacodec_embed,
 #endif
@@ -103,9 +106,6 @@ const struct vo_driver *const video_out_drivers[] =
 #endif
 #if HAVE_ENCODING
     &video_out_lavc,
-#endif
-#if HAVE_GL
-    &video_out_opengl_cb,
 #endif
     NULL
 };
@@ -891,7 +891,7 @@ bool vo_render_frame_external(struct vo *vo)
         update_vsync_timing_after_swap(vo);
     }
 
-    if (vo->driver->caps & VO_CAP_NOREDRAW) {
+    if (vo->driver->caps & VO_CAP_NORETAIN) {
         talloc_free(in->current_frame);
         in->current_frame = NULL;
     }
@@ -919,7 +919,7 @@ static void do_redraw(struct vo *vo)
 {
     struct vo_internal *in = vo->in;
 
-    if (!vo->config_ok || (vo->driver->caps & VO_CAP_NOREDRAW))
+    if (!vo->config_ok || (vo->driver->caps & VO_CAP_NORETAIN))
         return;
 
     pthread_mutex_lock(&in->lock);
@@ -1320,6 +1320,15 @@ struct mp_image *vo_get_current_frame(struct vo *vo)
     struct mp_image *r = NULL;
     if (vo->in->current_frame)
         r = mp_image_new_ref(vo->in->current_frame->current);
+    pthread_mutex_unlock(&in->lock);
+    return r;
+}
+
+struct vo_frame *vo_get_current_vo_frame(struct vo *vo)
+{
+    struct vo_internal *in = vo->in;
+    pthread_mutex_lock(&in->lock);
+    struct vo_frame *r = vo_frame_ref(vo->in->current_frame);
     pthread_mutex_unlock(&in->lock);
     return r;
 }

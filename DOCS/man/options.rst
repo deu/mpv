@@ -572,6 +572,10 @@ Program Behavior
     which mpv should not use with youtube-dl. The patterns are matched after
     the ``http(s)://`` part of the URL.
 
+    The `use_manifests` script option makes mpv use the master manifest URL for
+    formats like HLS and DASH, if available, allowing for video/audio selection
+    in runtime. It's disabled ("no") by default for performance reasons.
+
     ``^`` matches the beginning of the URL, ``$`` matches its end, and you
     should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to match
     that character.
@@ -1043,6 +1047,8 @@ Video
     hardware deinterlace filters will conflict. Also since that version,
     ``--deinterlace=auto`` was removed, which used to mean that the default
     interlacing option of possibly inserted video filters was used.)
+
+    Note that this will make video look worse if it's not actually interlaced.
 
 ``--frames=<number>``
     Play/convert only first ``<number>`` video frames, then quit.
@@ -3321,7 +3327,8 @@ Screenshot
 ``--screenshot-high-bit-depth=<yes|no>``
     If possible, write screenshots with a bit depth similar to the source
     video (default: yes). This is interesting in particular for PNG, as this
-    sometimes triggers writing 16 bit PNGs with huge file sizes.
+    sometimes triggers writing 16 bit PNGs with huge file sizes. This will also
+    include an unused alpha channel in the resulting files if 16 bit is used.
 
 ``--screenshot-template=<template>``
     Specify the filename template used to save screenshots. The template
@@ -3507,6 +3514,15 @@ It also sets the defaults for the ``lavrresample`` audio filter.
     If downmix happens outside of mpv for some reason, or in the decoder
     (decoder downmixing), or in the audio output (system mixer), this has no
     effect.
+
+``--audio-resample-max-output-size=<length>``
+    Limit maximum size of audio frames filtered at once, in ms (default: 40).
+    The output size size is limited in order to make resample speed changes
+    react faster. This is necessary especially if decoders or filters output
+    very large frame sizes (like some lossless codecs or some DRC filters).
+    This option does not affect the resampling algorithm in any way.
+
+    For testing/debugging only. Can be removed or changed any time.
 
 ``--audio-swresample-o=<string>``
     Set AVOptions on the SwrContext or AVAudioResampleContext. These should
@@ -4874,7 +4890,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     auto
         auto-select (default)
     cocoa
-        Cocoa/OS X
+        Cocoa/OS X (deprecated, use --vo=opengl-cb instead)
     win
         Win32/WGL
     winvk
@@ -5066,7 +5082,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
         for in-range material as much as possible. Use this when you care about
         color accuracy more than detail preservation. This is somewhere in
         between ``clip`` and ``reinhard``, depending on the value of
-        ``--tone-mapping-param``. (default)
+        ``--tone-mapping-param``.
     reinhard
         Reinhard tone mapping algorithm. Very simple continuous curve.
         Preserves overall image brightness but uses nonlinear contrast, which
@@ -5077,7 +5093,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
         desaturating everything. Developed by John Hable for use in video
         games. Use this when you care about detail preservation more than
         color/brightness accuracy. This is roughly equivalent to
-        ``--hdr-tone-mapping=reinhard --tone-mapping-param=0.24``.
+        ``--hdr-tone-mapping=reinhard --tone-mapping-param=0.24``. If possible,
+        you should also enable ``--hdr-compute-peak`` for the best results.
+        (Default)
     gamma
         Fits a logarithmic transfer between the tone curves.
     linear
@@ -5106,13 +5124,15 @@ The following video options are currently all specific to ``--vo=gpu`` and
     linear
         Specifies the scale factor to use while stretching. Defaults to 1.0.
 
-``--hdr-compute-peak``
-    Compute the HDR peak per-frame of relying on tagged metadata. These values
-    are averaged over local regions as well as over several frames to prevent
-    the value from jittering around too much. This option basically gives you
-    dynamic, per-scene tone mapping. Requires compute shaders, which is a
-    fairly recent OpenGL feature, and will probably also perform horribly on
-    some drivers, so enable at your own risk.
+``--hdr-compute-peak=<auto|yes|no>``
+    Compute the HDR peak and frame average brightness per-frame instead of
+    relying on tagged metadata. These values are averaged over local regions as
+    well as over several frames to prevent the value from jittering around too
+    much. This option basically gives you dynamic, per-scene tone mapping.
+    Requires compute shaders, which is a fairly recent OpenGL feature, and will
+    probably also perform horribly on some drivers, so enable at your own risk.
+    The special value ``auto`` (default) will enable HDR peak computation
+    automatically if compute shaders and SSBOs are supported.
 
 ``--tone-mapping-desaturate=<value>``
     Apply desaturation for highlights. The parameter essentially controls the
@@ -5122,8 +5142,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
     into white instead. This makes images feel more natural, at the cost of
     reducing information about out-of-range colors.
 
-    The default of 1.0 provides a good balance that roughly matches the look
-    and feel of the ACES ODT curves. A setting of 0.0 disables this option.
+    The default of 0.5 provides a good balance. This value is weaker than the
+    ACES ODT curves' recommendation, but works better for most content in
+    practice. A setting of 0.0 disables this option.
 
 ``--gamut-warning``
     If enabled, mpv will mark all clipped/out-of-gamut pixels that exceed a
@@ -5250,6 +5271,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
     the renderer is going to wait for a while after rendering, instead of
     flipping GL front and backbuffers immediately (i.e. it doesn't call it
     in display-sync mode).
+
+    On OSX this is always deactivated because it only causes performance
+    problems and other regressions.
 
 ``--gpu-dumb-mode=<yes|no|auto>``
     This mode is extremely restricted, and will disable most extended

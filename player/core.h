@@ -168,8 +168,6 @@ struct track {
 struct vo_chain {
     struct mp_log *log;
 
-    double container_fps;
-
     struct mp_output_chain *filter;
 
     //struct vf_chain *vf;
@@ -189,7 +187,6 @@ struct ao_chain {
     struct mp_log *log;
 
     bool spdif_passthrough, spdif_failed;
-    bool pts_reset;
 
     struct mp_output_chain *filter;
 
@@ -489,8 +486,8 @@ struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
 // loadfile.c
 void mp_abort_playback_async(struct MPContext *mpctx);
 void uninit_player(struct MPContext *mpctx, unsigned int mask);
-struct track *mp_add_external_file(struct MPContext *mpctx, char *filename,
-                                   enum stream_type filter);
+int mp_add_external_file(struct MPContext *mpctx, char *filename,
+                         enum stream_type filter);
 #define FLAG_MARK_SELECTION 1
 void mp_switch_track(struct MPContext *mpctx, enum stream_type type,
                      struct track *track, int flags);

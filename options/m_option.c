@@ -183,11 +183,11 @@ const m_option_type_t m_option_type_flag = {
     // need yes or no in config files
     .name  = "Flag",
     .size  = sizeof(int),
-    .flags = M_OPT_TYPE_OPTIONAL_PARAM,
+    .flags = M_OPT_TYPE_OPTIONAL_PARAM | M_OPT_TYPE_CHOICE,
     .parse = parse_flag,
     .print = print_flag,
     .copy  = copy_opt,
-    .add = add_flag,
+    .add   = add_flag,
     .set   = flag_set,
     .get   = flag_get,
 };
@@ -747,6 +747,7 @@ static char *print_choice(const m_option_t *opt, const void *val)
 const struct m_option_type m_option_type_choice = {
     .name  = "Choice",
     .size  = sizeof(int),
+    .flags = M_OPT_TYPE_CHOICE,
     .parse = parse_choice,
     .print = print_choice,
     .copy  = copy_opt,
@@ -1087,6 +1088,7 @@ static int parse_float_aspect(struct mp_log *log, const m_option_t *opt,
 const m_option_type_t m_option_type_aspect = {
     .name  = "Aspect",
     .size  = sizeof(float),
+    .flags = M_OPT_TYPE_CHOICE,
     .parse = parse_float_aspect,
     .print = print_float,
     .pretty_print = print_float_f3,
@@ -2940,6 +2942,8 @@ print_help: ;
         if (desc->print_help)
             desc->print_help(log);
         m_config_print_option_list(config, "*");
+    } else if (list->print_unknown_entry_help) {
+        list->print_unknown_entry_help(log, mp_tprintf(80, "%.*s", BSTR_P(name)));
     } else {
         mp_warn(log, "Option %.*s: item %.*s doesn't exist.\n",
                BSTR_P(opt_name), BSTR_P(name));
@@ -3155,11 +3159,17 @@ static int parse_obj_settings_list(struct mp_log *log, const m_option_t *opt,
             if (!ol->get_desc(&desc, n))
                 break;
             if (!desc.hidden) {
-                mp_info(log, "  %-15s: %s\n",
+                mp_info(log, "  %-16s %s\n",
                        desc.name, desc.description);
             }
         }
         mp_info(log, "\n");
+        if (ol->print_help_list)
+            ol->print_help_list(log);
+        if (!ol->use_global_options) {
+            mp_info(log, "Get help on individual entries via: --%s=entry=help\n",
+                    opt->name);
+        }
         return M_OPT_EXIT;
     }
 

@@ -1428,7 +1428,6 @@ static int mp_property_filter_metadata(void *ctx, struct m_property *prop,
         char *rem;
         m_property_split_path(ka->key, &key, &rem);
         struct mp_tags *metadata = NULL;
-        int res = CONTROL_UNKNOWN;
         struct mp_output_chain *chain = NULL;
         if (strcmp(type, "vf") == 0) {
             chain = mpctx->vo_chain ? mpctx->vo_chain->filter : NULL;
@@ -1444,26 +1443,19 @@ static int mp_property_filter_metadata(void *ctx, struct m_property *prop,
         };
         mp_output_chain_command(chain, mp_tprintf(80, "%.*s", BSTR_P(key)), &cmd);
 
-        if (metadata)
-            res = CONTROL_OK;
-
-        switch (res) {
-        case CONTROL_UNKNOWN:
-            return M_PROPERTY_UNKNOWN;
-        case CONTROL_NA: // empty
-        case CONTROL_OK:
-            if (strlen(rem)) {
-                struct m_property_action_arg next_ka = *ka;
-                next_ka.key = rem;
-                res = tag_property(M_PROPERTY_KEY_ACTION, &next_ka, metadata);
-            } else {
-                res = tag_property(ka->action, ka->arg, metadata);
-            }
-            talloc_free(metadata);
-            return res;
-        default:
+        if (!metadata)
             return M_PROPERTY_ERROR;
+
+        int res;
+        if (strlen(rem)) {
+            struct m_property_action_arg next_ka = *ka;
+            next_ka.key = rem;
+            res = tag_property(M_PROPERTY_KEY_ACTION, &next_ka, metadata);
+        } else {
+            res = tag_property(ka->action, ka->arg, metadata);
         }
+        talloc_free(metadata);
+        return res;
     }
     return M_PROPERTY_NOT_IMPLEMENTED;
 }
@@ -2500,7 +2492,7 @@ static int get_frame_count(struct MPContext *mpctx)
     if (!mpctx->vo_chain)
         return -1;
     double len = get_time_length(mpctx);
-    double fps = mpctx->vo_chain->container_fps;
+    double fps = mpctx->vo_chain->filter->container_fps;
     if (len < 0 || fps <= 0)
         return 0;
 
@@ -2949,7 +2941,7 @@ static int mp_property_fps(void *ctx, struct m_property *prop,
                            int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    float fps = mpctx->vo_chain ? mpctx->vo_chain->container_fps : 0;
+    float fps = mpctx->vo_chain ? mpctx->vo_chain->filter->container_fps : 0;
     if (fps < 0.1 || !isfinite(fps))
         return M_PROPERTY_UNAVAILABLE;;
     return m_property_float_ro(action, arg, fps);
@@ -3538,7 +3530,6 @@ static int get_decoder_entry(int item, int action, void *arg, void *ctx)
     struct mp_decoder_entry *c = &codecs->entries[item];
 
     struct m_sub_property props[] = {
-        {"family",      SUB_PROP_STR(c->family)},
         {"codec",       SUB_PROP_STR(c->codec)},
         {"driver" ,     SUB_PROP_STR(c->decoder)},
         {"description", SUB_PROP_STR(c->desc)},
@@ -4322,6 +4313,7 @@ static const struct property_osd_display {
     {"ab-loop-a", "A-B loop start"},
     {"ab-loop-b", .msg = "A-B loop: ${ab-loop-a} - ${ab-loop-b}"},
     {"audio-device", "Audio device"},
+    {"hwdec", .msg = "Hardware decoding: ${hwdec-current}"},
     // By default, don't display the following properties on OSD
     {"pause", NULL},
     {"fullscreen", NULL},
@@ -5296,24 +5288,29 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
                 return 0;
             }
         }
-        struct track *t = mp_add_external_file(mpctx, cmd->args[0].v.s, type);
-        if (!t)
+        int first = mp_add_external_file(mpctx, cmd->args[0].v.s, type);
+        if (first < 0)
             return -1;
-        if (cmd->args[1].v.i == 1) {
-            t->no_default = true;
-        } else {
-            if (mpctx->playback_initialized) {
-                mp_switch_track(mpctx, t->type, t, FLAG_MARK_SELECTION);
-            } else {
-                opts->stream_id[0][t->type] = t->user_tid;
+
+        for (int n = first; n < mpctx->num_tracks; n++) {
+            struct track *t = mpctx->tracks[n];
+            if (cmd->args[1].v.i == 1){
+                t->no_default = true;
+            } else if (n == first) {
+                if (mpctx->playback_initialized) {
+                    mp_switch_track(mpctx, t->type, t, FLAG_MARK_SELECTION);
+                } else {
+                    opts->stream_id[0][t->type] = t->user_tid;
+                }
             }
+            char *title = cmd->args[2].v.s;
+            if (title && title[0])
+                t->title = talloc_strdup(t, title);
+            char *lang = cmd->args[3].v.s;
+            if (lang && lang[0])
+                t->lang = talloc_strdup(t, lang);
         }
-        char *title = cmd->args[2].v.s;
-        if (title && title[0])
-            t->title = talloc_strdup(t, title);
-        char *lang = cmd->args[3].v.s;
-        if (lang && lang[0])
-            t->lang = talloc_strdup(t, lang);
+
         if (mpctx->playback_initialized)
             print_track_list(mpctx, "Track added:");
         break;
@@ -5339,14 +5336,15 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         }
         int type = cmd->id == MP_CMD_SUB_RELOAD ? STREAM_SUB : STREAM_AUDIO;
         struct track *t = mp_track_by_tid(mpctx, type, cmd->args[0].v.i);
-        struct track *nt = NULL;
+        int nt_num = -1;
         if (t && t->is_external && t->external_filename) {
             char *filename = talloc_strdup(NULL, t->external_filename);
             mp_remove_track(mpctx, t);
-            nt = mp_add_external_file(mpctx, filename, type);
+            nt_num = mp_add_external_file(mpctx, filename, type);
             talloc_free(filename);
         }
-        if (nt) {
+        if (nt_num >= 0) {
+            struct track *nt = mpctx->tracks[nt_num];
             mp_switch_track(mpctx, nt->type, nt, 0);
             print_track_list(mpctx, "Reloaded:");
             return 0;

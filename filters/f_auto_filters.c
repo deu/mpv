@@ -76,7 +76,7 @@ static void deint_process(struct mp_filter *f)
         p->sub.filter =
             mp_create_user_filter(f, MP_OUTPUT_CHAIN_VIDEO, "d3d11vpp", NULL);
     } else if (mp_sws_supports_input(img->imgfmt)) {
-        char *args[] = {"mode", "send_field", "deint", "interlaced", NULL};
+        char *args[] = {"mode", "send_field", NULL};
         p->sub.filter =
             mp_create_user_filter(f, MP_OUTPUT_CHAIN_VIDEO, "yadif", args);
     } else {
@@ -181,7 +181,7 @@ static void rotate_process(struct mp_filter *f)
         return;
     }
 
-    if (mp_sws_supports_input(img->imgfmt)) {
+    if (!mp_sws_supports_input(img->imgfmt)) {
         MP_ERR(f, "Video rotation with this format not supported\n");
         mp_subfilter_continue(&p->sub);
         return;

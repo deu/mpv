@@ -209,7 +209,7 @@ struct ra *ra_create_vk(struct mpvk_ctx *vk, struct mp_log *log)
     ra->max_pushc_size = vk->limits.maxPushConstantsSize;
 
     if (vk->pool_compute) {
-        ra->caps |= RA_CAP_COMPUTE;
+        ra->caps |= RA_CAP_COMPUTE | RA_CAP_NUM_GROUPS;
         // If we have more compute queues than graphics queues, we probably
         // want to be using them. (This seems mostly relevant for AMD)
         if (vk->pool_compute->num_queues > vk->pool_graphics->num_queues)
@@ -222,8 +222,8 @@ struct ra *ra_create_vk(struct mpvk_ctx *vk, struct mp_log *log)
     // UBO support is required
     ra->caps |= RA_CAP_BUF_RO | RA_CAP_FRAGCOORD;
 
-    // textureGather is only supported in GLSL 400+
-    if (ra->glsl_version >= 400)
+    // textureGather requires the ImageGatherExtended capability
+    if (vk->features.shaderImageGatherExtended)
         ra->caps |= RA_CAP_GATHER;
 
     // Try creating a shader storage buffer
@@ -715,6 +715,8 @@ static void buf_barrier(struct ra *ra, struct vk_cmd *cmd, struct ra_buf *buf,
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = buf_vk->current_access,
         .dstAccessMask = newAccess,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .buffer = buf_vk->slice.buf,
         .offset = offset,
         .size = size,
@@ -1763,6 +1765,7 @@ static int vk_desc_namespace(enum ra_vartype type)
 
 struct vk_timer {
     VkQueryPool pool;
+    int index_seen; // keeps track of which indices have been used at least once
     int index;
     uint64_t result;
 };
@@ -1787,6 +1790,7 @@ static ra_timer *vk_timer_create(struct ra *ra)
     struct mpvk_ctx *vk = ra_vk_get(ra);
 
     struct vk_timer *timer = talloc_zero(NULL, struct vk_timer);
+    timer->index_seen = -1;
 
     struct VkQueryPoolCreateInfo qinfo = {
         .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -1818,12 +1822,15 @@ static void vk_timer_start(struct ra *ra, ra_timer *ratimer)
     struct mpvk_ctx *vk = ra_vk_get(ra);
     struct vk_timer *timer = ratimer;
 
-    timer->index = (timer->index + 2) % VK_QUERY_POOL_SIZE;
-
+    VkResult res = VK_NOT_READY;
     uint64_t out[2];
-    VkResult res = vkGetQueryPoolResults(vk->dev, timer->pool, timer->index, 2,
-                                         sizeof(out), &out[0], sizeof(uint64_t),
-                                         VK_QUERY_RESULT_64_BIT);
+
+    if (timer->index <= timer->index_seen) {
+        res = vkGetQueryPoolResults(vk->dev, timer->pool, timer->index, 2,
+                                    sizeof(out), &out[0], sizeof(uint64_t),
+                                    VK_QUERY_RESULT_64_BIT);
+    }
+
     switch (res) {
     case VK_SUCCESS:
         timer->result = (out[1] - out[0]) * vk->limits.timestampPeriod;
@@ -1845,6 +1852,9 @@ static uint64_t vk_timer_stop(struct ra *ra, ra_timer *ratimer)
     struct vk_timer *timer = ratimer;
     vk_timer_record(ra, timer->pool, timer->index + 1,
                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+    timer->index_seen = MPMAX(timer->index_seen, timer->index);
+    timer->index = (timer->index + 2) % VK_QUERY_POOL_SIZE;
 
     return timer->result;
 }

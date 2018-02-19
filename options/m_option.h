@@ -129,7 +129,7 @@ struct m_obj_desc {
     const char *init_options;
     // Don't list entry with "help"
     bool hidden;
-    // Callback to print custom help if "help" is passed
+    // Callback to print custom help if "vf=entry=help" is passed
     void (*print_help)(struct mp_log *log);
     // Callback that allows you to override the static default values. The
     // pointer p points to the struct described by options/priv_size, with
@@ -159,6 +159,10 @@ struct m_obj_list {
     bool disallow_positional_parameters;
     // Each sub-item is backed by global options (for AOs and VOs).
     bool use_global_options;
+    // Callback to print additional custom help if "vf=help" is passed
+    void (*print_help_list)(struct mp_log *log);
+    // Callback to print help for _unknown_ entries with "vf=entry=help"
+    void (*print_unknown_entry_help)(struct mp_log *log, const char *name);
 };
 
 // Find entry by name
@@ -438,6 +442,11 @@ char *format_file_size(int64_t size);
 // assume that the argument takes no parameter. In config files, these
 // options can be used without "=" and value.
 #define M_OPT_TYPE_OPTIONAL_PARAM       (1 << 0)
+
+// Behaves fundamentally like a choice or a superset of it (all allowed string
+// values are from a fixed set, although other types of values like numbers
+// might be allowed too). E.g. m_option_type_choice and m_option_type_flag.
+#define M_OPT_TYPE_CHOICE               (1 << 1)
 
 ///////////////////////////// Parser flags /////////////////////////////////
 

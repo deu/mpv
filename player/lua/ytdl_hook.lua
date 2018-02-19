@@ -4,7 +4,8 @@ local options = require 'mp.options'
 
 local o = {
     exclude = "",
-    try_ytdl_first = false
+    try_ytdl_first = false,
+    use_manifests = false
 }
 options.read_options(o)
 
@@ -142,6 +143,45 @@ local function is_blacklisted(url)
     return false
 end
 
+local function parse_yt_playlist(url, json)
+    -- return 0-based index to use with --playlist-start
+
+    if not json.extractor or json.extractor ~= "youtube:playlist" then
+        return nil
+    end
+
+    local query = url:match("%?.+")
+    if not query then return nil end
+
+    local args = {}
+    for arg, param in query:gmatch("(%a+)=([^&?]+)") do
+        if arg and param then
+            args[arg] = param
+        end
+    end
+
+    local maybe_idx = tonumber(args["index"])
+
+    -- if index matches v param it's probably the requested item
+    if maybe_idx and #json.entries >= maybe_idx and
+        json.entries[maybe_idx].id == args["v"] then
+        msg.debug("index matches requested video")
+        return maybe_idx - 1
+    end
+
+    -- if there's no index or it doesn't match, look for video
+    for i = 1, #json.entries do
+        if json.entries[i] == args["v"] then
+            msg.debug("found requested video in index " .. (i - 1))
+            return i - 1
+        end
+    end
+
+    msg.debug("requested video not found in playlist")
+    -- if item isn't on the playlist, give up
+    return nil
+end
+
 local function make_absolute_url(base_url, url)
     if url:find("https?://") == 1 then return url end
 
@@ -215,8 +255,8 @@ local function edl_track_joined(fragments, protocol, is_live, base)
 end
 
 local function has_native_dash_demuxer()
-    local demuxers = mp.get_property_native("demuxer-lavf-list")
-    for _,v in ipairs(demuxers) do
+    local demuxers = mp.get_property_native("demuxer-lavf-list", {})
+    for _, v in ipairs(demuxers) do
         if v == "dash" then
             return true
         end
@@ -230,7 +270,7 @@ local function valid_manifest(json)
         return false
     end
     local proto = reqfmt["protocol"] or json["protocol"] or ""
-    return (has_native_dash_demuxer() and proto == "http_dash_segments") or
+    return (proto == "http_dash_segments" and has_native_dash_demuxer()) or
         proto:find("^m3u8")
 end
 
@@ -240,7 +280,7 @@ local function add_single_video(json)
     local reqfmts = json["requested_formats"]
 
     -- prefer manifest_url if present
-    if valid_manifest(json) then
+    if o.use_manifests and valid_manifest(json) then
         local mpd_url = reqfmts and reqfmts[1]["manifest_url"] or
             json["manifest_url"]
         if not mpd_url then
@@ -320,7 +360,8 @@ local function add_single_video(json)
 
             if not (sub_info.data == nil) then
                 sub = "memory://"..sub_info.data
-            elseif not (sub_info.url == nil) then
+            elseif not (sub_info.url == nil) and
+                url_is_safe(sub_info.url) then
                 sub = sub_info.url
             end
 
@@ -380,7 +421,6 @@ local function add_single_video(json)
             "rtmp_app", json.app)
     end
 
-    -- ffmpeg ignores proxy if https is used and doesn't support SOCKS
     if json.proxy and json.proxy ~= "" then
         stream_opts = append_libav_opt(stream_opts,
             "http_proxy", json.proxy)
@@ -390,213 +430,225 @@ local function add_single_video(json)
 end
 
 mp.add_hook(o.try_ytdl_first and "on_load" or "on_load_fail", 10, function ()
-    local url = mp.get_property("stream-open-filename")
+    local url = mp.get_property("stream-open-filename", "")
+    if not (url:find("ytdl://") == 1) and
+        not ((url:find("https?://") == 1) and not is_blacklisted(url)) then
+        return
+    end
     local start_time = os.clock()
-    if (url:find("ytdl://") == 1) or
-        ((url:find("https?://") == 1) and not is_blacklisted(url)) then
 
-        -- check for youtube-dl in mpv's config dir
-        if not (ytdl.searched) then
-            local exesuf = (package.config:sub(1,1) == '\\') and '.exe' or ''
-            local ytdl_mcd = mp.find_config_file("youtube-dl" .. exesuf)
-            if not (ytdl_mcd == nil) then
-                msg.verbose("found youtube-dl at: " .. ytdl_mcd)
-                ytdl.path = ytdl_mcd
-            end
-            ytdl.searched = true
+    -- check for youtube-dl in mpv's config dir
+    if not (ytdl.searched) then
+        local exesuf = (package.config:sub(1,1) == '\\') and '.exe' or ''
+        local ytdl_mcd = mp.find_config_file("youtube-dl" .. exesuf)
+        if not (ytdl_mcd == nil) then
+            msg.verbose("found youtube-dl at: " .. ytdl_mcd)
+            ytdl.path = ytdl_mcd
         end
+        ytdl.searched = true
+    end
 
-        -- strip ytdl://
-        if (url:find("ytdl://") == 1) then
-            url = url:sub(8)
+    -- strip ytdl://
+    if (url:find("ytdl://") == 1) then
+        url = url:sub(8)
+    end
+
+    local format = mp.get_property("options/ytdl-format")
+    local raw_options = mp.get_property_native("options/ytdl-raw-options")
+    local allsubs = true
+    local proxy = nil
+    local use_playlist = false
+
+    local command = {
+        ytdl.path, "--no-warnings", "-J", "--flat-playlist",
+        "--sub-format", "ass/srt/best"
+    }
+
+    -- Checks if video option is "no", change format accordingly,
+    -- but only if user didn't explicitly set one
+    if (mp.get_property("options/vid") == "no")
+        and not option_was_set("ytdl-format") then
+
+        format = "bestaudio/best"
+        msg.verbose("Video disabled. Only using audio")
+    end
+
+    if (format == "") then
+        format = "bestvideo+bestaudio/best"
+    end
+    table.insert(command, "--format")
+    table.insert(command, format)
+
+    for param, arg in pairs(raw_options) do
+        table.insert(command, "--" .. param)
+        if (arg ~= "") then
+            table.insert(command, arg)
         end
-
-        local format = mp.get_property("options/ytdl-format")
-        local raw_options = mp.get_property_native("options/ytdl-raw-options")
-        local allsubs = true
-        local proxy = nil
-
-        local command = {
-            ytdl.path, "--no-warnings", "-J", "--flat-playlist",
-            "--sub-format", "ass/srt/best", "--no-playlist"
-        }
-
-        -- Checks if video option is "no", change format accordingly,
-        -- but only if user didn't explicitly set one
-        if (mp.get_property("options/vid") == "no")
-            and not option_was_set("ytdl-format") then
-
-            format = "bestaudio/best"
-            msg.verbose("Video disabled. Only using audio")
+        if (param == "sub-lang") and (arg ~= "") then
+            allsubs = false
+        elseif (param == "proxy") and (arg ~= "") then
+            proxy = arg
+        elseif (param == "yes-playlist") then
+            use_playlist = true
         end
+    end
 
-        if (format == "") then
-            format = "bestvideo+bestaudio/best"
+    if (allsubs == true) then
+        table.insert(command, "--all-subs")
+    end
+    if not use_playlist then
+        table.insert(command, "--no-playlist")
+    end
+    table.insert(command, "--")
+    table.insert(command, url)
+    msg.debug("Running: " .. table.concat(command,' '))
+    local es, json, result = exec(command)
+
+    if (es < 0) or (json == nil) or (json == "") then
+        local err = "youtube-dl failed: "
+        if result.error and result.error == "init" then
+            err = err .. "not found or not enough permissions"
+        elseif not result.killed_by_us then
+            err = err .. "unexpected error ocurred"
+        else
+            err = string.format("%s returned '%d'", err, es)
         end
-        table.insert(command, "--format")
-        table.insert(command, format)
+        msg.error(err)
+        return
+    end
 
-        for param, arg in pairs(raw_options) do
-            table.insert(command, "--" .. param)
-            if (arg ~= "") then
-                table.insert(command, arg)
-            end
-            if (param == "sub-lang") and (arg ~= "") then
-                allsubs = false
-            end
-            if (param == "proxy") and (arg ~= "") then
-                proxy = arg
-            end
-        end
+    local json, err = utils.parse_json(json)
 
-        if (allsubs == true) then
-            table.insert(command, "--all-subs")
-        end
-        table.insert(command, "--")
-        table.insert(command, url)
-        msg.debug("Running: " .. table.concat(command,' '))
-        local es, json, result = exec(command)
+    if (json == nil) then
+        msg.error("failed to parse JSON data: " .. err)
+        return
+    end
 
-        if (es < 0) or (json == nil) or (json == "") then
-            local err = "youtube-dl failed: "
-            if result.error and result.error == "init" then
-                err = err .. "not found or not enough permissions"
-            elseif not result.killed_by_us then
-                err = err .. "unexpected error ocurred"
-            else
-                err = string.format("%s returned '%d'", err, es)
-            end
-            msg.error(err)
+    msg.verbose("youtube-dl succeeded!")
+    msg.debug('ytdl parsing took '..os.clock()-start_time..' seconds')
+
+    json["proxy"] = json["proxy"] or proxy
+
+    -- what did we get?
+    if json["direct"] then
+        -- direct URL, nothing to do
+        msg.verbose("Got direct URL")
+        return
+    elseif (json["_type"] == "playlist")
+        or (json["_type"] == "multi_video") then
+        -- a playlist
+
+        if (#json.entries == 0) then
+            msg.warn("Got empty playlist, nothing to play.")
             return
         end
 
-        local json, err = utils.parse_json(json)
+        local self_redirecting_url =
+            json.entries[1]["_type"] ~= "url_transparent" and
+            json.entries[1]["webpage_url"] and
+            json.entries[1]["webpage_url"] == json["webpage_url"]
 
-        if (json == nil) then
-            msg.error("failed to parse JSON data: " .. err)
-            return
-        end
 
-        msg.verbose("youtube-dl succeeded!")
-        msg.debug('ytdl parsing took '..os.clock()-start_time..' seconds')
+        -- some funky guessing to detect multi-arc videos
+        if self_redirecting_url and #json.entries > 1
+            and json.entries[1].protocol == "m3u8_native"
+            and json.entries[1].url then
+            msg.verbose("multi-arc video detected, building EDL")
 
-        json["proxy"] = json["proxy"] or proxy
+            local playlist = edl_track_joined(json.entries)
 
-        -- what did we get?
-        if not (json["direct"] == nil) and (json["direct"] == true) then
-            -- direct URL, nothing to do
-            msg.verbose("Got direct URL")
-            return
-        elseif not (json["_type"] == nil)
-            and ((json["_type"] == "playlist")
-            or (json["_type"] == "multi_video")) then
-            -- a playlist
+            msg.debug("EDL: " .. playlist)
 
-            if (#json.entries == 0) then
-                msg.warn("Got empty playlist, nothing to play.")
+            if not playlist then
                 return
             end
 
-            local self_redirecting_url =
-                json.entries[1]["_type"] ~= "url_transparent" and
-                json.entries[1]["webpage_url"] and
-                json.entries[1]["webpage_url"] == json["webpage_url"]
+            -- can't change the http headers for each entry, so use the 1st
+            set_http_headers(json.entries[1].http_headers)
 
+            mp.set_property("stream-open-filename", playlist)
+            if not (json.title == nil) then
+                mp.set_property("file-local-options/force-media-title",
+                    json.title)
+            end
 
-            -- some funky guessing to detect multi-arc videos
-            if self_redirecting_url and #json.entries > 1
-                and json.entries[1].protocol == "m3u8_native"
-                and json.entries[1].url then
-                msg.verbose("multi-arc video detected, building EDL")
-
-                local playlist = edl_track_joined(json.entries)
-
-                msg.debug("EDL: " .. playlist)
-
-                if not playlist then
-                    return
-                end
-
-                -- can't change the http headers for each entry, so use the 1st
-                if json.entries[1] then
-                    set_http_headers(json.entries[1].http_headers)
-                end
-
-                mp.set_property("stream-open-filename", playlist)
-                if not (json.title == nil) then
-                    mp.set_property("file-local-options/force-media-title",
-                        json.title)
-                end
-
-                -- there might not be subs for the first segment
-                local entry_wsubs = nil
-                for i, entry in pairs(json.entries) do
-                    if not (entry.requested_subtitles == nil) then
-                        entry_wsubs = i
-                        break
-                    end
-                end
-
-                if not (entry_wsubs == nil) and
-                    not (json.entries[entry_wsubs].duration == nil) then
-                    for j, req in pairs(json.entries[entry_wsubs].requested_subtitles) do
-                        local subfile = "edl://"
-                        for i, entry in pairs(json.entries) do
-                            if not (entry.requested_subtitles == nil) and
-                                not (entry.requested_subtitles[j] == nil) then
-                                subfile = subfile..edl_escape(entry.requested_subtitles[j].url)
-                            else
-                                subfile = subfile..edl_escape("memory://WEBVTT")
-                            end
-                            subfile = subfile..",length="..entry.duration..";"
-                        end
-                        msg.debug(j.." sub EDL: "..subfile)
-                        mp.commandv("sub-add", subfile, "auto", req.ext, j)
-                    end
-                end
-
-            elseif self_redirecting_url and #json.entries == 1 then
-                msg.verbose("Playlist with single entry detected.")
-                add_single_video(json.entries[1])
-            else
-                local playlist = {"#EXTM3U"}
-                for i, entry in pairs(json.entries) do
-                    local site = entry.url
-                    local title = entry.title
-
-                    if not (title == nil) then
-                        title = string.gsub(title, '%s+', ' ')
-                        table.insert(playlist, "#EXTINF:0," .. title)
-                    end
-
-                    --[[ some extractors will still return the full info for
-                         all clips in the playlist and the URL will point
-                         directly to the file in that case, which we don't
-                         want so get the webpage URL instead, which is what
-                         we want, but only if we aren't going to trigger an
-                         infinite loop
-                    --]]
-                    if entry["webpage_url"] and not self_redirecting_url then
-                        site = entry["webpage_url"]
-                    end
-
-                    -- links with only youtube id as returned by --flat-playlist
-                    if not site:find("://") then
-                        table.insert(playlist, "https://youtu.be/" .. site)
-                    elseif url_is_safe(site) then
-                        table.insert(playlist, site)
-                    end
-
-                end
-
-                if #playlist > 0 then
-                    mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
+            -- there might not be subs for the first segment
+            local entry_wsubs = nil
+            for i, entry in pairs(json.entries) do
+                if not (entry.requested_subtitles == nil) then
+                    entry_wsubs = i
+                    break
                 end
             end
 
-        else -- probably a video
-            add_single_video(json)
+            if not (entry_wsubs == nil) and
+                not (json.entries[entry_wsubs].duration == nil) then
+                for j, req in pairs(json.entries[entry_wsubs].requested_subtitles) do
+                    local subfile = "edl://"
+                    for i, entry in pairs(json.entries) do
+                        if not (entry.requested_subtitles == nil) and
+                            not (entry.requested_subtitles[j] == nil) and
+                            url_is_safe(entry.requested_subtitles[j].url) then
+                            subfile = subfile..edl_escape(entry.requested_subtitles[j].url)
+                        else
+                            subfile = subfile..edl_escape("memory://WEBVTT")
+                        end
+                        subfile = subfile..",length="..entry.duration..";"
+                    end
+                    msg.debug(j.." sub EDL: "..subfile)
+                    mp.commandv("sub-add", subfile, "auto", req.ext, j)
+                end
+            end
+
+        elseif self_redirecting_url and #json.entries == 1 then
+            msg.verbose("Playlist with single entry detected.")
+            add_single_video(json.entries[1])
+        else
+            local playlist_index = parse_yt_playlist(url, json)
+            local playlist = {"#EXTM3U"}
+            for i, entry in pairs(json.entries) do
+                local site = entry.url
+                local title = entry.title
+
+                if not (title == nil) then
+                    title = string.gsub(title, '%s+', ' ')
+                    table.insert(playlist, "#EXTINF:0," .. title)
+                end
+
+                --[[ some extractors will still return the full info for
+                     all clips in the playlist and the URL will point
+                     directly to the file in that case, which we don't
+                     want so get the webpage URL instead, which is what
+                     we want, but only if we aren't going to trigger an
+                     infinite loop
+                --]]
+                if entry["webpage_url"] and not self_redirecting_url then
+                    site = entry["webpage_url"]
+                end
+
+                -- links without protocol as returned by --flat-playlist
+                if not site:find("://") then
+                    -- youtube extractor provides only IDs,
+                    -- others come prefixed with the extractor name and ":"
+                    local prefix = site:find(":") and "ytdl://" or
+                        "https://youtu.be/"
+                    table.insert(playlist, prefix .. site)
+                elseif url_is_safe(site) then
+                    table.insert(playlist, site)
+                end
+
+            end
+
+            if use_playlist and
+                not option_was_set("playlist-start") and playlist_index then
+                mp.set_property_number("playlist-start", playlist_index)
+            end
+
+            mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
         end
+
+    else -- probably a video
+        add_single_video(json)
     end
     msg.debug('script running time: '..os.clock()-start_time..' seconds')
 end)

@@ -258,9 +258,10 @@ static void add_hwdec_item(struct hwdec_info **infos, int *num_infos,
 
 static void add_all_hwdec_methods(struct hwdec_info **infos, int *num_infos)
 {
-    AVCodec *codec = NULL;
+    const AVCodec *codec = NULL;
+    void *iter = NULL;
     while (1) {
-        codec = av_codec_next(codec);
+        codec = av_codec_iterate(&iter);
         if (!codec)
             break;
         if (codec->type != AVMEDIA_TYPE_VIDEO || !av_codec_is_decoder(codec))
@@ -976,17 +977,23 @@ static bool do_send_packet(struct mp_filter *vd, struct demux_packet *pkt)
     return true;
 }
 
-static bool send_packet(struct mp_filter *vd, struct demux_packet *pkt)
+static bool send_queued(struct mp_filter *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
 
-    if (ctx->num_requeue_packets) {
-        if (do_send_packet(vd, ctx->requeue_packets[0])) {
-            talloc_free(ctx->requeue_packets[0]);
-            MP_TARRAY_REMOVE_AT(ctx->requeue_packets, ctx->num_requeue_packets, 0);
-        }
-        return false;
+    while (ctx->num_requeue_packets && do_send_packet(vd, ctx->requeue_packets[0]))
+    {
+        talloc_free(ctx->requeue_packets[0]);
+        MP_TARRAY_REMOVE_AT(ctx->requeue_packets, ctx->num_requeue_packets, 0);
     }
+
+    return ctx->num_requeue_packets == 0;
+}
+
+static bool send_packet(struct mp_filter *vd, struct demux_packet *pkt)
+{
+    if (!send_queued(vd))
+        return false;
 
     return do_send_packet(vd, pkt);
 }
@@ -1003,8 +1010,11 @@ static bool decode_frame(struct mp_filter *vd)
     int ret = avcodec_receive_frame(avctx, ctx->pic);
     if (ret == AVERROR_EOF) {
         // If flushing was initialized earlier and has ended now, make it start
-        // over in case we get new packets at some point in the future.
-        reset_avctx(vd);
+        // over in case we get new packets at some point in the future. This
+        // must take the delay queue into account, so avctx returns EOF until
+        // the delay queue has been drained.
+        if (!ctx->num_delay_queue)
+            reset_avctx(vd);
         return false;
     } else if (ret < 0 && ret != AVERROR(EAGAIN)) {
         handle_err(vd);
@@ -1052,6 +1062,9 @@ static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
 
         ctx->requeue_packets = pkts;
         ctx->num_requeue_packets = num_pkts;
+
+        send_queued(vd);
+        progress = decode_frame(vd);
     }
 
     if (!ctx->num_delay_queue)
@@ -1075,7 +1088,7 @@ static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
             MP_ERR(vd, "Could not copy back hardware decoded frame.\n");
             ctx->hwdec_fail_count = INT_MAX - 1; // force fallback
             handle_err(vd);
-            return false;
+            return true;
         }
     }
 

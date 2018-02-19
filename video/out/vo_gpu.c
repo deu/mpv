@@ -84,7 +84,7 @@ static void draw_frame(struct vo *vo, struct vo_frame *frame)
     if (!sw->fns->start_frame(sw, &fbo))
         return;
 
-    gl_video_render_frame(p->renderer, frame, fbo);
+    gl_video_render_frame(p->renderer, frame, fbo, RENDER_FRAME_DEF);
     if (!sw->fns->submit_frame(sw, frame)) {
         MP_ERR(vo, "Failed presenting frame!\n");
         return;
@@ -168,7 +168,6 @@ static void get_and_update_ambient_lighting(struct gpu_priv *p)
 static int control(struct vo *vo, uint32_t request, void *data)
 {
     struct gpu_priv *p = vo->priv;
-    struct ra_swapchain *sw = p->ctx->swapchain;
 
     switch (request) {
     case VOCTRL_SET_PANSCAN:
@@ -177,15 +176,18 @@ static int control(struct vo *vo, uint32_t request, void *data)
     case VOCTRL_SET_EQUALIZER:
         vo->want_redraw = true;
         return VO_TRUE;
-    case VOCTRL_SCREENSHOT_WIN: {
-        struct mp_image *screen = NULL;
-        if (sw->fns->screenshot)
-            screen = sw->fns->screenshot(sw);
-        if (!screen)
-            break; // redirect to backend
-        // set image parameters according to the display, if possible
-        screen->params.color = gl_video_get_output_colorspace(p->renderer);
-        *(struct mp_image **)data = screen;
+    case VOCTRL_SCREENSHOT: {
+        struct vo_frame *frame = vo_get_current_vo_frame(vo);
+        if (frame) {
+            // Disable interpolation and such.
+            frame->redraw = true;
+            frame->repeat = false;
+            frame->still = true;
+            frame->pts = 0;
+            frame->duration = -1;
+            gl_video_screenshot(p->renderer, frame, data);
+        }
+        talloc_free(frame);
         return true;
     }
     case VOCTRL_LOAD_HWDEC_API:

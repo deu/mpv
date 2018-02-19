@@ -903,15 +903,98 @@ static bool is_usable(const AVFilter *filter, int media_type)
            is_single_media_only(filter->outputs, media_type);
 }
 
-static void print_help(struct mp_log *log, int mediatype, char *name, char *ex)
+static void dump_list(struct mp_log *log, int media_type)
 {
-    mp_info(log, "List of libavfilter filters:\n");
+    mp_info(log, "Available libavfilter filters:\n");
     for (const AVFilter *filter = avfilter_next(NULL); filter;
          filter = avfilter_next(filter))
     {
-        if (is_usable(filter, mediatype))
-            mp_info(log, " %-16s %s\n", filter->name, filter->description);
+        if (is_usable(filter, media_type))
+            mp_info(log, "  %-16s %s\n", filter->name, filter->description);
     }
+}
+
+static const char *get_avopt_type_name(enum AVOptionType type)
+{
+    switch (type) {
+    case AV_OPT_TYPE_FLAGS:             return "flags";
+    case AV_OPT_TYPE_INT:               return "int";
+    case AV_OPT_TYPE_INT64:             return "int64";
+    case AV_OPT_TYPE_DOUBLE:            return "double";
+    case AV_OPT_TYPE_FLOAT:             return "float";
+    case AV_OPT_TYPE_STRING:            return "string";
+    case AV_OPT_TYPE_RATIONAL:          return "rational";
+    case AV_OPT_TYPE_BINARY:            return "binary";
+    case AV_OPT_TYPE_DICT:              return "dict";
+    case AV_OPT_TYPE_UINT64:            return "uint64";
+    case AV_OPT_TYPE_IMAGE_SIZE:        return "imagesize";
+    case AV_OPT_TYPE_PIXEL_FMT:         return "pixfmt";
+    case AV_OPT_TYPE_SAMPLE_FMT:        return "samplefmt";
+    case AV_OPT_TYPE_VIDEO_RATE:        return "fps";
+    case AV_OPT_TYPE_DURATION:          return "duration";
+    case AV_OPT_TYPE_COLOR:             return "color";
+    case AV_OPT_TYPE_CHANNEL_LAYOUT:    return "channellayout";
+    case AV_OPT_TYPE_BOOL:              return "bool";
+    case AV_OPT_TYPE_CONST: // fallthrough
+    default:
+        return NULL;
+    }
+}
+
+#define NSTR(s) ((s) ? (s) : "")
+
+void print_lavfi_help(struct mp_log *log, const char *name, int media_type)
+{
+    const AVFilter *f = avfilter_get_by_name(name);
+    if (!f) {
+        mp_err(log, "Filter '%s' not found.\n", name);
+        return;
+    }
+    if (!is_usable(f, media_type)) {
+        mp_err(log, "Filter '%s' is not usable in this context (wrong media \n"
+               "types or wrong number of inputs/outputs).\n", name);
+    }
+    mp_info(log, "Options:\n\n");
+    const AVClass *class = f->priv_class;
+    // av_opt_next() requires this for some retarded incomprehensible reason.
+    const AVClass **c = &class;
+    int offset= -1;
+    int count = 0;
+    for (const AVOption *o = av_opt_next(c, 0); o; o = av_opt_next(c, o)) {
+        // This is how libavfilter (at the time) decided to assign positional
+        // options (called "shorthand" in the libavfilter code). So we
+        // duplicate it exactly.
+        if (o->type == AV_OPT_TYPE_CONST || o->offset == offset)
+            continue;
+        offset = o->offset;
+
+        const char *t = get_avopt_type_name(o->type);
+        char *tstr = t ? mp_tprintf(30, "<%s>", t) : "?";
+        mp_info(log, " %-10s %-12s %s\n", o->name, tstr, NSTR(o->help));
+
+        const AVOption *sub = o;
+        while (1) {
+            sub = av_opt_next(c, sub);
+            if (!sub || sub->type != AV_OPT_TYPE_CONST)
+                break;
+            mp_info(log, " %3s%-23s %s\n", "", sub->name, NSTR(sub->help));
+        }
+
+        count++;
+    }
+    mp_info(log, "\nTotal: %d options\n", count);
+}
+
+void print_lavfi_help_list(struct mp_log *log, int media_type)
+{
+    dump_list(log, media_type);
+    mp_info(log, "\nIf libavfilter filters clash with builtin mpv filters,\n"
+            "prefix them with lavfi- to select the libavfilter one.\n\n");
+}
+
+static void print_help(struct mp_log *log, int mediatype, char *name, char *ex)
+{
+    dump_list(log, mediatype);
     mp_info(log, "\n"
         "This lists %s->%s filters only. Refer to\n"
         "\n"

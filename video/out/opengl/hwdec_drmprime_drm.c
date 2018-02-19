@@ -50,7 +50,7 @@ struct priv {
     struct mp_image_params params;
 
     struct drm_atomic_context *ctx;
-    struct drm_frame current_frame, old_frame;
+    struct drm_frame current_frame, last_frame, old_frame;
 
     struct mp_rect src, dst;
 
@@ -71,8 +71,11 @@ static void set_current_frame(struct ra_hwdec *hw, struct drm_frame *frame)
         drm_prime_destroy_framebuffer(p->log, p->ctx->fd, &p->old_frame.fb);
     }
 
-    mp_image_setrefp(&p->old_frame.image, p->current_frame.image);
-    p->old_frame.fb = p->current_frame.fb;
+    mp_image_setrefp(&p->old_frame.image, p->last_frame.image);
+    p->old_frame.fb = p->last_frame.fb;
+
+    mp_image_setrefp(&p->last_frame.image, p->current_frame.image);
+    p->last_frame.fb = p->current_frame.fb;
 
     if (frame) {
         p->current_frame.fb = frame->fb;
@@ -80,21 +83,20 @@ static void set_current_frame(struct ra_hwdec *hw, struct drm_frame *frame)
     } else {
         memset(&p->current_frame.fb, 0, sizeof(p->current_frame.fb));
         mp_image_setrefp(&p->current_frame.image, NULL);
+        mp_image_setrefp(&p->last_frame.image, NULL);
+        mp_image_setrefp(&p->old_frame.image, NULL);
     }
 }
 
 static void scale_dst_rect(struct ra_hwdec *hw, int source_w, int source_h ,struct mp_rect *src, struct mp_rect *dst)
 {
     struct priv *p = hw->priv;
-    double hratio, vratio, ratio;
 
     // drm can allow to have a layer that has a different size from framebuffer
     // we scale here the destination size to video mode
-    hratio = vratio = ratio = 1.0;
-
-    hratio = (double)p->display_w / (double)source_w;
-    vratio = (double)p->display_h / (double)source_h;
-    ratio = hratio <= vratio ? hratio : vratio;
+    double hratio = p->display_w / (double)source_w;
+    double vratio = p->display_h / (double)source_h;
+    double ratio = hratio <= vratio ? hratio : vratio;
 
     dst->x0 = src->x0 * ratio;
     dst->x1 = src->x1 * ratio;

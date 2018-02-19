@@ -61,7 +61,7 @@ Interface changes
         - inserting a filter that changes the output channel layout will not
           reconfigure the AO - you need to run an additional "ao-reload"
           command to force this if you want that
-        - using "string" gapless audio (--gapless-audio=yes) can fail if the
+        - using "strong" gapless audio (--gapless-audio=yes) can fail if the
           audio formats are not convertible (such as switching between PCM and
           AC3 passthrough)
     - remove out-format sub-parameter from "format" audio filter (no replacement)
@@ -70,6 +70,12 @@ Interface changes
       pad must be connected either to another filter, or to a video/audio track
       or video/audio output). If they are disconnected at runtime, the stream
       will probably stall.
+    - deprecate the OpenGL cocoa backend, option choice --gpu-context=cocoa
+      when used with --gpu-api=opengl (use --vo=opengl-cb)
+    - make --deinterlace=yes always deinterlace, instead of trying to check
+      certain unreliable video metadata. Also flip the defaults of all builtin
+      HW deinterlace filters to always deinterlace.
+    - change vf_vavpp default to use the best deinterlace algorithm by default
  --- mpv 0.28.0 ---
     - rename --hwdec=mediacodec option to mediacodec-copy, to reflect
       conventions followed by other hardware video decoding APIs

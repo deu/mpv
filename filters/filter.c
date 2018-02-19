@@ -107,6 +107,13 @@ struct mp_filter_internal {
     bool failed;
 };
 
+
+// Called when new work needs to be done on a pin belonging to the filter:
+//  - new data was requested
+//  - new data has been queued
+//  - or just an connect/disconnect/async notification happened
+// This means the process function for this filter has to be called at some
+// point in the future to continue filtering.
 static void add_pending(struct mp_filter *f)
 {
     struct filter_runner *r = f->in->runner;
@@ -118,42 +125,30 @@ static void add_pending(struct mp_filter *f)
     // something naive and dumb does the job too.
     f->in->pending = true;
     MP_TARRAY_APPEND(r, r->pending, r->num_pending, f);
+
+    // Need to tell user that something changed.
+    if (f == r->root_filter)
+        r->external_pending = true;
 }
 
-// Called when new work needs to be done on a pin belonging to the filter:
-//  - new data was requested
-//  - new data has been queued
-//  - or just an connect/disconnect/async notification happened
-// This means the process function for this filter has to be called next.
-static void update_filter(struct mp_filter *src, struct mp_filter *f)
+// Possibly enter recursive filtering. This is done as convenience for
+// "external" filter users only. (Normal filtering does this iteratively via
+// mp_filter_run() to avoid filter reentrancy issues and deep call stacks.) If
+// the API users uses an external manually connected pin, do recursive filtering
+// as a not strictly necessary feature which makes outside I/O with filters
+// easier.
+static void filter_recursive(struct mp_filter *f)
 {
     assert(f);
     struct filter_runner *r = f->in->runner;
 
-    // Make sure the filter knows it has to make progress.
-    if (src->in->runner != r) {
-        // Connected to a different graph. The user has to drive those manually,
-        // and we simplify tell the user via the mp_filter_run() return value.
-        r->external_pending = true;
-    } else if (!f->in->pending) {
-        add_pending(f);
+    // Never do internal filtering recursively.
+    if (r->filtering)
+        return;
 
-        if (!r->filtering) {
-            // Likely the "outer" API user used an external manually connected
-            // pin, so do recursive filtering (as a not strictly necessary
-            // feature which makes outside I/O with filters easier).
-            // Also don't lose the pending state, which the user may or may not
-            // care about.
-            // Note that we must avoid calling this from within filtering,
-            // because that would make the process() functions recursive and
-            // reentrant (and hard to reason about).
-            r->external_pending |= mp_filter_run(r->root_filter);
-        }
-
-        // Need to tell user that something changed.
-        if (f == r->root_filter)
-            r->external_pending = true;
-    }
+    // Also don't lose the pending state, which the user may or may not
+    // care about.
+    r->external_pending |= mp_filter_run(r->root_filter);
 }
 
 void mp_filter_internal_mark_progress(struct mp_filter *f)
@@ -165,13 +160,12 @@ void mp_filter_internal_mark_progress(struct mp_filter *f)
 
 // Basically copy the async notifications to the sync ones. Done so that the
 // sync notifications don't need any locking.
-static void flush_async_notifications(struct filter_runner *r, bool queue)
+static void flush_async_notifications(struct filter_runner *r)
 {
     pthread_mutex_lock(&r->async_lock);
     for (int n = 0; n < r->num_async_pending; n++) {
         struct mp_filter *f = r->async_pending[n];
-        if (queue)
-            add_pending(f);
+        add_pending(f);
         f->in->async_pending = false;
     }
     r->num_async_pending = 0;
@@ -183,9 +177,13 @@ bool mp_filter_run(struct mp_filter *filter)
 {
     struct filter_runner *r = filter->in->runner;
 
+    // (could happen with separate filter graphs calling each other, for now
+    // ignore this issue as we don't use such a setup anywhere)
+    assert(!r->filtering);
+
     r->filtering = true;
 
-    flush_async_notifications(r, true);
+    flush_async_notifications(r);
 
     while (r->num_pending) {
         struct mp_filter *next = r->pending[r->num_pending - 1];
@@ -234,7 +232,8 @@ bool mp_pin_in_write(struct mp_pin *p, struct mp_frame frame)
     assert(p->conn->data.type == MP_FRAME_NONE);
     p->conn->data = frame;
     p->conn->data_requested = false;
-    update_filter(p->owner, p->conn->manual_connection);
+    add_pending(p->conn->manual_connection);
+    filter_recursive(p->conn->manual_connection);
     return true;
 }
 
@@ -249,11 +248,20 @@ bool mp_pin_out_request_data(struct mp_pin *p)
 {
     if (mp_pin_out_has_data(p))
         return true;
-    if (p->conn && p->conn->manual_connection && !p->data_requested) {
-        p->data_requested = true;
-        update_filter(p->owner, p->conn->manual_connection);
+    if (p->conn && p->conn->manual_connection) {
+        if (!p->data_requested) {
+            p->data_requested = true;
+            add_pending(p->conn->manual_connection);
+        }
+        filter_recursive(p->conn->manual_connection);
     }
     return mp_pin_out_has_data(p);
+}
+
+void mp_pin_out_request_data_next(struct mp_pin *p)
+{
+    if (mp_pin_out_request_data(p))
+        add_pending(p->conn->manual_connection);
 }
 
 struct mp_frame mp_pin_out_read(struct mp_pin *p)
@@ -317,7 +325,7 @@ static void init_connection(struct mp_pin *p)
     // manual connections at the ends is still disconnected (or if this
     // attempted to extend an existing connection, becomes dangling and gets
     // disconnected).
-    if (!in->manual_connection && !out->manual_connection)
+    if (!in->manual_connection || !out->manual_connection)
         return;
 
     assert(in->dir == MP_PIN_IN);
@@ -647,7 +655,7 @@ static void filter_destructor(void *p)
 
     // Just make sure the filter is not still in the async notifications set.
     // There will be no more new notifications at this point (due to destroy()).
-    flush_async_notifications(r, false);
+    flush_async_notifications(r);
 
     for (int n = 0; n < r->num_pending; n++) {
         if (r->pending[n] == f) {
@@ -708,9 +716,10 @@ struct mp_filter *mp_filter_create_with_params(struct mp_filter_params *params)
     if (f->in->parent) {
         struct mp_filter_internal *parent = f->in->parent->in;
         MP_TARRAY_APPEND(parent, parent->children, parent->num_children, f);
+        f->log = mp_log_new(f, f->global->log, params->info->name);
+    } else {
+        f->log = mp_log_new(f, f->global->log, "!root");
     }
-
-    f->log = mp_log_new(f, f->global->log, params->info->name);
 
     if (f->in->info->init) {
         if (!f->in->info->init(f, params)) {

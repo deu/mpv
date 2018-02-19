@@ -139,6 +139,49 @@ def build(ctx):
     ctx(features = "ebml_header", target = "ebml_types.h")
     ctx(features = "ebml_definitions", target = "ebml_defs.c")
 
+    def swift(task):
+        src = ' '.join([x.abspath() for x in task.inputs])
+        bridge = ctx.path.find_node("osdep/macOS_swift_bridge.h")
+        tgt = task.outputs[0].abspath()
+        header = task.outputs[1].abspath()
+        module = task.outputs[2].abspath()
+
+        cmd = ('%s %s -module-name macOS_swift -emit-module-path %s '
+               '-import-objc-header %s -emit-objc-header-path %s -o %s %s '
+               '-I. -I..') % (ctx.env.SWIFT, ctx.env.SWIFT_FLAGS, module,
+                              bridge, header, tgt, src)
+        return task.exec_command(cmd)
+
+    if ctx.dependency_satisfied('cocoa') and ctx.env.MACOS_SDK:
+        # on macOS we explicitly need to set the SDK path, otherwise it can lead to
+        # linking warnings or errors
+        ctx.env.append_value('LINKFLAGS', [
+            '-isysroot', ctx.env.MACOS_SDK
+        ])
+
+    if ctx.dependency_satisfied('macos-cocoa-cb'):
+        swift_source = [
+            ( "video/out/cocoa_cb_common.swift" ),
+            ( "video/out/cocoa-cb/window.swift" ),
+            ( "video/out/cocoa-cb/events_view.swift" ),
+            ( "video/out/cocoa-cb/video_layer.swift" ),
+            ( "osdep/macOS_mpv_helper.swift" )
+        ]
+
+        ctx(
+            rule   = swift,
+            source = ctx.filtered_sources(swift_source),
+            target = ('osdep/macOS_swift.o '
+                      'osdep/macOS_swift.h '
+                      'osdep/macOS_swift.swiftmodule'),
+            before = 'c',
+        )
+
+        ctx.env.append_value('LINKFLAGS', [
+            '-Xlinker', '-add_ast_path',
+            '-Xlinker', '%s' % ctx.path.find_resource("osdep/macOS_swift.swiftmodule")
+        ])
+
     if ctx.dependency_satisfied('cplayer'):
         main_fn_c = ctx.pick_first_matching_dep([
             ( "osdep/main-fn-cocoa.c",               "cocoa" ),
@@ -204,7 +247,6 @@ def build(ctx):
         ( "audio/out/ao_pcm.c" ),
         ( "audio/out/ao_pulse.c",                "pulse" ),
         ( "audio/out/ao_rsound.c",               "rsound" ),
-        ( "audio/out/ao_sdl.c",                  "sdl1" ),
         ( "audio/out/ao_sdl.c",                  "sdl2" ),
         ( "audio/out/ao_sndio.c",                "sndio" ),
         ( "audio/out/ao_wasapi.c",               "wasapi" ),
@@ -552,6 +594,7 @@ def build(ctx):
             target       = "mpv",
             source       = main_fn_c,
             use          = ctx.dependencies_use() + ['objects'],
+            add_object   = "osdep/macOS_swift.o",
             includes     = _all_includes(ctx),
             features     = "c cprogram" + (" syms" if syms else ""),
             export_symbols_def = "libmpv/mpv.def", # for syms=True
@@ -608,6 +651,7 @@ def build(ctx):
                 "target": "mpv",
                 "source":   ctx.filtered_sources(sources),
                 "use":      ctx.dependencies_use(),
+                "add_object": "osdep/macOS_swift.o",
                 "includes": [ctx.bldnode.abspath(), ctx.srcnode.abspath()] + \
                              ctx.dependencies_includes(),
                 "features": features,

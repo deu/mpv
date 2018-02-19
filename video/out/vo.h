@@ -73,6 +73,11 @@ enum mp_voctrl {
     // be updated and redrawn. Optional; emulated if not available.
     VOCTRL_REDRAW_FRAME,
 
+    // Only used internally in vo_opengl_cb
+    VOCTRL_PREINIT,
+    VOCTRL_UNINIT,
+    VOCTRL_RECONFIG,
+
     VOCTRL_FULLSCREEN,
     VOCTRL_ONTOP,
     VOCTRL_BORDER,
@@ -102,7 +107,12 @@ enum mp_voctrl {
     VOCTRL_GET_DISPLAY_NAMES,
 
     // Retrieve window contents. (Normal screenshots use vo_get_current_frame().)
+    // Deprecated for VOCTRL_SCREENSHOT with corresponding flags.
     VOCTRL_SCREENSHOT_WIN,              // struct mp_image**
+
+    // A normal screenshot - VOs can react to this if vo_get_current_frame() is
+    // not sufficient.
+    VOCTRL_SCREENSHOT,                  // struct voctrl_screenshot*
 
     VOCTRL_UPDATE_RENDER_OPTS,
 
@@ -170,13 +180,18 @@ struct voctrl_performance_data {
     struct mp_frame_perf fresh, redraw;
 };
 
+struct voctrl_screenshot {
+    bool scaled, subs, osd, high_bit_depth;
+    struct mp_image *res;
+};
+
 enum {
     // VO does handle mp_image_params.rotate in 90 degree steps
     VO_CAP_ROTATE90     = 1 << 0,
     // VO does framedrop itself (vo_vdpau). Untimed/encoding VOs never drop.
     VO_CAP_FRAMEDROP    = 1 << 1,
-    // VO does not support redraws (vo_mediacodec_embed).
-    VO_CAP_NOREDRAW     = 1 << 2,
+    // VO does not allow frames to be retained (vo_mediacodec_embed).
+    VO_CAP_NORETAIN     = 1 << 2,
 };
 
 #define VO_MAX_REQ_FRAMES 10
@@ -447,6 +462,7 @@ double vo_get_estimated_vsync_jitter(struct vo *vo);
 double vo_get_display_fps(struct vo *vo);
 double vo_get_delay(struct vo *vo);
 void vo_discard_timing_info(struct vo *vo);
+struct vo_frame *vo_get_current_vo_frame(struct vo *vo);
 struct mp_image *vo_get_image(struct vo *vo, int imgfmt, int w, int h,
                               int stride_align);
 

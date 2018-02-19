@@ -283,6 +283,8 @@ static void VS_CC vs_frame_done(void *userData, const VSFrameRef *f, int n,
     struct mp_image *res = NULL;
     if (f) {
         struct mp_image img = map_vs_frame(p, f, false);
+        struct mp_image dummy = {.params = p->fmt_in};
+        mp_image_copy_attributes(&img, &dummy);
         img.pkt_duration = -1;
         const VSMap *map = p->vsapi->getFramePropsRO(f);
         if (map) {
@@ -325,7 +327,7 @@ static void vf_vapoursynth_process(struct mp_filter *f)
     }
 
     // Read input and pass it to the input queue VS reads.
-    if (p->num_buffered < MP_TALLOC_AVAIL(p->buffered) && !p->eof) {
+    while (p->num_buffered < MP_TALLOC_AVAIL(p->buffered) && !p->eof) {
         // Note: this requests new input frames even if no output was ever
         // requested. Normally this is not how mp_filter works, but since VS
         // works asynchronously, it's probably ok.
@@ -369,6 +371,7 @@ static void vf_vapoursynth_process(struct mp_filter *f)
                     mp_frame_unref(&frame);
                     return;
                 }
+                pthread_mutex_lock(&p->lock);
             }
             if (p->out_pts == MP_NOPTS_VALUE)
                 p->out_pts = mpi->pts;
@@ -377,7 +380,10 @@ static void vf_vapoursynth_process(struct mp_filter *f)
             pthread_cond_broadcast(&p->wakeup);
         } else if (frame.type != MP_FRAME_NONE) {
             MP_ERR(p, "discarding unknown frame type\n");
+            mp_frame_unref(&frame);
             goto done;
+        } else {
+            break; // no new data available
         }
     }
 
@@ -602,7 +608,6 @@ static void destroy_vs(struct priv *p)
     for (int n = 0; n < p->num_buffered; n++)
         talloc_free(p->buffered[n]);
     p->num_buffered = 0;
-    p->out_pts = MP_NOPTS_VALUE;
     p->out_frameno = p->in_frameno = 0;
     p->requested_frameno = 0;
     p->failed = false;
@@ -626,6 +631,7 @@ static int reinit_vs(struct priv *p)
     }
 
     p->initializing = true;
+    p->out_pts = MP_NOPTS_VALUE;
 
     if (p->drv->load_core(p) < 0 || !p->vsapi || !p->vscore) {
         MP_FATAL(p, "Could not get vapoursynth API handle.\n");
