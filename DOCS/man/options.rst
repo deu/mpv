@@ -4864,6 +4864,30 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     OS X only.
 
+``--macos-title-bar-style=<dark|ultradark|light|mediumlight|auto>``
+    Sets the styling of the title bar (default: dark).
+    OS X and cocoa-cb only
+
+    :dark:        Dark title bar with vibrancy, a subtle blurring effect that
+                  dynamically blends the background (Video) into the title bar.
+    :ultradark:   Darker title bar with vibrancy (like QuickTime Player).
+    :light:       Bright title bar with vibrancy.
+    :mediumlight: Less bright title bar with vibrancy.
+    :auto:        Detects the system settings and sets the title bar styling
+                  appropriately, either ultradark or mediumlight.
+
+``--macos-fs-animation-duration=<default|0-1000>``
+    Sets the fullscreen resize animation duration in ms (default: default).
+    The default value is slightly less than the system's animation duration
+    (500ms) to prevent some problems when the end of an async animation happens
+    at the same time as the end of the system wide fullscreen animation. Setting
+    anything higher than 500ms will only prematurely cancel the resize animation
+    after the system wide animation ended. The upper limit is still set at
+    1000ms since it's possible that Apple or the user changes the system
+    defaults. Anything higher than 1000ms though seems too long and shouldn't be
+    set anyway.
+    OS X and cocoa-cb only
+
 ``--android-surface-size=<WxH>``
     Set dimensions of the rendering surface used by the Android gpu context.
     Needs to be set by the embedding application if the dimensions change during
@@ -5066,6 +5090,39 @@ The following video options are currently all specific to ``--vo=gpu`` and
         The user should independently guarantee this before using these signal
         formats for display.
 
+``--target-peak=<nits>``
+    Specifies the measured peak brightness of the output display, in cd/m^2
+    (AKA nits). The interpretation of this brightness depends on the configured
+    ``--target-trc``. In all cases, it imposes a limit on the signal values
+    that will be sent to the display. If the source exceeds this brightness
+    level, a tone mapping filter will be inserted. For HLG, it has the
+    additional effect of parametrizing the inverse OOTF, in order to get
+    colorimetrically consistent results with the mastering display. For SDR, or
+    when using an ICC (profile (``--icc-profile``), setting this to a value
+    above 100 essentially causes the display to be treated as if it were an HDR
+    display in disguise. (See the note below)
+
+    By default, the chosen peak defaults to an appropriate value based on the
+    TRC in use. For SDR curves, it defaults to 100. For HDR curves, it
+    defaults to 100 * the transfer function's nominal peak.
+
+    .. note::
+
+        When using an SDR transfer function, this is normally not needed, and
+        setting it may lead to very unexpected results. The one time it *is*
+        useful is if you want to calibrate a HDR display using traditional
+        transfer functions and calibration equipment. In such cases, you can
+        set your HDR display to a high brightness such as 800 cd/m^2, and then
+        calibrate it to a standard curve like gamma2.8. Setting this value to
+        800 would then instruct mpv to essentially treat it as an HDR display
+        with the given peak. This may be a good alternative in environments
+        where PQ or HLG input to the display is not possible, and makes it
+        possible to use HDR displays with mpv regardless of operating system
+        support for HDMI HDR metadata.
+
+        In such a configuration, we highly recommend setting ``--tone-mapping``
+        to ``mobius`` or even ``clip``.
+
 ``--tone-mapping=<value>``
     Specifies the algorithm used for tone-mapping images onto the target
     display. This is relevant for both HDR->SDR conversion as well as gamut
@@ -5175,6 +5232,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     NOTE: On Windows, the default profile must be an ICC profile. WCS profiles
     are not supported.
+
+    Applications using libmpv with the render API need to provide the ICC
+    profile via ``MPV_RENDER_PARAM_ICC_PROFILE``.
 
 ``--icc-cache-dir=<dirname>``
     Store and load the 3D LUTs created from the ICC profile in this directory.

@@ -31,6 +31,11 @@ class VideoLayer: CAOpenGLLayer {
     var neededFlips: Int = 0
     var cglContext: CGLContextObj? = nil
 
+    enum Draw: Int { case normal = 1, atomic, atomicEnd }
+    var draw: Draw = .normal
+    let drawLock = NSLock()
+    var surfaceSize: NSSize?
+
     var canDrawOffScreen: Bool = false
     var lastThread: Thread? = nil
 
@@ -42,18 +47,12 @@ class VideoLayer: CAOpenGLLayer {
         }
     }
 
-    let surfaceLock = NSLock()
-    var surfaceSize: NSSize?
-
     var inLiveResize: Bool = false {
         didSet {
             if inLiveResize == false {
                 isAsynchronous = false
-                display()
+                neededFlips += 1
             } else {
-                surfaceLock.lock()
-                updateSurfaceSize()
-                surfaceLock.unlock()
                 isAsynchronous = true
             }
         }
@@ -101,14 +100,23 @@ class VideoLayer: CAOpenGLLayer {
     }
 
     func draw(_ ctx: CGLContextObj) {
-        surfaceLock.lock()
-        if inLiveResize == false {
-            updateSurfaceSize()
+        drawLock.lock()
+        updateSurfaceSize()
+
+        let aspectRatioDiff = fabs( (surfaceSize!.width/surfaceSize!.height) -
+                                    (bounds.size.width/bounds.size.height) )
+
+        if aspectRatioDiff <= 0.005 && draw.rawValue >= Draw.atomic.rawValue {
+             if draw == .atomic {
+                draw = .atomicEnd
+             } else {
+                atomicDrawingEnd()
+             }
         }
 
         mpv.drawGLCB(surfaceSize!)
-        surfaceLock.unlock()
         CGLFlushDrawable(ctx)
+        drawLock.unlock()
 
         if needsICCUpdate {
             needsICCUpdate = false
@@ -117,10 +125,30 @@ class VideoLayer: CAOpenGLLayer {
     }
 
     func updateSurfaceSize() {
-        surfaceSize = bounds.size
-        surfaceSize!.width *= contentsScale
-        surfaceSize!.height *= contentsScale
+        var dims: [GLint] = [0, 0, 0, 0]
+        glGetIntegerv(GLenum(GL_VIEWPORT), &dims)
+        surfaceSize = NSMakeSize(CGFloat(dims[2]), CGFloat(dims[3]))
+
+        if NSEqualSizes(surfaceSize!, NSZeroSize) {
+            surfaceSize = bounds.size
+            surfaceSize!.width *= contentsScale
+            surfaceSize!.height *= contentsScale
+        }
     }
+
+    func atomicDrawingStart() {
+        if draw == .normal && hasVideo {
+            NSDisableScreenUpdates()
+            draw = .atomic
+        }
+    }
+
+    func atomicDrawingEnd() {
+        if draw.rawValue >= Draw.atomic.rawValue {
+            NSEnableScreenUpdates()
+            draw = .normal
+        }
+     }
 
     override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj {
         let glVersions: [CGLOpenGLProfile] = [
@@ -179,9 +207,7 @@ class VideoLayer: CAOpenGLLayer {
 
     override func display() {
         super.display()
-        if !isAsynchronous {
-            CATransaction.flush()
-        }
+        CATransaction.flush()
     }
 
     func setVideo(_ state: Bool) {

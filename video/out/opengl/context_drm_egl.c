@@ -25,13 +25,13 @@
 #include <unistd.h>
 
 #include <gbm.h>
-#include <drm_fourcc.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
 #include "libmpv/opengl_cb.h"
 #include "video/out/drm_common.h"
 #include "common/common.h"
+#include "osdep/timer.h"
 
 #include "egl_helpers.h"
 #include "common.h"
@@ -72,7 +72,7 @@ struct priv {
     struct gbm gbm;
     struct framebuffer *fb;
 
-    uint32_t primary_plane_format;
+    uint32_t gbm_format;
 
     bool active;
     bool waiting_for_flip;
@@ -82,6 +82,44 @@ struct priv {
 
     struct mpv_opengl_cb_drm_params drm_params;
 };
+
+// Not general. Limited to only the formats being used in this module
+static const char *gbm_format_to_string(uint32_t format)
+{
+    switch (format) {
+        case GBM_FORMAT_XRGB8888:
+            return "GBM_FORMAT_XRGB8888";
+        case GBM_FORMAT_ARGB8888:
+            return "GBM_FORMAT_ARGB8888";
+        case GBM_FORMAT_XRGB2101010:
+            return "GBM_FORMAT_XRGB2101010";
+        case GBM_FORMAT_ARGB2101010:
+            return "GBM_FORMAT_ARGB2101010";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static int match_config_to_visual(void *user_data, EGLConfig *configs, int num_configs)
+{
+    struct ra_ctx *ctx = (struct ra_ctx*)user_data;
+    struct priv *p = ctx->priv;
+    const EGLint visual_id = (EGLint)p->gbm_format;
+
+    for (unsigned int i = 0; i < num_configs; ++i) {
+        EGLint id;
+
+        if (!eglGetConfigAttrib(p->egl.display, configs[i], EGL_NATIVE_VISUAL_ID, &id))
+            continue;
+
+        if (visual_id == id)
+            return i;
+    }
+
+    MP_ERR(ctx, "Could not find EGLConfig matching the GBM visual (%s).\n",
+           gbm_format_to_string(p->gbm_format));
+    return -1;
+}
 
 static bool init_egl(struct ra_ctx *ctx)
 {
@@ -97,7 +135,11 @@ static bool init_egl(struct ra_ctx *ctx)
         return false;
     }
     EGLConfig config;
-    if (!mpegl_create_context(ctx, p->egl.display, &p->egl.context, &config))
+    if (!mpegl_create_context_cb(ctx,
+                                 p->egl.display,
+                                 (struct mpegl_cb){match_config_to_visual, ctx},
+                                 &p->egl.context,
+                                 &config))
         return false;
     MP_VERBOSE(ctx, "Initializing EGL surface\n");
     p->egl.surface
@@ -125,7 +167,7 @@ static bool init_gbm(struct ra_ctx *ctx)
         p->gbm.device,
         p->kms->mode.hdisplay,
         p->kms->mode.vdisplay,
-        p->primary_plane_format, // drm_fourcc.h defs should be gbm-compatible
+        p->gbm_format,
         GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
     if (!p->gbm.surface) {
         MP_ERR(ctx->vo, "Failed to create GBM surface.\n");
@@ -159,7 +201,7 @@ static void update_framebuffer_from_bo(struct ra_ctx *ctx, struct gbm_bo *bo)
     uint32_t handle = gbm_bo_get_handle(bo).u32;
 
     int ret = drmModeAddFB2(fb->fd, fb->width, fb->height,
-                            p->primary_plane_format,
+                            p->gbm_format,
                             (uint32_t[4]){handle, 0, 0, 0},
                             (uint32_t[4]){stride, 0, 0, 0},
                             (uint32_t[4]){0, 0, 0, 0},
@@ -216,7 +258,7 @@ static void crtc_release(struct ra_ctx *ctx)
 static void release_vt(void *data)
 {
     struct ra_ctx *ctx = data;
-    MP_VERBOSE(ctx->vo, "Releasing VT");
+    MP_VERBOSE(ctx->vo, "Releasing VT\n");
     crtc_release(ctx);
     if (USE_MASTER) {
         //this function enables support for switching to x, weston etc.
@@ -233,7 +275,7 @@ static void release_vt(void *data)
 static void acquire_vt(void *data)
 {
     struct ra_ctx *ctx = data;
-    MP_VERBOSE(ctx->vo, "Acquiring VT");
+    MP_VERBOSE(ctx->vo, "Acquiring VT\n");
     if (USE_MASTER) {
         struct priv *p = ctx->priv;
         if (drmSetMaster(p->kms->fd)) {
@@ -265,6 +307,9 @@ static void drm_egl_swap_buffers(struct ra_ctx *ctx)
     struct priv *p = ctx->priv;
     struct drm_atomic_context *atomic_ctx = p->kms->atomic_context;
     int ret;
+
+    if (!p->active)
+        return;
 
     eglSwapBuffers(p->egl.display, p->egl.surface);
     p->gbm.next_bo = gbm_surface_lock_front_buffer(p->gbm.surface);
@@ -336,42 +381,43 @@ static void drm_egl_uninit(struct ra_ctx *ctx)
     }
 }
 
-// If primary plane supports ARGB8888 we want to use that, but if it doesn't we
-// fall back on XRGB8888. If the driver does not support atomic there is no
-// particular reason to be using ARGB8888, so we fall back to XRGB8888 (another
-// reason is that we do not have the convenient atomic_ctx and its convenient
-// primary_plane field).
-static bool probe_primary_plane_format(struct ra_ctx *ctx)
+// If primary plane supports ARGB we want to use that, but if it doesn't we fall
+// back on XRGB. If the driver does not support atomic there is no particular
+// reason to be using ARGB (drmprime hwdec will not work without atomic,
+// anyway), so we fall back to XRGB (another reason is that we do not have the
+// convenient atomic_ctx and its convenient primary_plane field).
+static bool probe_gbm_format(struct ra_ctx *ctx, uint32_t argb_format, uint32_t xrgb_format)
 {
     struct priv *p = ctx->priv;
+
     if (!p->kms->atomic_context) {
-        p->primary_plane_format = DRM_FORMAT_XRGB8888;
-        MP_VERBOSE(ctx->vo, "Not using DRM Atomic: Use DRM_FORMAT_XRGB8888 for primary plane.\n");
+        p->gbm_format = xrgb_format;
+        MP_VERBOSE(ctx->vo, "Not using DRM Atomic: Use %s for primary plane.\n",
+                   gbm_format_to_string(xrgb_format));
         return true;
     }
 
     drmModePlane *drmplane =
         drmModeGetPlane(p->kms->fd, p->kms->atomic_context->primary_plane->id);
-    bool have_argb8888 = false;
-    bool have_xrgb8888 = false;
+    bool have_argb = false;
+    bool have_xrgb = false;
     bool result = false;
     for (unsigned int i = 0; i < drmplane->count_formats; ++i) {
-        if (drmplane->formats[i] == DRM_FORMAT_ARGB8888) {
-            have_argb8888 = true;
-        } else if (drmplane->formats[i] == DRM_FORMAT_XRGB8888) {
-            have_xrgb8888 = true;
+        if (drmplane->formats[i] == argb_format) {
+            have_argb = true;
+        } else if (drmplane->formats[i] == xrgb_format) {
+            have_xrgb = true;
         }
     }
 
-    if (have_argb8888) {
-        p->primary_plane_format = DRM_FORMAT_ARGB8888;
-        MP_VERBOSE(ctx->vo, "DRM_FORMAT_ARGB8888 supported by primary plane.\n");
+    if (have_argb) {
+        p->gbm_format = argb_format;
+        MP_VERBOSE(ctx->vo, "%s supported by primary plane.\n", gbm_format_to_string(argb_format));
         result = true;
-    } else if (have_xrgb8888) {
-        p->primary_plane_format = DRM_FORMAT_XRGB8888;
-        MP_VERBOSE(ctx->vo,
-                   "DRM_FORMAT_ARGB8888 not supported by primary plane: "
-                   "Falling back to DRM_FORMAT_XRGB8888.\n");
+    } else if (have_xrgb) {
+        p->gbm_format = xrgb_format;
+        MP_VERBOSE(ctx->vo, "%s not supported by primary plane: Falling back to %s.\n",
+                   gbm_format_to_string(argb_format), gbm_format_to_string(xrgb_format));
         result = true;
     }
 
@@ -406,8 +452,19 @@ static bool drm_egl_init(struct ra_ctx *ctx)
         return false;
     }
 
-    if (!probe_primary_plane_format(ctx)) {
-        MP_ERR(ctx->vo, "No suitable format found on DRM primary plane.\n");
+    uint32_t argb_format;
+    uint32_t xrgb_format;
+    if (DRM_OPTS_FORMAT_XRGB2101010 == ctx->vo->opts->drm_opts->drm_format) {
+        argb_format = GBM_FORMAT_ARGB2101010;
+        xrgb_format = GBM_FORMAT_XRGB2101010;
+    } else {
+        argb_format = GBM_FORMAT_ARGB8888;
+        xrgb_format = GBM_FORMAT_XRGB8888;
+    }
+
+    if (!probe_gbm_format(ctx, argb_format, xrgb_format)) {
+        MP_ERR(ctx->vo, "No suitable format found on DRM primary plane (tried: %s and %s).\n",
+               gbm_format_to_string(argb_format), gbm_format_to_string(xrgb_format));
         return false;
     }
 
@@ -491,6 +548,25 @@ static int drm_egl_control(struct ra_ctx *ctx, int *events, int request,
     return VO_NOTIMPL;
 }
 
+static void wait_events(struct ra_ctx *ctx, int64_t until_time_us)
+{
+    struct priv *p = ctx->priv;
+    if (p->vt_switcher_active) {
+        int64_t wait_us = until_time_us - mp_time_us();
+        int timeout_ms = MPCLAMP((wait_us + 500) / 1000, 0, 10000);
+        vt_switcher_poll(&p->vt_switcher, timeout_ms);
+    } else {
+        vo_wait_default(ctx->vo, until_time_us);
+    }
+}
+
+static void wakeup(struct ra_ctx *ctx)
+{
+    struct priv *p = ctx->priv;
+    if (p->vt_switcher_active)
+        vt_switcher_interrupt_poll(&p->vt_switcher);
+}
+
 const struct ra_ctx_fns ra_ctx_drm_egl = {
     .type           = "opengl",
     .name           = "drm",
@@ -498,4 +574,6 @@ const struct ra_ctx_fns ra_ctx_drm_egl = {
     .control        = drm_egl_control,
     .init           = drm_egl_init,
     .uninit         = drm_egl_uninit,
+    .wait_events    = wait_events,
+    .wakeup         = wakeup,
 };

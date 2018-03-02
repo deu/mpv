@@ -106,7 +106,7 @@ struct gl_video_opts {
     int gamma_auto;
     int target_prim;
     int target_trc;
-    int target_brightness;
+    int target_peak;
     int tone_mapping;
     int compute_hdr_peak;
     float tone_mapping_param;
@@ -160,7 +160,6 @@ void gl_video_uninit(struct gl_video *p);
 void gl_video_set_osd_source(struct gl_video *p, struct osd_state *osd);
 bool gl_video_check_format(struct gl_video *p, int mp_format);
 void gl_video_config(struct gl_video *p, struct mp_image_params *params);
-void gl_video_set_output_depth(struct gl_video *p, int r, int g, int b);
 void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                            struct ra_fbo fbo, int flags);
 void gl_video_resize(struct gl_video *p,

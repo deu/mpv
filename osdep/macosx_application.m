@@ -23,6 +23,7 @@
 #include "common/msg.h"
 #include "input/input.h"
 #include "player/client.h"
+#include "options/m_config.h"
 
 #import "osdep/macosx_application_objc.h"
 #include "osdep/macosx_compat.h"
@@ -38,6 +39,28 @@
 #endif
 
 #define MPV_PROTOCOL @"mpv://"
+
+struct macos_opts {
+    int macos_title_bar_style;
+    int macos_fs_animation_duration;
+};
+
+#define OPT_BASE_STRUCT struct macos_opts
+const struct m_sub_options macos_conf = {
+    .opts = (const struct m_option[]) {
+        OPT_CHOICE("macos-title-bar-style", macos_title_bar_style, 0,
+                   ({"dark", 0}, {"ultradark", 1}, {"light", 2},
+                    {"mediumlight", 3}, {"auto", 4})),
+        OPT_CHOICE_OR_INT("macos-fs-animation-duration",
+                          macos_fs_animation_duration, 0, 0, 1000,
+                          ({"default", -1})),
+        {0}
+    },
+    .size = sizeof(struct macos_opts),
+    .defaults = &(const struct macos_opts){
+        .macos_fs_animation_duration = -1,
+    },
+};
 
 // Whether the NSApplication singleton was created. If this is false, we are
 // running in libmpv mode, and cocoa_main() was never called.

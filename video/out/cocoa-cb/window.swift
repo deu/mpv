@@ -49,6 +49,21 @@ class Window: NSWindow, NSWindowDelegate {
         }
     }
 
+    var border: Bool = true {
+        didSet { if !border { hideTitleBar() } }
+    }
+
+    var titleBarEffect: NSVisualEffectView?
+    var titleBar: NSView {
+        get { return (standardWindowButton(.closeButton)?.superview)! }
+    }
+    var titleBarHeight: CGFloat {
+        get { return NSWindow.frameRect(forContentRect: CGRect.zero, styleMask: .titled).size.height }
+    }
+    var titleButtons: [NSButton] {
+        get { return ([.closeButton, .miniaturizeButton, .zoomButton] as [NSWindowButton]).flatMap { standardWindowButton($0) } }
+    }
+
     override var canBecomeKey: Bool { return true }
     override var canBecomeMain: Bool { return true }
 
@@ -93,6 +108,94 @@ class Window: NSWindow, NSWindowDelegate {
             app.menuBar.register(#selector(performMiniaturize(_:)), for: MPM_MINIMIZE)
             app.menuBar.register(#selector(performZoom(_:)), for: MPM_ZOOM)
         }
+    }
+
+    func initTitleBar() {
+        var f = contentView!.bounds
+        f.origin.y = f.size.height - titleBarHeight
+        f.size.height = titleBarHeight
+
+        styleMask.insert(.fullSizeContentView)
+        titleBar.alphaValue = 0
+        titlebarAppearsTransparent = true
+        titleBarEffect = NSVisualEffectView(frame: f)
+        titleBarEffect!.alphaValue = 0
+        titleBarEffect!.blendingMode = .withinWindow
+        titleBarEffect!.autoresizingMask = [.viewWidthSizable, .viewMinYMargin]
+
+        setTitleBarStyle(mpv.getStringProperty("macos-title-bar-style") ?? "dark")
+        contentView!.addSubview(titleBarEffect!, positioned: .above, relativeTo: nil)
+
+        border = mpv.getBoolProperty("border")
+    }
+
+    func setTitleBarStyle(_ style: String) {
+        var effect = style
+        if effect == "auto" {
+            let systemStyle = UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
+            effect = systemStyle == nil ? "mediumlight" : "ultradark"
+        }
+
+        switch effect {
+        case "mediumlight":
+            appearance = NSAppearance(named: NSAppearanceNameVibrantLight)
+            titleBarEffect!.material = .titlebar
+            titleBarEffect!.state = .followsWindowActiveState
+        case "light":
+            appearance = NSAppearance(named: NSAppearanceNameVibrantLight)
+            titleBarEffect!.material = .light
+            titleBarEffect!.state = .active
+        case "ultradark":
+            appearance = NSAppearance(named: NSAppearanceNameVibrantDark)
+            titleBarEffect!.material = .titlebar
+            titleBarEffect!.state = .followsWindowActiveState
+        case "dark": fallthrough
+        default:
+            appearance = NSAppearance(named: NSAppearanceNameVibrantDark)
+            titleBarEffect!.material = .dark
+            titleBarEffect!.state = .active
+        }
+    }
+
+    func showTitleBar() {
+        if !border && !isInFullscreen { return }
+        let loc = cocoaCB.view.convert(mouseLocationOutsideOfEventStream, from: nil)
+
+        titleButtons.forEach { $0.isHidden = false }
+        NSAnimationContext.runAnimationGroup({ (context) -> Void in
+            context.duration = 0.20
+            titleBar.animator().alphaValue = 1
+            if !isInFullscreen && !isAnimating {
+                titleBarEffect!.animator().alphaValue = 1
+            }
+        }, completionHandler: nil )
+
+        if loc.y > titleBarHeight {
+            hideTitleBarDelayed()
+        } else {
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(hideTitleBar), object: nil)
+        }
+    }
+
+    func hideTitleBar() {
+        if isInFullscreen && !isAnimating {
+            titleBarEffect!.alphaValue = 0
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ (context) -> Void in
+            context.duration = 0.20
+            titleBar.animator().alphaValue = 0
+            titleBarEffect!.animator().alphaValue = 0
+        }, completionHandler: {
+            self.titleButtons.forEach { $0.isHidden = true }
+        })
+    }
+
+    func hideTitleBarDelayed() {
+        NSObject.cancelPreviousPerformRequests(withTarget: self,
+                                                 selector: #selector(hideTitleBar),
+                                                   object: nil)
+        perform(#selector(hideTitleBar), with: nil, afterDelay: 0.5)
     }
 
     override func toggleFullScreen(_ sender: Any?) {
@@ -143,13 +246,13 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     func window(_ window: NSWindow, startCustomAnimationToEnterFullScreenWithDuration duration: TimeInterval) {
-        var newFrame = targetScreen!.frame
         let cRect = contentRect(forFrameRect: frame)
-        newFrame.size.height = newFrame.size.height - (frame.size.height - cRect.size.height)
-        let intermediateFrame = aspectFit(rect: cRect, in: newFrame)
+        var intermediateFrame = aspectFit(rect: cRect, in: targetScreen!.frame)
+        intermediateFrame = frameRect(forContentRect: intermediateFrame)
+        hideTitleBar()
 
         NSAnimationContext.runAnimationGroup({ (context) -> Void in
-            context.duration = duration-0.1
+            context.duration = getFsAnimationDuration(duration - 0.05)
             window.animator().setFrame(intermediateFrame, display: true)
         }, completionHandler: { })
     }
@@ -157,11 +260,11 @@ class Window: NSWindow, NSWindowDelegate {
     func window(_ window: NSWindow, startCustomAnimationToExitFullScreenWithDuration duration: TimeInterval) {
         let newFrame = calculateWindowPosition(for: targetScreen!, withoutBounds: targetScreen == screen)
         let intermediateFrame = aspectFit(rect: newFrame, in: screen!.frame)
+        hideTitleBar()
         setFrame(intermediateFrame, display: true)
-        cocoaCB.layer.display()
 
         NSAnimationContext.runAnimationGroup({ (context) -> Void in
-            context.duration = duration-0.1
+            context.duration = getFsAnimationDuration(duration - 0.05)
             window.animator().setFrame(newFrame, display: true)
         }, completionHandler: { })
     }
@@ -170,13 +273,14 @@ class Window: NSWindow, NSWindowDelegate {
         isInFullscreen = true
         cocoaCB.flagEvents(VO_EVENT_FULLSCREEN_STATE)
         cocoaCB.updateCusorVisibility()
-        endAnimation()
+        endAnimation(frame)
+        showTitleBar()
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
         isInFullscreen = false
         cocoaCB.flagEvents(VO_EVENT_FULLSCREEN_STATE)
-        endAnimation()
+        endAnimation(calculateWindowPosition(for: targetScreen!, withoutBounds: targetScreen == screen))
     }
 
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
@@ -191,7 +295,14 @@ class Window: NSWindow, NSWindowDelegate {
         endAnimation()
     }
 
-    func endAnimation() {
+    func endAnimation(_ newFrame: NSRect = NSZeroRect) {
+        if !NSEqualRects(newFrame, NSZeroRect) {
+            NSAnimationContext.runAnimationGroup({ (context) -> Void in
+                context.duration = 0.01
+                self.animator().setFrame(newFrame, display: true)
+            }, completionHandler: nil )
+        }
+
         isAnimating = false
         cocoaCB.isShuttingDown = false
     }
@@ -217,15 +328,12 @@ class Window: NSWindow, NSWindowDelegate {
         cocoaCB.layer.neededFlips += 1
     }
 
-    func setBorder(_ state: Bool) {
-        if styleMask.contains(.titled) != state {
-            if state {
-                styleMask.remove(.borderless)
-                styleMask.insert(.titled)
-            } else {
-                styleMask.remove(.titled)
-                styleMask.insert(.borderless)
-            }
+    func getFsAnimationDuration(_ def: Double) -> Double{
+        let duration = mpv.getStringProperty("macos-fs-animation-duration") ?? "default"
+        if duration == "default" {
+            return def
+        } else {
+            return Double(duration)!/1000
         }
     }
 
@@ -275,7 +383,25 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
-        super.setFrame(frameRect, display: flag)
+        let newFrame = !isAnimating && isInFullscreen ? targetScreen!.frame :
+                                                        frameRect
+        let aspectRatioDiff = fabs( (newFrame.width/newFrame.height) -
+                                    (frame.width/frame.height) )
+
+        let isNotUserLiveResize = isAnimating || !(!isAnimating && inLiveResize)
+        if aspectRatioDiff > 0.005 && isNotUserLiveResize {
+            cocoaCB.layer.drawLock.lock()
+            cocoaCB.layer.atomicDrawingStart()
+        }
+
+        super.setFrame(newFrame, display: flag)
+        cocoaCB.layer.neededFlips += 1
+
+        if aspectRatioDiff > 0.005 && isNotUserLiveResize {
+            Swift.print("drawUnLock")
+            cocoaCB.layer.drawLock.unlock()
+        }
+
         if keepAspect {
             contentAspectRatio = unfsContentFrame!.size
         }
