@@ -54,15 +54,16 @@ static bool update_format_decision(struct priv *p, int input_fmt)
         return false;
 
     for (int n = 0; n < u->num_fmts; n++) {
-        if (u->fmt_upload_index[n] >= index &&
-            index  < u->fmt_upload_index[n] + u->fmt_upload_num[n])
+        if (index >= u->fmt_upload_index[n] &&
+            index < u->fmt_upload_index[n] + u->fmt_upload_num[n])
         {
             p->last_input_fmt = input_fmt;
             p->last_upload_fmt = u->upload_fmts[index];
             p->last_sw_fmt = u->fmts[n];
-            MP_INFO(u->f, "upload %s -> %s\n",
-                    mp_imgfmt_to_name(p->last_sw_fmt),
-                    mp_imgfmt_to_name(p->last_input_fmt));
+            MP_INFO(u->f, "upload %s -> %s (%s)\n",
+                    mp_imgfmt_to_name(p->last_input_fmt),
+                    mp_imgfmt_to_name(p->last_upload_fmt),
+                    mp_imgfmt_to_name(p->last_sw_fmt));
             return true;
         }
     }

@@ -20,7 +20,8 @@
 #import <IOKit/pwr_mgt/IOPMLib.h>
 
 #include "player/client.h"
-#include "libmpv/opengl_cb.h"
+#include "video/out/libmpv.h"
+#include "libmpv/render_gl.h"
 
 #include "player/core.h"
 #include "input/input.h"
@@ -47,8 +48,3 @@ static int SWIFT_KEY_MOUSE_LEAVE = MP_KEY_MOUSE_LEAVE;
 static int SWIFT_KEY_MOUSE_ENTER = MP_KEY_MOUSE_ENTER;
 static int SWIFT_KEY_STATE_DOWN  = MP_KEY_STATE_DOWN;
 static int SWIFT_KEY_STATE_UP    = MP_KEY_STATE_UP;
-
-// dummy function to override glFlush()
-static void glDummy() {}
-static void *glDummyPtr(void) __attribute__((unused));
-static void *glDummyPtr() { return &glDummy; }

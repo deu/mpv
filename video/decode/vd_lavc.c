@@ -417,7 +417,12 @@ static void select_and_set_hwdec(struct mp_filter *vd)
     bool hwdec_auto_copy = bstr_equals0(opt, "auto-copy");
     bool hwdec_auto = hwdec_auto_all || hwdec_auto_copy;
 
-    if (hwdec_codec_allowed(vd, codec) && hwdec_requested) {
+    if (!hwdec_requested) {
+        MP_VERBOSE(vd, "No hardware decoding requested.\n");
+    } else if (!hwdec_codec_allowed(vd, codec)) {
+        MP_VERBOSE(vd, "Not trying to use hardware decoding: codec %s is not "
+                   "on whitelist.\n", codec);
+    } else {
         struct hwdec_info *hwdecs = NULL;
         int num_hwdecs = 0;
         add_all_hwdec_methods(&hwdecs, &num_hwdecs);
@@ -472,10 +477,9 @@ static void select_and_set_hwdec(struct mp_filter *vd)
         }
 
         talloc_free(hwdecs);
-    } else {
-        MP_VERBOSE(vd, "Not trying to use hardware decoding: codec %s is not "
-                   "on whitelist, or does not support hardware acceleration.\n",
-                   codec);
+
+        if (!ctx->use_hwdec)
+            MP_VERBOSE(vd, "No hardware decoding available for this codec.\n");
     }
 
     if (ctx->use_hwdec) {
@@ -1124,7 +1128,7 @@ static int control(struct mp_filter *vd, enum dec_ctrl cmd, void *arg)
         AVCodecContext *avctx = ctx->avctx;
         if (!avctx)
             break;
-        if (ctx->use_hwdec && strcmp(ctx->hwdec.method_name, "mmal"))
+        if (ctx->use_hwdec && strcmp(ctx->hwdec.method_name, "mmal") == 0)
             break; // MMAL has arbitrary buffering, thus unknown
         *(int *)arg = avctx->has_b_frames;
         return CONTROL_TRUE;

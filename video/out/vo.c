@@ -147,6 +147,7 @@ struct vo_internal {
     int64_t num_successive_vsyncs;
 
     int64_t flip_queue_offset; // queue flip events at most this much in advance
+    int64_t timing_offset;     // same (but from options; not VO configured)
 
     int64_t delayed_count;
     int64_t drop_count;
@@ -162,7 +163,7 @@ struct vo_internal {
     uint64_t current_frame_id;
 
     double display_fps;
-    int opt_framedrop;
+    double reported_display_fps;
 };
 
 extern const struct m_sub_options gl_video_conf;
@@ -212,18 +213,29 @@ static void dispatch_wakeup_cb(void *ptr)
     vo_wakeup(vo);
 }
 
+// Initialize or update options from vo->opts
+static void read_opts(struct vo *vo)
+{
+    struct vo_internal *in = vo->in;
+
+    pthread_mutex_lock(&in->lock);
+    in->timing_offset = (uint64_t)(vo->opts->timing_offset * 1e6);
+    pthread_mutex_unlock(&in->lock);
+}
+
 static void update_opts(void *p)
 {
     struct vo *vo = p;
 
     if (m_config_cache_update(vo->opts_cache)) {
+        read_opts(vo);
+
         // "Legacy" update of video position related options.
         if (vo->driver->control)
             vo->driver->control(vo, VOCTRL_SET_PANSCAN, NULL);
     }
 
-    if (vo->gl_opts_cache && m_config_cache_update(vo->gl_opts_cache))
-    {
+    if (vo->gl_opts_cache && m_config_cache_update(vo->gl_opts_cache)) {
         // "Legacy" update of video GL renderer related options.
         if (vo->driver->control)
             vo->driver->control(vo, VOCTRL_UPDATE_RENDER_OPTS, NULL);
@@ -518,30 +530,30 @@ static void update_display_fps(struct vo *vo)
 
         pthread_mutex_unlock(&in->lock);
 
-        mp_read_option_raw(vo->global, "framedrop", &m_option_type_choice,
-                           &in->opt_framedrop);
-
-        double display_fps;
-        mp_read_option_raw(vo->global, "display-fps", &m_option_type_double,
-                           &display_fps);
-
-        if (display_fps <= 0)
-            vo->driver->control(vo, VOCTRL_GET_DISPLAY_FPS, &display_fps);
+        double fps = 0;
+        vo->driver->control(vo, VOCTRL_GET_DISPLAY_FPS, &fps);
 
         pthread_mutex_lock(&in->lock);
 
-        if (in->display_fps != display_fps) {
-            in->display_fps = display_fps;
-            MP_VERBOSE(vo, "Assuming %f FPS for display sync.\n", display_fps);
-
-            // make sure to update the player
-            in->queued_events |= VO_EVENT_WIN_STATE;
-            wakeup_core(vo);
-        }
-
-        in->nominal_vsync_interval = in->display_fps > 0 ? 1e6 / in->display_fps : 0;
-        in->vsync_interval = MPMAX(in->nominal_vsync_interval, 1);
+        in->reported_display_fps = fps;
     }
+
+    double display_fps = vo->opts->override_display_fps;
+    if (display_fps <= 0)
+        display_fps = in->reported_display_fps;
+
+    if (in->display_fps != display_fps) {
+        in->nominal_vsync_interval =  display_fps > 0 ? 1e6 / display_fps : 0;
+        in->vsync_interval = MPMAX(in->nominal_vsync_interval, 1);
+        in->display_fps = display_fps;
+
+        MP_VERBOSE(vo, "Assuming %f FPS for display sync.\n", display_fps);
+
+        // make sure to update the player
+        in->queued_events |= VO_EVENT_WIN_STATE;
+        wakeup_core(vo);
+    }
+
     pthread_mutex_unlock(&in->lock);
 }
 
@@ -729,8 +741,9 @@ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts)
     if (r && next_pts >= 0) {
         // Don't show the frame too early - it would basically freeze the
         // display by disallowing OSD redrawing or VO interaction.
-        // Actually render the frame at earliest 50ms before target time.
-        next_pts -= (uint64_t)(0.050 * 1e6);
+        // Actually render the frame at earliest the given offset before target
+        // time.
+        next_pts -= in->timing_offset;
         next_pts -= in->flip_queue_offset;
         int64_t now = mp_time_us();
         if (next_pts > now)
@@ -834,7 +847,7 @@ bool vo_render_frame_external(struct vo *vo)
 
     in->dropped_frame &= !frame->display_synced;
     in->dropped_frame &= !(vo->driver->caps & VO_CAP_FRAMEDROP);
-    in->dropped_frame &= (in->opt_framedrop & 1);
+    in->dropped_frame &= frame->can_drop;
     // Even if we're hopelessly behind, rather degrade to 10 FPS playback,
     // instead of just freezing the display forever.
     in->dropped_frame &= now - in->prev_vsync < 100 * 1000;
@@ -1004,6 +1017,7 @@ static void *vo_thread(void *ptr)
     if (r < 0)
         return NULL;
 
+    read_opts(vo);
     update_display_fps(vo);
     vo_event(vo, VO_EVENT_WIN_STATE);
 

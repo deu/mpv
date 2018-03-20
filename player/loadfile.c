@@ -28,6 +28,7 @@
 
 #include "osdep/io.h"
 #include "osdep/terminal.h"
+#include "osdep/threads.h"
 #include "osdep/timer.h"
 
 #include "common/msg.h"
@@ -597,8 +598,8 @@ bool mp_remove_track(struct MPContext *mpctx, struct track *track)
     return true;
 }
 
-// Add the given file as additional track. Only tracks of type "filter" are
-// included; pass STREAM_TYPE_COUNT to disable filtering.
+// Add the given file as additional track. The filter argument controls how or
+// if tracks are auto-selected at any point.
 int mp_add_external_file(struct MPContext *mpctx, char *filename,
                          enum stream_type filter)
 {
@@ -656,7 +657,7 @@ int mp_add_external_file(struct MPContext *mpctx, char *filename,
         t->title = talloc_strdup(t, mp_basename(disp_filename));
         t->external_filename = talloc_strdup(t, filename);
         t->no_default = sh->type != filter;
-        t->no_auto_select = filter == STREAM_TYPE_COUNT;
+        t->no_auto_select = t->no_default;
         if (first_num < 0 && (filter == STREAM_TYPE_COUNT || sh->type == filter))
             first_num = mpctx->num_tracks - 1;
     }
@@ -851,6 +852,8 @@ static void load_per_file_options(m_config_t *conf,
 static void *open_demux_thread(void *ctx)
 {
     struct MPContext *mpctx = ctx;
+
+    mpthread_set_name("opener");
 
     struct demuxer_params p = {
         .force_format = mpctx->open_format,
@@ -1254,6 +1257,8 @@ static void play_current_file(struct MPContext *mpctx)
 
 reopen_file:
 
+    reset_playback_state(mpctx);
+
     assert(mpctx->demuxer == NULL);
 
     if (process_open_hooks(mpctx, "on_load") < 0)
@@ -1440,7 +1445,6 @@ terminate_playback:
     uninit_demuxer(mpctx);
     if (!opts->gapless_audio && !mpctx->encode_lavc_ctx)
         uninit_audio_out(mpctx);
-    TA_FREEP(&mpctx->filter_root);
 
     mpctx->playback_initialized = false;
 
@@ -1452,6 +1456,7 @@ terminate_playback:
 
     m_config_restore_backups(mpctx->mconfig);
 
+    TA_FREEP(&mpctx->filter_root);
     talloc_free(mpctx->filtered_tags);
     mpctx->filtered_tags = NULL;
 

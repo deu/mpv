@@ -3154,7 +3154,8 @@ done:
         debug_check_gl(p, "after OSD rendering");
     }
 
-    if (gl_sc_error_state(p->sc) || p->broken_frame) {
+    p->broken_frame |= gl_sc_error_state(p->sc);
+    if (p->broken_frame) {
         // Make the screen solid blue to make it visually clear that an
         // error has occurred
         float color[4] = {0.0, 0.05, 0.5, 1.0};
@@ -3179,14 +3180,18 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
     struct mp_osd_res old_osd = p->osd_rect;
 
     if (!args->scaled) {
-        int w = p->real_image_params.w;
-        int h = p->real_image_params.h;
+        int w, h;
+        mp_image_params_get_dsize(&p->image_params, &w, &h);
         if (w < 1 || h < 1)
             return;
 
-        struct mp_rect rc = {0, 0, w, h};
+        if (p->image_params.rotate % 180 == 90)
+            MPSWAP(int, w, h);
+
+        struct mp_rect src = {0, 0, p->image_params.w, p->image_params.h};
+        struct mp_rect dst = {0, 0, w, h};
         struct mp_osd_res osd = {.w = w, .h = h, .display_par = 1.0};
-        gl_video_resize(p, &rc, &rc, &osd);
+        gl_video_resize(p, &src, &dst, &osd);
     }
 
     gl_video_reset_surfaces(p);
@@ -3232,6 +3237,9 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
         .stride = res->stride[0],
     };
     if (!p->ra->fns->tex_download(p->ra, &download_params))
+        goto done;
+
+    if (p->broken_frame)
         goto done;
 
     ok = true;

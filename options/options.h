@@ -50,6 +50,9 @@ typedef struct mp_vo_opts {
 
     char *mmcss_profile;
 
+    double override_display_fps;
+    double timing_offset;
+
     // vo_drm
     struct sws_opts *sws_opts;
     // vo_drm
@@ -221,7 +224,7 @@ typedef struct MPOpts {
     float default_max_pts_correction;
     int autosync;
     int frame_dropping;
-    double frame_drop_fps;
+    int video_latency_hacks;
     int term_osd;
     int term_osd_bar;
     char *term_osd_bar_chars;

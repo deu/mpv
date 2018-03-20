@@ -30,11 +30,10 @@ class VideoLayer: CAOpenGLLayer {
     var hasVideo: Bool = false
     var neededFlips: Int = 0
     var cglContext: CGLContextObj? = nil
+    var surfaceSize: NSSize?
 
     enum Draw: Int { case normal = 1, atomic, atomicEnd }
     var draw: Draw = .normal
-    let drawLock = NSLock()
-    var surfaceSize: NSSize?
 
     var canDrawOffScreen: Bool = false
     var lastThread: Thread? = nil
@@ -49,10 +48,7 @@ class VideoLayer: CAOpenGLLayer {
 
     var inLiveResize: Bool = false {
         didSet {
-            if inLiveResize == false {
-                isAsynchronous = false
-                neededFlips += 1
-            } else {
+            if inLiveResize {
                 isAsynchronous = true
             }
         }
@@ -76,16 +72,19 @@ class VideoLayer: CAOpenGLLayer {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setUpGLCB() {
-        self.mpv.initGLCB()
-        self.mpv.setGLCBUpdateCallback(self.updateCallback, context: self)
-        self.mpv.setGLCBControlCallback(self.cocoaCB.controlCallback, context: self.cocoaCB)
+    func setUpRender() {
+        mpv.initRender()
+        mpv.setRenderUpdateCallback(updateCallback, context: self)
+        mpv.setRenderControlCallback(cocoaCB.controlCallback, context: cocoaCB)
     }
 
     override func canDraw(inCGLContext ctx: CGLContextObj,
                           pixelFormat pf: CGLPixelFormatObj,
                           forLayerTime t: CFTimeInterval,
                           displayTime ts: UnsafePointer<CVTimeStamp>?) -> Bool {
+        if inLiveResize == false {
+            isAsynchronous = false
+        }
         return mpv != nil && cocoaCB.backendState == .init
     }
 
@@ -100,13 +99,7 @@ class VideoLayer: CAOpenGLLayer {
     }
 
     func draw(_ ctx: CGLContextObj) {
-        drawLock.lock()
-        updateSurfaceSize()
-
-        let aspectRatioDiff = fabs( (surfaceSize!.width/surfaceSize!.height) -
-                                    (bounds.size.width/bounds.size.height) )
-
-        if aspectRatioDiff <= 0.005 && draw.rawValue >= Draw.atomic.rawValue {
+        if draw.rawValue >= Draw.atomic.rawValue {
              if draw == .atomic {
                 draw = .atomicEnd
              } else {
@@ -114,9 +107,9 @@ class VideoLayer: CAOpenGLLayer {
              }
         }
 
-        mpv.drawGLCB(surfaceSize!)
+        updateSurfaceSize()
+        mpv.drawRender(surfaceSize!)
         CGLFlushDrawable(ctx)
-        drawLock.unlock()
 
         if needsICCUpdate {
             needsICCUpdate = false
@@ -148,7 +141,7 @@ class VideoLayer: CAOpenGLLayer {
             NSEnableScreenUpdates()
             draw = .normal
         }
-     }
+    }
 
     override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj {
         let glVersions: [CGLOpenGLProfile] = [
@@ -173,7 +166,7 @@ class VideoLayer: CAOpenGLLayer {
 
             for index in stride(from: glAttributes.count-2, through: 4, by: -1) {
                 err = CGLChoosePixelFormat(glAttributes, &pix, &npix)
-                if err == kCGLBadAttribute {
+                if err == kCGLBadAttribute || err == kCGLBadPixelFormat || pix == nil {
                     glAttributes.remove(at: index)
                 } else {
                     break verLoop
@@ -181,8 +174,10 @@ class VideoLayer: CAOpenGLLayer {
             }
         }
 
-        if err != kCGLNoError {
-            fatalError("Couldn't create CGL pixel format: \(CGLErrorString(err)) (\(err))")
+        if err != kCGLNoError || pix == nil {
+            let errS = String(cString: CGLErrorString(err))
+            print("Couldn't create CGL pixel format: \(errS) (\(err.rawValue))")
+            exit(1)
         }
         return pix!
     }
@@ -200,7 +195,7 @@ class VideoLayer: CAOpenGLLayer {
         return ctx
     }
 
-    let updateCallback: mpv_opengl_cb_update_fn = { (ctx) in
+    let updateCallback: mpv_render_update_fn = { (ctx) in
         let layer: VideoLayer = MPVHelper.bridge(ptr: ctx!)
         layer.neededFlips += 1
     }
@@ -218,7 +213,7 @@ class VideoLayer: CAOpenGLLayer {
     }
 
     func reportFlip() {
-        mpv.reportGLCBFlip()
+        mpv.reportRenderFlip()
         videoLock.lock()
         if !isAsynchronous && neededFlips > 0 && hasVideo {
             if !cocoaCB.window.occlusionState.contains(.visible) &&

@@ -57,11 +57,12 @@ class CocoaCB: NSObject {
         layer = VideoLayer(cocoaCB: self)
         view.layer = layer
         view.wantsLayer = true
+        view.layerContentsPlacement = .scaleProportionallyToFit
     }
 
     func setMpvHandle(_ ctx: OpaquePointer) {
         mpv = MPVHelper(ctx)
-        layer.setUpGLCB()
+        layer.setUpRender()
     }
 
     func preinit() {
@@ -71,8 +72,6 @@ class CocoaCB: NSObject {
                 self.updateICCProfile()
             }
             startDisplayLink()
-        } else {
-            layer.setVideo(true)
         }
     }
 
@@ -85,6 +84,7 @@ class CocoaCB: NSObject {
         if backendState == .needsInit {
             initBackend()
         } else {
+            layer.setVideo(true)
             updateWindowSize()
             layer.neededFlips += 1
         }
@@ -113,7 +113,7 @@ class CocoaCB: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         layer.setVideo(true)
 
-        if self.mpv.getBoolProperty("fullscreen") {
+        if mpv.getBoolProperty("fullscreen") {
             DispatchQueue.main.async {
                 self.window.toggleFullScreen(nil)
             }
@@ -127,14 +127,13 @@ class CocoaCB: NSObject {
     }
 
     func updateWindowSize() {
-        if layer.hasVideo {
-            let targetScreen = getTargetScreen(forFullscreen: false) ?? NSScreen.main()
-            let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: mpv.mpctx!.pointee.video_out)
-            if !window.isVisible {
-                window.makeKeyAndOrderFront(nil)
-            }
-            window.updateSize(wr.size)
+        let targetScreen = getTargetScreen(forFullscreen: false) ?? NSScreen.main()
+        let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: mpv.mpctx!.pointee.video_out)
+        if !window.isVisible {
+            window.makeKeyAndOrderFront(nil)
         }
+        layer.atomicDrawingStart()
+        window.updateSize(wr.size)
     }
 
     func setAppIcon() {
@@ -238,9 +237,7 @@ class CocoaCB: NSObject {
     }
 
     func updateICCProfile() {
-        if mpv.getBoolProperty("icc-profile-auto") {
-            mpv.setGLCBICCProfile(window.screen!.colorSpace!)
-        }
+        mpv.setRenderICCProfile(window.screen!.colorSpace!)
         layer.colorspace = window.screen!.colorSpace!.cgColorSpace!
     }
 
@@ -273,7 +270,7 @@ class CocoaCB: NSObject {
             var mean = (values[0] + values[1]) / 2
             if ccb.lastLmu != mean {
                 ccb.lastLmu = mean
-                ccb.mpv.setGLCBLux(ccb.lmuToLux(ccb.lastLmu))
+                ccb.mpv.setRenderLux(ccb.lmuToLux(ccb.lastLmu))
             }
         }
     }
@@ -383,7 +380,7 @@ class CocoaCB: NSObject {
         return ev
     }
 
-    var controlCallback: mpv_opengl_cb_control_fn = { ( ctx, events, request, data ) -> Int32 in
+    var controlCallback: mp_render_cb_control_fn = { ( ctx, events, request, data ) -> Int32 in
         let ccb: CocoaCB = MPVHelper.bridge(ptr: ctx!)
 
         switch mp_voctrl(request) {
@@ -455,6 +452,21 @@ class CocoaCB: NSObject {
         }
     }
 
+    func shutdown(_ destroy: Bool = false) {
+        setCursorVisiblility(true)
+        stopDisplaylink()
+        uninitLightSensor()
+        removeDisplayReconfigureObserver()
+        mpv.deinitRender()
+        mpv.deinitMPV(destroy)
+    }
+
+    func checkShutdown() {
+        if isShuttingDown {
+            shutdown(true)
+        }
+    }
+
     func processEvent(_ event: UnsafePointer<mpv_event>) {
         switch event.pointee.event_id {
         case MPV_EVENT_SHUTDOWN:
@@ -462,12 +474,7 @@ class CocoaCB: NSObject {
                 isShuttingDown = true
                 return
             }
-            setCursorVisiblility(true)
-            stopDisplaylink()
-            uninitLightSensor()
-            removeDisplayReconfigureObserver()
-            mpv.deinitGLCB()
-            mpv.deinitMPV()
+            shutdown()
         case MPV_EVENT_PROPERTY_CHANGE:
             if backendState == .init {
                 handlePropertyChange(event)

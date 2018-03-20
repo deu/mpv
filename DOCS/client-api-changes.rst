@@ -33,6 +33,15 @@ API changes
 ::
 
  --- mpv 0.29.0 ---
+ 1.29   - the behavior of mpv_terminate_destroy() and mpv_detach_destroy()
+          changes subtly (see documentation in the header file). In particular,
+          mpv_detach_destroy() will not leave the player running in all
+          situations anymore (it gets closer to refcounting).
+        - rename mpv_detach_destroy() to mpv_destroy() (the old function will
+          remain valid as deprecated alias)
+        - add mpv_create_weak_client(), which makes use of above changes
+        - MPV_EVENT_SHUTDOWN is now returned exactly once if a mpv_handle
+          should terminate, instead of spamming the event queue with this event
  1.28   - deprecate the render opengl_cb API, and replace it with render.h
           and render_gl.h. The goal is allowing support for APIs other than
           OpenGL. The old API is emulated with the new API.
@@ -46,6 +55,12 @@ API changes
             mpv_opengl_cb_report_flip => mpv_render_context_report_swap
             mpv_opengl_cb_uninit_gl => mpv_render_context_free
           The VO opengl-cb is also renamed to "libmpv".
+        - deprecate the qthelper.hpp header file. This provided some C++ helper
+          utility functions for Qt with use of libmpv. There is no reason to
+          keep this in the mpv git repository, nor to make it part of the libmpv
+          API. If you're using this header, you can safely copy it into your
+          project - it uses only libmpv public API. Alternatively, it could be
+          maintained in a separate repository by interested parties.
  1.27   - make opengl-cb the default VO. This causes a subtle behavior change
           if the API user called mpv_opengl_cb_init_gl(), but does not set
           the "vo" option. Before, it would still have used another VO (like

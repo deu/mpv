@@ -209,6 +209,9 @@ static void mp_image_destructor(void *ptr)
     av_buffer_unref(&mpi->hwctx);
     av_buffer_unref(&mpi->icc_profile);
     av_buffer_unref(&mpi->a53_cc);
+    for (int n = 0; n < mpi->num_ff_side_data; n++)
+        av_buffer_unref(&mpi->ff_side_data[n].buf);
+    talloc_free(mpi->ff_side_data);
 }
 
 int mp_chroma_div_up(int size, int shift)
@@ -297,14 +300,13 @@ void mp_image_unref_data(struct mp_image *img)
     }
 }
 
-static bool ref_buffer(AVBufferRef **dst)
+static void ref_buffer(bool *ok, AVBufferRef **dst)
 {
     if (*dst) {
         *dst = av_buffer_ref(*dst);
         if (!*dst)
-            return false;
+            ok = false;
     }
-    return true;
 }
 
 // Return a new reference to img. The returned reference is owned by the caller,
@@ -321,16 +323,20 @@ struct mp_image *mp_image_new_ref(struct mp_image *img)
     talloc_set_destructor(new, mp_image_destructor);
     *new = *img;
 
-    bool fail = false;
+    bool ok = true;
     for (int p = 0; p < MP_MAX_PLANES; p++)
-        fail |= !ref_buffer(&new->bufs[p]);
+        ref_buffer(&ok, &new->bufs[p]);
 
-    fail |= !ref_buffer(&new->hwctx);
-    fail |= !ref_buffer(&new->icc_profile);
-    fail |= !ref_buffer(&new->a53_cc);
+    ref_buffer(&ok, &new->hwctx);
+    ref_buffer(&ok, &new->icc_profile);
+    ref_buffer(&ok, &new->a53_cc);
 
+    new->ff_side_data = talloc_memdup(NULL, new->ff_side_data,
+                        new->num_ff_side_data * sizeof(new->ff_side_data[0]));
+    for (int n = 0; n < new->num_ff_side_data; n++)
+        ref_buffer(&ok, &new->ff_side_data[n].buf);
 
-    if (!fail)
+    if (ok)
         return new;
 
     // Do this after _all_ bufs were changed; we don't want it to free bufs
@@ -363,6 +369,10 @@ struct mp_image *mp_image_new_dummy_ref(struct mp_image *img)
     for (int p = 0; p < MP_MAX_PLANES; p++)
         new->bufs[p] = NULL;
     new->hwctx = NULL;
+    new->icc_profile = NULL;
+    new->a53_cc = NULL;
+    new->num_ff_side_data = 0;
+    new->ff_side_data = NULL;
     return new;
 }
 
@@ -877,7 +887,7 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
 #if LIBAVUTIL_VERSION_MICRO >= 100
     sd = av_frame_get_side_data(src, AV_FRAME_DATA_ICC_PROFILE);
     if (sd)
-        dst->icc_profile = av_buffer_ref(sd->buf);
+        dst->icc_profile = sd->buf;
 
     // Get the content light metadata if available
     sd = av_frame_get_side_data(src, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
@@ -896,7 +906,16 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
 
     sd = av_frame_get_side_data(src, AV_FRAME_DATA_A53_CC);
     if (sd)
-        dst->a53_cc = av_buffer_ref(sd->buf);
+        dst->a53_cc = sd->buf;
+
+    for (int n = 0; n < src->nb_side_data; n++) {
+        sd = src->side_data[n];
+        struct mp_ff_side_data mpsd = {
+            .type = sd->type,
+            .buf = sd->buf,
+        };
+        MP_TARRAY_APPEND(NULL, dst->ff_side_data, dst->num_ff_side_data, mpsd);
+    }
 #endif
 
     if (dst->hwctx) {
@@ -908,7 +927,12 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
             fns->complete_image_params(dst);
     }
 
-    return mp_image_new_ref(dst);
+    struct mp_image *res = mp_image_new_ref(dst);
+
+    // Allocated, but non-refcounted data.
+    talloc_free(dst->ff_side_data);
+
+    return res;
 }
 
 
@@ -968,7 +992,8 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
 #if LIBAVUTIL_VERSION_MICRO >= 100
     if (src->icc_profile) {
         AVFrameSideData *sd =
-            ffmpeg_garbage(dst, AV_FRAME_DATA_ICC_PROFILE, new_ref->icc_profile);
+            av_frame_new_side_data_from_buf(dst, AV_FRAME_DATA_ICC_PROFILE,
+                                            new_ref->icc_profile);
         if (!sd)
             abort();
         new_ref->icc_profile = NULL;
@@ -980,6 +1005,19 @@ struct AVFrame *mp_image_to_av_frame(struct mp_image *src)
         if (!clm)
             abort();
         clm->MaxCLL = src->params.color.sig_peak * MP_REF_WHITE;
+    }
+
+    // Add back side data, but only for types which are not specially handled
+    // above. Keep in mind that the types above will be out of sync anyway.
+    for (int n = 0; n < new_ref->num_ff_side_data; n++) {
+        struct mp_ff_side_data *mpsd = &new_ref->ff_side_data[n];
+        if (!av_frame_get_side_data(dst, mpsd->type)) {
+            AVFrameSideData *sd = av_frame_new_side_data_from_buf(dst, mpsd->type,
+                                                                  mpsd->buf);
+            if (!sd)
+                abort();
+            mpsd->buf = NULL;
+        }
     }
 #endif
 

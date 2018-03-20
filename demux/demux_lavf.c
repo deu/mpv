@@ -82,7 +82,7 @@ const struct m_sub_options demux_lavf_conf = {
     .opts = (const m_option_t[]) {
         OPT_INTRANGE("demuxer-lavf-probesize", probesize, 0, 32, INT_MAX),
         OPT_CHOICE("demuxer-lavf-probe-info", probeinfo, 0,
-                   ({"no", 0}, {"yes", 1}, {"auto", -1})),
+                   ({"no", 0}, {"yes", 1}, {"auto", -1}, {"nostreams", -2})),
         OPT_STRING("demuxer-lavf-format", format, 0),
         OPT_FLOATRANGE("demuxer-lavf-analyzeduration", analyzeduration, 0,
                        0, 3600),
@@ -136,6 +136,8 @@ struct format_hack {
     bool clear_filepos : 1;
     bool ignore_start : 1;
     bool fix_editlists : 1;
+    bool is_network : 1;
+    bool no_seek : 1;
 };
 
 #define BLACKLIST(fmt) {fmt, .ignore = true}
@@ -153,6 +155,7 @@ static const struct format_hack format_hacks[] = {
 
     {"hls", .no_stream = true, .clear_filepos = true},
     {"dash", .no_stream = true, .clear_filepos = true},
+    {"sdp", .clear_filepos = true, .is_network = true, .no_seek = true},
     {"mpeg", .use_stream_ids = true},
     {"mpegts", .use_stream_ids = true},
 
@@ -257,9 +260,10 @@ static int64_t mp_seek(void *opaque, int64_t pos, int whence)
              whence == SEEK_CUR ? "cur" :
              whence == SEEK_SET ? "set" : "size");
     if (whence == SEEK_END || whence == AVSEEK_SIZE) {
-        int64_t end = stream_get_size(stream) + priv->init_fragment.len;
+        int64_t end = stream_get_size(stream);
         if (end < 0)
             return -1;
+        end += priv->init_fragment.len;
         if (whence == AVSEEK_SIZE)
             return end;
         pos += end;
@@ -891,8 +895,11 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
 
     priv->avfc = avfc;
 
-    bool probeinfo = lavfdopts->probeinfo < 0 ?
-                            !priv->format_hack.skipinfo : lavfdopts->probeinfo;
+    bool probeinfo = lavfdopts->probeinfo != 0;
+    switch (lavfdopts->probeinfo) {
+    case -2: probeinfo = priv->avfc->nb_streams == 0; break;
+    case -1: probeinfo = !priv->format_hack.skipinfo; break;
+    }
     if (demuxer->params && demuxer->params->skip_lavf_probing)
         probeinfo = false;
     if (probeinfo) {
@@ -930,6 +937,9 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     if (avfc->ctx_flags & AVFMTCTX_UNSEEKABLE)
         demuxer->seekable = false;
 #endif
+
+    demuxer->is_network |= priv->format_hack.is_network;
+    demuxer->seekable &= !priv->format_hack.no_seek;
 
     if (priv->avfc->duration > 0) {
         demuxer->duration = (double)priv->avfc->duration / AV_TIME_BASE;

@@ -2724,27 +2724,10 @@ static int mp_property_display_fps(void *ctx, struct m_property *prop,
                                    int action, void *arg)
 {
     MPContext *mpctx = ctx;
-    double fps = mpctx->opts->frame_drop_fps;
-    struct vo *vo = mpctx->video_out;
-    if (vo)
-        fps = vo_get_display_fps(vo);
-    if (action == M_PROPERTY_SET) {
-        int ret = mp_property_generic_option(mpctx, prop, action, arg);
-        if (vo)
-            vo_event(vo, VO_EVENT_WIN_STATE);
-        return ret;
-    }
-    return m_property_double_ro(action, arg, fps);
-}
-
-static int mp_property_framedrop(void *ctx, struct m_property *prop,
-                                 int action, void *arg)
-{
-    MPContext *mpctx = ctx;
-    int ret = mp_property_generic_option(mpctx, prop, action, arg);
-    if (action == M_PROPERTY_SET && ret == M_PROPERTY_OK && mpctx->video_out)
-        vo_event(mpctx->video_out, VO_EVENT_WIN_STATE);
-    return ret;
+    double fps = mpctx->video_out ? vo_get_display_fps(mpctx->video_out) : 0;
+    if (fps > 0 && action != M_PROPERTY_SET)
+        return m_property_double_ro(action, arg, fps);
+    return mp_property_generic_option(mpctx, prop, action, arg);
 }
 
 static int mp_property_estimated_display_fps(void *ctx, struct m_property *prop,
@@ -4008,7 +3991,6 @@ static const struct m_property mp_properties_base[] = {
     {"display-fps", mp_property_display_fps},
     {"estimated-display-fps", mp_property_estimated_display_fps},
     {"vsync-jitter", mp_property_vsync_jitter},
-    {"framedrop", mp_property_framedrop},
 
     {"working-directory", mp_property_cwd},
 
@@ -5294,7 +5276,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
 
         for (int n = first; n < mpctx->num_tracks; n++) {
             struct track *t = mpctx->tracks[n];
-            if (cmd->args[1].v.i == 1){
+            if (cmd->args[1].v.i == 1) {
                 t->no_default = true;
             } else if (n == first) {
                 if (mpctx->playback_initialized) {

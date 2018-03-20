@@ -141,8 +141,8 @@ Playback Control
         ``--start='#2' --end='#4'``
             Plays chapters 2 and 3, and exits.
 
-``--end=<time>``
-    Stop at given absolute time. Use ``--length`` if the time should be relative
+``--end=<relative time>``
+    Stop at given time. Use ``--length`` if the time should be relative
     to ``--start``. See ``--start`` for valid option values and examples.
 
 ``--length=<relative time>``
@@ -691,6 +691,26 @@ Video
         ``--vo=vdpau`` has its own code for the ``vo`` framedrop mode. Slight
         differences to other VOs are possible.
 
+``--video-latency-hacks=<yes|no>``
+    Enable some things which tend to reduce video latency by 1 or 2 frames
+    (default: no). Note that this option might be removed without notice once
+    the player's timing code does not inherently need to do these things
+    anymore.
+
+    This does:
+
+    - Use the demuxer reported FPS for frame dropping. This avoids that the
+      player needs to decode 1 frame in advance, lowering total latency in
+      effect. This also means that if the demuxer reported FPS is wrong, or
+      the video filter chain changes FPS (e.g. deinterlacing), then it could
+      drop too many or not enough frames.
+    - Disable waiting for the first video frame. Normally the player waits for
+      the first video frame to be fully rendered before starting playback
+      properly. Some VOs will lazily initialize stuff when rendering the first
+      frame, so if this is not done, there is some likeliness that the VO has
+      to drop some frames if rendering the first frame takes longer than needed.
+
+
 ``--display-fps=<fps>``
     Set the display FPS used with the ``--video-sync=display-*`` modes. By
     default, a detected value is used. Keep in mind that setting an incorrect
@@ -1226,7 +1246,9 @@ Audio
     While the option normally takes one of the strings as indicated by the
     methods above, you can also force the device for most AOs by building it
     manually. For example ``name/foobar`` forces the AO ``name`` to use the
-    device ``foobar``.
+    device ``foobar``. However, the ``--ao`` option will strictly force a
+    specific AO. To avoid confusion, don't use ``--ao`` and ``--audio-device``
+    together.
 
     .. admonition:: Example for ALSA
 
@@ -2730,7 +2752,7 @@ Demuxer
 ``--demuxer-lavf-analyzeduration=<value>``
     Maximum length in seconds to analyze the stream properties.
 
-``--demuxer-lavf-probe-info=<yes|no|auto>``
+``--demuxer-lavf-probe-info=<yes|no|auto|nostreams>``
     Whether to probe stream information (default: auto). Technically, this
     controls whether libavformat's ``avformat_find_stream_info()`` function
     is called. Usually it's safer to call it, but it can also make startup
@@ -2738,6 +2760,10 @@ Demuxer
 
     The ``auto`` choice (the default) tries to skip this for a few know-safe
     whitelisted formats, while calling it for everything else.
+
+    The ``nostreams`` choice only calls it if and only if the file seems to
+    contain no streams after opening (helpful in cases when calling the function
+    is needed to detect streams at all, such as with FLV files).
 
 ``--demuxer-lavf-probescore=<1-100>``
     Minimum required libavformat probe score. Lower values will require
@@ -5397,6 +5423,26 @@ Miscellaneous
     sync offsets occur, they will only take about 1 or 2 seconds to settle
     out. This delay in reaction time to sudden A/V offsets should be the only
     side effect of turning this option on, for all sound drivers.
+
+``--video-timing-offset=<seconds>``
+    Control how long before video display target time the frame should be
+    rendered (default: 0.050). If a video frame should be displayed at a
+    certain time, the VO will start rendering the frame earlier, and then will
+    perform a blocking wait until the display time, and only then "swap" the
+    frame to display. The rendering cannot start before the previous frame is
+    displayed, so this value is implicitly limited by the video framerate. With
+    normal video frame rates, the default value will ensure that rendering is
+    always immediately started after the previous frame was displayed. On the
+    other hand, setting a too high value can reduce responsiveness with low
+    FPS value.
+
+    For client API users using the render API (or the deprecated ``opengl-cb``
+    API), this option is interesting, because you can stop the render API
+    from limiting your FPS (see ``mpv_render_context_render()`` documentation).
+
+    This applies only to audio timing modes (e.g. ``--video-sync=audio``). In
+    other modes (``--video-sync=display-...``), video timing relies on vsync
+    blocking, and this option is not used.
 
 ``--video-sync=<audio|...>``
     How the player synchronizes audio and video.

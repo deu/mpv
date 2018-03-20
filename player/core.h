@@ -225,7 +225,7 @@ enum playback_status {
 
 typedef struct MPContext {
     bool initialized;
-    bool autodetach;
+    bool is_cli;
     struct mpv_global *global;
     struct MPOpts *opts;
     struct mp_log *log;
@@ -586,7 +586,6 @@ struct mp_scripting {
 };
 void mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
-int mp_load_script(struct MPContext *mpctx, const char *fname);
 int mp_load_user_script(struct MPContext *mpctx, const char *fname);
 
 // sub.c

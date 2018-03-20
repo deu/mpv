@@ -410,13 +410,18 @@ static int get_req_frames(struct MPContext *mpctx, bool eof)
     if (mpctx->video_out->driver->caps & VO_CAP_NORETAIN)
         return 1;
 
+    if (mpctx->opts->untimed || mpctx->video_out->driver->untimed)
+        return 1;
+
+    int min = mpctx->opts->video_latency_hacks ? 1 : 2;
+
     // On the first frame, output a new frame as quickly as possible.
     // But display-sync likes to have a correct frame duration always.
     if (mpctx->video_pts == MP_NOPTS_VALUE)
-        return mpctx->opts->video_sync == VS_DEFAULT ? 1 : 2;
+        return mpctx->opts->video_sync == VS_DEFAULT ? 1 : min;
 
     int req = vo_get_num_req_frames(mpctx->video_out);
-    return MPCLAMP(req, 2, MP_ARRAY_SIZE(mpctx->next_frames) - 1);
+    return MPCLAMP(req, min, MP_ARRAY_SIZE(mpctx->next_frames) - 1);
 }
 
 // Whether it's fine to call add_new_frame() now.
@@ -772,7 +777,7 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
                     mode == VS_DISP_RESAMPLE_NONE;
     bool drop = mode == VS_DISP_VDROP || mode == VS_DISP_RESAMPLE ||
                 mode == VS_DISP_ADROP || mode == VS_DISP_RESAMPLE_VDROP;
-    drop &= (opts->frame_dropping & 1);
+    drop &= frame->can_drop;
 
     if (resample && using_spdif_passthrough(mpctx))
         return;
@@ -1104,6 +1109,7 @@ void write_video(struct MPContext *mpctx)
         .pts = pts,
         .duration = -1,
         .still = mpctx->step_frames > 0,
+        .can_drop = opts->frame_dropping & 1,
         .num_frames = MPMIN(mpctx->num_next_frames, req),
         .num_vsyncs = 1,
     };
@@ -1146,8 +1152,10 @@ void write_video(struct MPContext *mpctx)
     if (mpctx->video_status < STATUS_PLAYING) {
         mpctx->video_status = STATUS_READY;
         // After a seek, make sure to wait until the first frame is visible.
-        vo_wait_frame(vo);
-        MP_VERBOSE(mpctx, "first video frame after restart shown\n");
+        if (!opts->video_latency_hacks) {
+            vo_wait_frame(vo);
+            MP_VERBOSE(mpctx, "first video frame after restart shown\n");
+        }
     }
     screenshot_flip(mpctx);
 

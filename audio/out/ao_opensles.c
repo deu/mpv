@@ -101,7 +101,7 @@ static void buffer_callback(SLBufferQueueItf buffer_queue, void *context)
     pthread_mutex_unlock(&p->buffer_lock);
 }
 
-#define DEFAULT_BUFFER_SIZE_MS 50
+#define DEFAULT_BUFFER_SIZE_MS 200
 
 #define CHK(stmt) \
     { \
@@ -198,6 +198,7 @@ static int init(struct ao *ao)
         (void*)&p->buffer_queue));
     CHK((*p->buffer_queue)->RegisterCallback(p->buffer_queue,
         buffer_callback, ao));
+    CHK((*p->play)->SetPlayState(p->play, SL_PLAYSTATE_PLAYING));
 
     return 1;
 error:
@@ -207,24 +208,15 @@ error:
 
 #undef CHK
 
-static void set_play_state(struct ao *ao, SLuint32 state)
-{
-    struct priv *p = ao->priv;
-    SLresult res = (*p->play)->SetPlayState(p->play, state);
-    if (res != SL_RESULT_SUCCESS)
-        MP_ERR(ao, "Failed to SetPlayState(%d): %d\n", state, res);
-}
-
 static void reset(struct ao *ao)
 {
-    set_play_state(ao, SL_PLAYSTATE_STOPPED);
+    struct priv *p = ao->priv;
+    (*p->buffer_queue)->Clear(p->buffer_queue);
 }
 
 static void resume(struct ao *ao)
 {
     struct priv *p = ao->priv;
-    set_play_state(ao, SL_PLAYSTATE_PLAYING);
-
     // enqueue two buffers
     buffer_callback(p->buffer_queue, ao);
     buffer_callback(p->buffer_queue, ao);

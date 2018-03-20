@@ -22,6 +22,7 @@
 #include <assert.h>
 #include <string.h>
 #include <pthread.h>
+#include <locale.h>
 
 #include "config.h"
 #include "mpv_talloc.h"
@@ -153,18 +154,9 @@ void mp_print_version(struct mp_log *log, int always)
     }
 }
 
-static void shutdown_clients(struct MPContext *mpctx)
-{
-    mp_client_enter_shutdown(mpctx);
-    while (mp_clients_num(mpctx) || mpctx->outstanding_async) {
-        mp_client_broadcast_event(mpctx, MPV_EVENT_SHUTDOWN, NULL);
-        mp_wait_events(mpctx);
-    }
-}
-
 void mp_destroy(struct MPContext *mpctx)
 {
-    shutdown_clients(mpctx);
+    mp_shutdown_clients(mpctx);
 
     mp_uninit_ipc(mpctx->ipc_ctx);
     mpctx->ipc_ctx = NULL;
@@ -198,54 +190,9 @@ void mp_destroy(struct MPContext *mpctx)
 
     uninit_libav(mpctx->global);
 
-    if (mpctx->autodetach)
-        pthread_detach(pthread_self());
-
     mp_msg_uninit(mpctx->global);
     pthread_mutex_destroy(&mpctx->lock);
     talloc_free(mpctx);
-}
-
-static int prepare_exit_cplayer(struct MPContext *mpctx, enum exit_reason how)
-{
-    int rc = 0;
-    const char *reason = NULL;
-
-    if (how == EXIT_ERROR) {
-        reason = "Fatal error";
-        rc = 1;
-    } else if (how == EXIT_NORMAL) {
-        if (mpctx->stop_play == PT_QUIT) {
-            reason = "Quit";
-            rc = 0;
-        } else if (mpctx->files_played) {
-            if (mpctx->files_errored || mpctx->files_broken) {
-                reason = "Some errors happened";
-                rc = 3;
-            } else {
-                reason = "End of file";
-                rc = 0;
-            }
-        } else if (mpctx->files_broken && !mpctx->files_errored) {
-            reason = "Errors when loading file";
-            rc = 2;
-        } else if (mpctx->files_errored) {
-            reason = "Interrupted by error";
-            rc = 2;
-        } else {
-            reason = "No files played";
-            rc = 0;
-        }
-    }
-
-    if (reason)
-        MP_INFO(mpctx, "\nExiting... (%s)\n", reason);
-
-    if (mpctx->has_quit_custom_rc)
-        rc = mpctx->quit_custom_rc;
-
-    mp_destroy(mpctx);
-    return rc;
 }
 
 static bool handle_help_options(struct MPContext *mpctx)
@@ -305,8 +252,24 @@ static void abort_playback_cb(void *ctx)
     mp_abort_playback_async(mpctx);
 }
 
+// We mostly care about LC_NUMERIC, and how "." vs. "," is treated,
+// Other locale stuff might break too, but probably isn't too bad.
+static bool check_locale(void)
+{
+    char *name = setlocale(LC_NUMERIC, NULL);
+    return !name || strcmp(name, "C") == 0 || strcmp(name, "C.UTF-8") == 0;
+}
+
 struct MPContext *mp_create(void)
 {
+    if (!check_locale()) {
+        // Normally, we never print anything (except if the "terminal" option
+        // is enabled), so this is an exception.
+        fprintf(stderr, "Non-C locale detected. This is not supported.\n"
+                        "Call 'setlocale(LC_NUMERIC, \"C\");' in your code.\n");
+        return NULL;
+    }
+
     char *enable_talloc = getenv("MPV_LEAK_REPORT");
     if (enable_talloc && strcmp(enable_talloc, "1") == 0)
         talloc_enable_leak_report();
@@ -370,7 +333,7 @@ struct MPContext *mp_create(void)
 // Some of the initializations depend on the options, and can't be changed or
 // undone later.
 // If options is not NULL, apply them as command line player arguments.
-// Returns: <0 on error, 0 on success.
+// Returns: 0 on success, -1 on error, 1 if exiting normally (e.g. help).
 int mp_initialize(struct MPContext *mpctx, char **options)
 {
     struct MPOpts *opts = mpctx->opts;
@@ -398,7 +361,7 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         int r = m_config_parse_mp_command_line(mpctx->mconfig, mpctx->playlist,
                                                mpctx->global, options);
         if (r < 0)
-            return r == M_OPT_EXIT ? -2 : -1;
+            return r == M_OPT_EXIT ? 1 : -1;
     }
 
     if (opts->operation_mode == 1) {
@@ -421,11 +384,14 @@ int mp_initialize(struct MPContext *mpctx, char **options)
     mp_option_change_callback(mpctx, NULL, UPDATE_OPTS_MASK);
 
     if (handle_help_options(mpctx))
-        return -2;
+        return 1; // help
 
     if (!print_libav_versions(mp_null_log, 0)) {
         // Using mismatched libraries can be legitimate, but even then it's
         // a bad idea. We don't acknowledge its usefulness and stability.
+        // Distro maintainers who patch this out should be aware that mpv
+        // intentionally ignores ABI in some places where it's not possible to
+        // get by without violating it.
         print_libav_versions(mpctx->log, MSGL_FATAL);
         MP_FATAL(mpctx, "\nmpv was compiled against a different version of "
                  "FFmpeg/Libav than the shared\nlibrary it is linked against. "
@@ -435,8 +401,12 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         return -1;
     }
 
-    if (!mpctx->playlist->first && !opts->player_idle_mode)
-        return -3;
+    if (!mpctx->playlist->first && !opts->player_idle_mode) {
+        // nothing to play
+        mp_print_version(mpctx->log, true);
+        MP_INFO(mpctx, "%s", mp_help_text);
+        return 1;
+    }
 
     MP_STATS(mpctx, "start init");
 
@@ -476,19 +446,47 @@ int mp_initialize(struct MPContext *mpctx, char **options)
 int mpv_main(int argc, char *argv[])
 {
     struct MPContext *mpctx = mp_create();
+    if (!mpctx)
+        return 1;
+
+    mpctx->is_cli = true;
 
     char **options = argv && argv[0] ? argv + 1 : NULL; // skips program name
     int r = mp_initialize(mpctx, options);
-    if (r == -2) // help
-        return prepare_exit_cplayer(mpctx, EXIT_NONE);
-    if (r == -3) { // nothing to play
-        mp_print_version(mpctx->log, true);
-        MP_INFO(mpctx, "%s", mp_help_text);
-        return prepare_exit_cplayer(mpctx, EXIT_NONE);
-    }
-    if (r < 0) // another error
-        return prepare_exit_cplayer(mpctx, EXIT_ERROR);
+    if (r == 0)
+        mp_play_files(mpctx);
 
-    mp_play_files(mpctx);
-    return prepare_exit_cplayer(mpctx, EXIT_NORMAL);
+    int rc = 0;
+    const char *reason = NULL;
+    if (r < 0) {
+        reason = "Fatal error";
+        rc = 1;
+    } else if (r > 0) {
+        // nothing
+    } else if (mpctx->stop_play == PT_QUIT) {
+        reason = "Quit";
+    } else if (mpctx->files_played) {
+        if (mpctx->files_errored || mpctx->files_broken) {
+            reason = "Some errors happened";
+            rc = 3;
+        } else {
+            reason = "End of file";
+        }
+    } else if (mpctx->files_broken && !mpctx->files_errored) {
+        reason = "Errors when loading file";
+        rc = 2;
+    } else if (mpctx->files_errored) {
+        reason = "Interrupted by error";
+        rc = 2;
+    } else {
+        reason = "No files played";
+    }
+
+    if (reason)
+        MP_INFO(mpctx, "\nExiting... (%s)\n", reason);
+    if (mpctx->has_quit_custom_rc)
+        rc = mpctx->quit_custom_rc;
+
+    mp_destroy(mpctx);
+    return rc;
 }
