@@ -115,9 +115,10 @@ struct overlay {
 struct hook_handler {
     char *client;   // client API user name
     char *type;     // kind of hook, e.g. "on_load"
-    char *user_id;  // numeric user-chosen ID, printed as string
+    uint64_t user_id; // user-chosen ID
     int priority;   // priority for global hook order
-    int64_t seq;    // unique ID (also age -> fixed order for equal priorities)
+    int64_t seq;    // unique ID, != 0, also for fixed order on equal priorities
+    bool legacy;    // old cmd based hook API
     bool active;    // hook is currently in progress (only 1 at a time for now)
 };
 
@@ -137,12 +138,17 @@ static int set_filters(struct MPContext *mpctx, enum stream_type mediatype,
 static int mp_property_do_silent(const char *name, int action, void *val,
                                  struct MPContext *ctx);
 
-static void hook_remove(struct MPContext *mpctx, int index)
+static void hook_remove(struct MPContext *mpctx, struct hook_handler *h)
 {
     struct command_ctx *cmd = mpctx->command_ctx;
-    assert(index >= 0 && index < cmd->num_hooks);
-    talloc_free(cmd->hooks[index]);
-    MP_TARRAY_REMOVE_AT(cmd->hooks, cmd->num_hooks, index);
+    for (int n = 0; n < cmd->num_hooks; n++) {
+        if (cmd->hooks[n] == h) {
+            talloc_free(cmd->hooks[n]);
+            MP_TARRAY_REMOVE_AT(cmd->hooks, cmd->num_hooks, n);
+            return;
+        }
+    }
+    assert(0);
 }
 
 bool mp_hook_test_completion(struct MPContext *mpctx, char *type)
@@ -152,7 +158,8 @@ bool mp_hook_test_completion(struct MPContext *mpctx, char *type)
         struct hook_handler *h = cmd->hooks[n];
         if (h->active && strcmp(h->type, type) == 0) {
             if (!mp_client_exists(mpctx, h->client)) {
-                hook_remove(mpctx, n);
+                MP_WARN(mpctx, "client removed during hook handling\n");
+                hook_remove(mpctx, h);
                 break;
             }
             return false;
@@ -161,49 +168,83 @@ bool mp_hook_test_completion(struct MPContext *mpctx, char *type)
     return true;
 }
 
-static bool send_hook_msg(struct MPContext *mpctx, struct hook_handler *h,
-                          char *cmd)
+static int invoke_hook_handler(struct MPContext *mpctx, struct hook_handler *h)
 {
-    mpv_event_client_message *m = talloc_ptrtype(NULL, m);
-    *m = (mpv_event_client_message){0};
-    MP_TARRAY_APPEND(m, m->args, m->num_args, cmd);
-    MP_TARRAY_APPEND(m, m->args, m->num_args, talloc_strdup(m, h->user_id));
-    MP_TARRAY_APPEND(m, m->args, m->num_args, talloc_strdup(m, h->type));
-    bool r =
-        mp_client_send_event(mpctx, h->client, MPV_EVENT_CLIENT_MESSAGE, m) >= 0;
-    if (!r)
-        MP_WARN(mpctx, "Sending hook command failed.\n");
+    MP_VERBOSE(mpctx, "Running hook: %s/%s\n", h->client, h->type);
+    h->active = true;
+
+    uint64_t reply_id = 0;
+    void *data;
+    int msg;
+    if (h->legacy) {
+        mpv_event_client_message *m = talloc_ptrtype(NULL, m);
+        *m = (mpv_event_client_message){0};
+        MP_TARRAY_APPEND(m, m->args, m->num_args, "hook_run");
+        MP_TARRAY_APPEND(m, m->args, m->num_args,
+                         talloc_asprintf(m, "%llu", (long long)h->user_id));
+        MP_TARRAY_APPEND(m, m->args, m->num_args,
+                         talloc_asprintf(m, "%llu", (long long)h->seq));
+        data = m;
+        msg = MPV_EVENT_CLIENT_MESSAGE;
+    } else {
+        mpv_event_hook *m = talloc_ptrtype(NULL, m);
+        *m = (mpv_event_hook){
+            .name = talloc_strdup(m, h->type),
+            .id = h->seq,
+        },
+        reply_id = h->user_id;
+        data = m;
+        msg = MPV_EVENT_HOOK;
+    }
+    int r = mp_client_send_event(mpctx, h->client, reply_id, msg, data);
+    if (r < 0) {
+        MP_WARN(mpctx, "Sending hook command failed. Removing hook.\n");
+        hook_remove(mpctx, h);
+        mp_wakeup_core(mpctx); // repeat next iteration to finish
+    }
     return r;
 }
 
-// client==NULL means start the hook chain
-void mp_hook_run(struct MPContext *mpctx, char *client, char *type)
+static int run_next_hook_handler(struct MPContext *mpctx, char *type, int index)
 {
     struct command_ctx *cmd = mpctx->command_ctx;
-    bool found_current = !client;
-    int index = -1;
+
+    for (int n = index; n < cmd->num_hooks; n++) {
+        struct hook_handler *h = cmd->hooks[n];
+        if (strcmp(h->type, type) == 0)
+            return invoke_hook_handler(mpctx, h);
+    }
+
+    mp_wakeup_core(mpctx); // finished hook
+    return 0;
+}
+
+// Start processing script/client API hooks. This is asynchronous, and the
+// caller needs to use mp_hook_test_completion() to check whether they're done.
+void mp_hook_start(struct MPContext *mpctx, char *type)
+{
+    while (run_next_hook_handler(mpctx, type, 0) < 0) {
+        // We can repeat this until all broken clients have been removed, and
+        // hook processing is successfully started.
+    }
+}
+
+int mp_hook_continue(struct MPContext *mpctx, char *client, uint64_t id)
+{
+    struct command_ctx *cmd = mpctx->command_ctx;
+
     for (int n = 0; n < cmd->num_hooks; n++) {
         struct hook_handler *h = cmd->hooks[n];
-        if (!found_current) {
-            if (h->active && strcmp(h->type, type) == 0) {
-                h->active = false;
-                found_current = true;
-                mp_wakeup_core(mpctx);
-            }
-        } else if (strcmp(h->type, type) == 0) {
-            index = n;
-            break;
+        if (strcmp(h->client, client) == 0 && h->seq == id) {
+            if (!h->active)
+                break;
+            h->active = false;
+            return run_next_hook_handler(mpctx, h->type, n + 1);
         }
     }
-    if (index < 0)
-        return;
-    struct hook_handler *next = cmd->hooks[index];
-    MP_VERBOSE(mpctx, "Running hook: %s/%s\n", next->client, type);
-    next->active = true;
-    if (!send_hook_msg(mpctx, next, "hook_run")) {
-        hook_remove(mpctx, index);
-        mp_wakeup_core(mpctx); // repeat next iteration to finish
-    }
+
+    MP_ERR(mpctx, "invalid hook API usage\n");
+    return MPV_ERROR_INVALID_PARAMETER;
 }
 
 static int compare_hook(const void *pa, const void *pb)
@@ -215,18 +256,22 @@ static int compare_hook(const void *pa, const void *pb)
     return (*h1)->seq - (*h2)->seq;
 }
 
-static void mp_hook_add(struct MPContext *mpctx, char *client, char *name,
-                        int id, int pri)
+void mp_hook_add(struct MPContext *mpctx, const char *client, const char *name,
+                 uint64_t user_id, int pri, bool legacy)
 {
+    if (legacy)
+        MP_WARN(mpctx, "The old hook API is deprecated! Use the libmpv API.\n");
+
     struct command_ctx *cmd = mpctx->command_ctx;
     struct hook_handler *h = talloc_ptrtype(cmd, h);
-    int64_t seq = cmd->hook_seq++;
+    int64_t seq = ++cmd->hook_seq;
     *h = (struct hook_handler){
         .client = talloc_strdup(h, client),
         .type = talloc_strdup(h, name),
-        .user_id = talloc_asprintf(h, "%d", id),
+        .user_id = user_id,
         .priority = pri,
         .seq = seq,
+        .legacy = legacy,
     };
     MP_TARRAY_APPEND(cmd, cmd->hooks, cmd->num_hooks, h);
     qsort(cmd->hooks, cmd->num_hooks, sizeof(cmd->hooks[0]), compare_hook);
@@ -3605,37 +3650,6 @@ done:
     return mp_property_do(real_property, action, arg, ctx);
 }
 
-static int mp_property_shitfuck(void *ctx, struct m_property *prop,
-                                int action, void *arg)
-{
-    MPContext *mpctx = ctx;
-    int flags = M_SETOPT_RUNTIME;
-    const char *rname = prop->priv;
-
-    MP_WARN(mpctx, "Do not use %s, use %s, bug reports will be ignored.\n",
-            prop->name, rname);
-
-    struct m_config_option *co = m_config_get_co_raw(mpctx->mconfig, bstr0(rname));
-    if (!co)
-        return M_PROPERTY_UNKNOWN;
-
-    switch (action) {
-    case M_PROPERTY_GET_TYPE:
-        *(struct m_option *)arg = *(co->opt);
-        return M_PROPERTY_OK;
-    case M_PROPERTY_GET:
-        if (!co->data)
-            return M_PROPERTY_NOT_IMPLEMENTED;
-        m_option_copy(co->opt, arg, co->data);
-        return M_PROPERTY_OK;
-    case M_PROPERTY_SET:
-        if (m_config_set_option_raw_direct(mpctx->mconfig, co, arg, flags) < 0)
-            return M_PROPERTY_ERROR;
-        return M_PROPERTY_OK;
-    }
-    return M_PROPERTY_NOT_IMPLEMENTED;
-}
-
 static int access_options(struct m_property_action_arg *ka, bool local,
                           MPContext *mpctx)
 {
@@ -4689,29 +4703,6 @@ static int *get_cmd_cycle_counter(struct MPContext *mpctx, char **args)
     return &cmd->cycle_counters[cmd->num_cycle_counters - 1].counter;
 }
 
-static int mp_property_multiply(char *property, double f, struct MPContext *mpctx)
-{
-    union m_option_value val = {0};
-    struct m_option opt = {0};
-    int r;
-
-    r = mp_property_do(property, M_PROPERTY_GET_CONSTRICTED_TYPE, &opt, mpctx);
-    if (r != M_PROPERTY_OK)
-        return r;
-    assert(opt.type);
-
-    if (!opt.type->multiply)
-        return M_PROPERTY_NOT_IMPLEMENTED;
-
-    r = mp_property_do(property, M_PROPERTY_GET, &val, mpctx);
-    if (r != M_PROPERTY_OK)
-        return r;
-    opt.type->multiply(&opt, &val, f);
-    r = mp_property_do(property, M_PROPERTY_SET, &val, mpctx);
-    m_option_free(&opt, &val);
-    return r;
-}
-
 static struct track *find_track_with_url(struct MPContext *mpctx, int type,
                                          const char *url)
 {
@@ -4752,21 +4743,29 @@ static bool check_property_scalable(char *property, struct MPContext *mpctx)
            prop.type == &m_option_type_aspect;
 }
 
-static struct mpv_node *add_map_entry(struct mpv_node *dst, const char *key)
+static int change_property_cmd(struct MPContext *mpctx, struct mp_cmd *cmd,
+                               const char *name, int action, void *arg)
 {
-    struct mpv_node_list *list = dst->u.list;
-    assert(dst->format == MPV_FORMAT_NODE_MAP && dst->u.list);
-    MP_TARRAY_GROW(list, list->values, list->num);
-    MP_TARRAY_GROW(list, list->keys, list->num);
-    list->keys[list->num] = talloc_strdup(list, key);
-    return &list->values[list->num++];
+    struct MPOpts *opts = mpctx->opts;
+    int osd_duration = opts->osd_duration;
+    int on_osd = cmd->flags & MP_ON_OSD_FLAGS;
+    bool auto_osd = on_osd == MP_ON_OSD_AUTO;
+    bool msg_osd = auto_osd || (on_osd & MP_ON_OSD_MSG);
+    int osdl = msg_osd ? 1 : OSD_LEVEL_INVISIBLE;
+
+    int r = mp_property_do(name, action, arg, mpctx);
+    if (r == M_PROPERTY_OK || r == M_PROPERTY_UNAVAILABLE) {
+        show_property_osd(mpctx, name, on_osd);
+    } else if (r == M_PROPERTY_UNKNOWN) {
+        set_osd_msg(mpctx, osdl, osd_duration, "Unknown property: '%s'", name);
+        return -1;
+    } else if (r <= 0) {
+        set_osd_msg(mpctx, osdl, osd_duration, "Failed to set property '%s'",
+                    name);
+        return -1;
+    }
+    return 0;
 }
-
-#define ADD_MAP_INT(dst, name, i) (*add_map_entry(dst, name) = \
-    (struct mpv_node){.format = MPV_FORMAT_INT64, .u.int64 = (i)});
-
-#define ADD_MAP_CSTR(dst, name, s) (*add_map_entry(dst, name) = \
-    (struct mpv_node){.format = MPV_FORMAT_STRING, .u.string = (s)});
 
 int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *res)
 {
@@ -4875,21 +4874,8 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
     }
 
     case MP_CMD_SET: {
-        int r = mp_property_do(cmd->args[0].v.s, M_PROPERTY_SET_STRING,
-                               cmd->args[1].v.s, mpctx);
-        if (r == M_PROPERTY_OK || r == M_PROPERTY_UNAVAILABLE) {
-            show_property_osd(mpctx, cmd->args[0].v.s, on_osd);
-        } else if (r == M_PROPERTY_UNKNOWN) {
-            set_osd_msg(mpctx, osdl, osd_duration,
-                        "Unknown property: '%s'", cmd->args[0].v.s);
-            return -1;
-        } else if (r <= 0) {
-            set_osd_msg(mpctx, osdl, osd_duration,
-                        "Failed to set property '%s' to '%s'",
-                        cmd->args[0].v.s, cmd->args[1].v.s);
-            return -1;
-        }
-        break;
+        return change_property_cmd(mpctx, cmd, cmd->args[0].v.s,
+                                   M_PROPERTY_SET_STRING, cmd->args[1].v.s);
     }
 
     case MP_CMD_CHANGE_LIST: {
@@ -4944,39 +4930,17 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
                 .inc = cmd->args[1].v.d * scale,
                 .wrap = cmd->id == MP_CMD_CYCLE,
             };
-            int r = mp_property_do(property, M_PROPERTY_SWITCH, &s, mpctx);
-            if (r == M_PROPERTY_OK || r == M_PROPERTY_UNAVAILABLE) {
-                show_property_osd(mpctx, property, on_osd);
-            } else if (r == M_PROPERTY_UNKNOWN) {
-                set_osd_msg(mpctx, osdl, osd_duration,
-                            "Unknown property: '%s'", property);
-                return -1;
-            } else if (r <= 0) {
-                set_osd_msg(mpctx, osdl, osd_duration,
-                        "Failed to change property '%s'", property);
-                return -1;
-            }
+            int r =
+                change_property_cmd(mpctx, cmd, property, M_PROPERTY_SWITCH, &s);
+            if (r < 0)
+                return r;
         }
         break;
     }
 
     case MP_CMD_MULTIPLY: {
-        char *property = cmd->args[0].v.s;
-        double f = cmd->args[1].v.d;
-        int r = mp_property_multiply(property, f, mpctx);
-
-        if (r == M_PROPERTY_OK || r == M_PROPERTY_UNAVAILABLE) {
-            show_property_osd(mpctx, property, on_osd);
-        } else if (r == M_PROPERTY_UNKNOWN) {
-            set_osd_msg(mpctx, osdl, osd_duration,
-                        "Unknown property: '%s'", property);
-            return -1;
-        } else if (r <= 0) {
-            set_osd_msg(mpctx, osdl, osd_duration,
-                        "Failed to multiply property '%s' by %g", property, f);
-            return -1;
-        }
-        break;
+        return change_property_cmd(mpctx, cmd, cmd->args[0].v.s,
+                                   M_PROPERTY_MULTIPLY, &cmd->args[1].v.d);
     }
 
     case MP_CMD_CYCLE_VALUES: {
@@ -4990,6 +4954,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         }
         int *ptr = get_cmd_cycle_counter(mpctx, &args[first - 1]);
         int count = cmd->nargs - first;
+        int r = 0;
         if (ptr && count > 0) {
             *ptr = *ptr < 0 ? (dir > 0 ? 0 : -1) : *ptr + dir;
             if (*ptr >= count)
@@ -4998,24 +4963,11 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
                 *ptr = count - 1;
             char *property = args[first - 1];
             char *value = args[first + *ptr];
-            int r = mp_property_do(property, M_PROPERTY_SET_STRING, value, mpctx);
-            if (r == M_PROPERTY_OK || r == M_PROPERTY_UNAVAILABLE) {
-                show_property_osd(mpctx, property, on_osd);
-            } else if (r == M_PROPERTY_UNKNOWN) {
-                set_osd_msg(mpctx, osdl, osd_duration,
-                            "Unknown property: '%s'", property);
-                talloc_free(args);
-                return -1;
-            } else if (r <= 0) {
-                set_osd_msg(mpctx, osdl, osd_duration,
-                            "Failed to set property '%s' to '%s'",
-                            property, value);
-                talloc_free(args);
-                return -1;
-            }
+            r = change_property_cmd(mpctx, cmd, property, M_PROPERTY_SET_STRING,
+                                    value);
         }
         talloc_free(args);
-        break;
+        return r;
     }
 
     case MP_CMD_FRAME_STEP:
@@ -5370,20 +5322,18 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
         struct mp_image *img = screenshot_get_rgb(mpctx, cmd->args[0].v.i);
         if (!img)
             return -1;
-        struct mpv_node_list *info = talloc_zero(NULL, struct mpv_node_list);
-        talloc_steal(info, img);
-        *res = (mpv_node){.format = MPV_FORMAT_NODE_MAP, .u.list = info};
-        ADD_MAP_INT(res, "w", img->w);
-        ADD_MAP_INT(res, "h", img->h);
-        ADD_MAP_INT(res, "stride", img->stride[0]);
-        ADD_MAP_CSTR(res, "format", "bgr0");
-        struct mpv_byte_array *ba = talloc_ptrtype(info, ba);
+        node_init(res, MPV_FORMAT_NODE_MAP, NULL);
+        node_map_add_int64(res, "w", img->w);
+        node_map_add_int64(res, "h", img->h);
+        node_map_add_int64(res, "stride", img->stride[0]);
+        node_map_add_string(res, "format", "bgr0");
+        struct mpv_byte_array *ba =
+            node_map_add(res, "data", MPV_FORMAT_BYTE_ARRAY)->u.ba;
         *ba = (struct mpv_byte_array){
             .data = img->planes[0],
             .size = img->stride[0] * img->h,
         };
-        *add_map_entry(res, "data") =
-            (struct mpv_node){.format = MPV_FORMAT_BYTE_ARRAY, .u.ba = ba,};
+        talloc_steal(ba, img);
         break;
     }
 
@@ -5504,7 +5454,7 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
             MP_TARRAY_APPEND(event, event->args, event->num_args,
                              talloc_strdup(event, cmd->args[n].v.s));
         }
-        if (mp_client_send_event(mpctx, cmd->args[0].v.s,
+        if (mp_client_send_event(mpctx, cmd->args[0].v.s, 0,
                                  MPV_EVENT_CLIENT_MESSAGE, event) < 0)
         {
             MP_VERBOSE(mpctx, "Can't find script '%s' for %s.\n",
@@ -5554,14 +5504,14 @@ int run_command(struct MPContext *mpctx, struct mp_cmd *cmd, struct mpv_node *re
             return -1;
         }
         mp_hook_add(mpctx, cmd->sender, cmd->args[0].v.s, cmd->args[1].v.i,
-                    cmd->args[2].v.i);
+                    cmd->args[2].v.i, true);
         break;
     case MP_CMD_HOOK_ACK:
         if (!cmd->sender) {
             MP_ERR(mpctx, "Can be used from client API only.\n");
             return -1;
         }
-        mp_hook_run(mpctx, cmd->sender, cmd->args[0].v.s);
+        mp_hook_continue(mpctx, cmd->sender, cmd->args[0].v.i);
         break;
 
     case MP_CMD_MOUSE: {
@@ -5664,8 +5614,7 @@ void command_init(struct MPContext *mpctx)
     for (int n = 0; n < num_opts; n++) {
         struct m_config_option *co = m_config_get_co_index(mpctx->mconfig, n);
         assert(co->name[0]);
-        if ((co->opt->flags & M_OPT_NOPROP) &&
-            co->opt->type != &m_option_type_cli_alias)
+        if (co->opt->flags & M_OPT_NOPROP)
             continue;
 
         struct m_property prop = {0};
@@ -5678,21 +5627,6 @@ void command_init(struct MPContext *mpctx)
                 .call = co->opt->deprecation_message ?
                             mp_property_deprecated_alias : mp_property_alias,
                 .priv = (void *)alias,
-                .is_option = true,
-            };
-        } else if (co->opt->type == &m_option_type_cli_alias) {
-            bstr rname = bstr0(co->opt->priv);
-            for (int i = rname.len - 1; i >= 0; i--) {
-                if (rname.start[i] == '-') {
-                    rname.len = i;
-                    break;
-                }
-            }
-
-            prop = (struct m_property){
-                .name = co->name,
-                .call = mp_property_shitfuck,
-                .priv = bstrto0(ctx, rname),
                 .is_option = true,
             };
         } else {

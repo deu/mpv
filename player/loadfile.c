@@ -665,7 +665,8 @@ int mp_add_external_file(struct MPContext *mpctx, char *filename,
     return first_num;
 
 err_out:
-    MP_ERR(mpctx, "Can not open external file %s.\n", disp_filename);
+    if (!mp_cancel_test(mpctx->playback_abort))
+        MP_ERR(mpctx, "Can not open external file %s.\n", disp_filename);
     return -1;
 }
 
@@ -772,42 +773,11 @@ static void transfer_playlist(struct MPContext *mpctx, struct playlist *pl)
     }
 }
 
-static int process_open_hooks(struct MPContext *mpctx, char *name)
+static void process_hooks(struct MPContext *mpctx, char *name)
 {
+    mp_hook_start(mpctx, name);
 
-    mp_hook_run(mpctx, NULL, name);
-
-    while (!mp_hook_test_completion(mpctx, name)) {
-        mp_idle(mpctx);
-        if (mpctx->stop_play) {
-            // Can't exit immediately, the script would interfere with the
-            // next file being loaded.
-            if (mpctx->stop_play == PT_QUIT)
-                return -1;
-        }
-    }
-
-    return 0;
-}
-
-static int process_preloaded_hooks(struct MPContext *mpctx)
-{
-    mp_hook_run(mpctx, NULL, "on_preloaded");
-
-    while (!mp_hook_test_completion(mpctx, "on_preloaded")) {
-        mp_idle(mpctx);
-        if (mpctx->stop_play)
-            return -1;
-    }
-
-    return 0;
-}
-
-static void process_unload_hooks(struct MPContext *mpctx)
-{
-    mp_hook_run(mpctx, NULL, "on_unload");
-
-    while (!mp_hook_test_completion(mpctx, "on_unload"))
+    while (!mp_hook_test_completion(mpctx, name))
         mp_idle(mpctx);
 }
 
@@ -1261,7 +1231,8 @@ reopen_file:
 
     assert(mpctx->demuxer == NULL);
 
-    if (process_open_hooks(mpctx, "on_load") < 0)
+    process_hooks(mpctx, "on_load");
+    if (mpctx->stop_play)
         goto terminate_playback;
 
     if (opts->stream_dump && opts->stream_dump[0]) {
@@ -1271,12 +1242,14 @@ reopen_file:
     }
 
     open_demux_reentrant(mpctx);
-    if (!mpctx->stop_play && !mpctx->demuxer &&
-        process_open_hooks(mpctx, "on_load_fail") >= 0 &&
-        strcmp(mpctx->stream_open_filename, mpctx->filename) != 0)
-    {
-        mpctx->error_playing = MPV_ERROR_LOADING_FAILED;
-        open_demux_reentrant(mpctx);
+    if (!mpctx->stop_play && !mpctx->demuxer) {
+        process_hooks(mpctx, "on_load_fail");
+        if (strcmp(mpctx->stream_open_filename, mpctx->filename) != 0 &&
+            !mpctx->stop_play)
+        {
+            mpctx->error_playing = MPV_ERROR_LOADING_FAILED;
+            open_demux_reentrant(mpctx);
+        }
     }
     if (!mpctx->demuxer || mpctx->stop_play)
         goto terminate_playback;
@@ -1311,7 +1284,8 @@ reopen_file:
 
     check_previous_track_selection(mpctx);
 
-    if (process_preloaded_hooks(mpctx))
+    process_hooks(mpctx, "on_preloaded");
+    if (mpctx->stop_play)
         goto terminate_playback;
 
     if (reinit_complex_filters(mpctx, false) < 0)
@@ -1422,7 +1396,7 @@ terminate_playback:
 
     update_core_idle_state(mpctx);
 
-    process_unload_hooks(mpctx);
+    process_hooks(mpctx, "on_unload");
 
     if (mpctx->stop_play == KEEP_PLAYING)
         mpctx->stop_play = AT_END_OF_FILE;
