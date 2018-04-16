@@ -129,12 +129,14 @@ def build(ctx):
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/idle-inhibit/idle-inhibit-unstable-v1",
             target    = "video/out/wayland/idle-inhibit-v1.h")
-        ctx.wayland_protocol_code(proto_dir = "../video/out/wayland",
-            protocol = "server-decoration",
-            target   = "video/out/wayland/srv-decor.c")
-        ctx.wayland_protocol_header(proto_dir = "../video/out/wayland",
-            protocol = "server-decoration",
-            target   = "video/out/wayland/srv-decor.h")
+        ctx.wayland_protocol_code(proto_dir = "video/out/wayland",
+            protocol          = "server-decoration",
+            vendored_protocol = True,
+            target            = "video/out/wayland/srv-decor.c")
+        ctx.wayland_protocol_header(proto_dir = "video/out/wayland",
+            protocol          = "server-decoration",
+            vendored_protocol = True,
+            target            = "video/out/wayland/srv-decor.h")
 
     ctx(features = "ebml_header", target = "ebml_types.h")
     ctx(features = "ebml_definitions", target = "ebml_defs.c")
@@ -459,7 +461,6 @@ def build(ctx):
         ( "video/out/opengl/context_wayland.c",  "gl-wayland" ),
         ( "video/out/opengl/context_win.c",      "gl-win32" ),
         ( "video/out/opengl/context_x11egl.c",   "egl-x11" ),
-        ( "video/out/opengl/cuda_dynamic.c",     "cuda-hwaccel" ),
         ( "video/out/opengl/egl_helpers.c",      "egl-helpers" ),
         ( "video/out/opengl/formats.c",          "gl" ),
         ( "video/out/opengl/hwdec_cuda.c",       "cuda-hwaccel" ),

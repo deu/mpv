@@ -35,13 +35,12 @@ struct priv {
     SLBufferQueueItf buffer_queue;
     SLEngineItf engine;
     SLPlayItf play;
-    char *curbuf, *buf1, *buf2;
+    char *buf;
     size_t buffer_size;
     pthread_mutex_t buffer_lock;
     double audio_latency;
 
     int cfg_frames_per_buffer;
-    int cfg_sample_rate;
 };
 
 static const int fmtmap[][2] = {
@@ -70,9 +69,8 @@ static void uninit(struct ao *ao)
 
     pthread_mutex_destroy(&p->buffer_lock);
 
-    free(p->buf1);
-    free(p->buf2);
-    p->curbuf = p->buf1 = p->buf2 = NULL;
+    free(p->buf);
+    p->buf = NULL;
     p->buffer_size = 0;
 }
 
@@ -88,22 +86,20 @@ static void buffer_callback(SLBufferQueueItf buffer_queue, void *context)
 
     pthread_mutex_lock(&p->buffer_lock);
 
-    data[0] = p->curbuf;
+    data[0] = p->buf;
     delay = 2 * p->buffer_size / (double)ao->bps;
     delay += p->audio_latency;
     ao_read_data(ao, data, p->buffer_size / ao->sstride,
         mp_time_us() + 1000000LL * delay);
 
-    res = (*buffer_queue)->Enqueue(buffer_queue, p->curbuf, p->buffer_size);
+    res = (*buffer_queue)->Enqueue(buffer_queue, p->buf, p->buffer_size);
     if (res != SL_RESULT_SUCCESS)
         MP_ERR(ao, "Failed to Enqueue: %d\n", res);
-    else
-        p->curbuf = (p->curbuf == p->buf1) ? p->buf2 : p->buf1;
 
     pthread_mutex_unlock(&p->buffer_lock);
 }
 
-#define DEFAULT_BUFFER_SIZE_MS 200
+#define DEFAULT_BUFFER_SIZE_MS 250
 
 #define CHK(stmt) \
     { \
@@ -133,7 +129,7 @@ static int init(struct ao *ao)
     CHK((*p->output_mix)->Realize(p->output_mix, SL_BOOLEAN_FALSE));
 
     locator_buffer_queue.locatorType = SL_DATALOCATOR_BUFFERQUEUE;
-    locator_buffer_queue.numBuffers = 2;
+    locator_buffer_queue.numBuffers = 1;
 
     pcm.formatType = SL_DATAFORMAT_PCM;
     pcm.numChannels = 2;
@@ -156,9 +152,6 @@ static int init(struct ao *ao)
     pcm.channelMask = SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT;
     pcm.endianness = SL_BYTEORDER_LITTLEENDIAN;
 
-    if (p->cfg_sample_rate)
-        ao->samplerate = p->cfg_sample_rate;
-
     // samplesPerSec is misnamed, actually it's samples per ms
     pcm.samplesPerSec = ao->samplerate * 1000;
 
@@ -168,10 +161,8 @@ static int init(struct ao *ao)
         ao->device_buffer = ao->samplerate * DEFAULT_BUFFER_SIZE_MS / 1000;
     p->buffer_size = ao->device_buffer * ao->channels.num *
         af_fmt_to_bytes(ao->format);
-    p->buf1 = calloc(1, p->buffer_size);
-    p->buf2 = calloc(1, p->buffer_size);
-    p->curbuf = p->buf1;
-    if (!p->buf1 || !p->buf2) {
+    p->buf = calloc(1, p->buffer_size);
+    if (!p->buf) {
         MP_ERR(ao, "Failed to allocate device buffer\n");
         goto error;
     }
@@ -243,8 +234,6 @@ static void reset(struct ao *ao)
 static void resume(struct ao *ao)
 {
     struct priv *p = ao->priv;
-    // enqueue two buffers
-    buffer_callback(p->buffer_queue, ao);
     buffer_callback(p->buffer_queue, ao);
 }
 
@@ -260,8 +249,7 @@ const struct ao_driver audio_out_opensles = {
 
     .priv_size = sizeof(struct priv),
     .options = (const struct m_option[]) {
-        OPT_INTRANGE("frames-per-buffer", cfg_frames_per_buffer, 0, 1, 10000),
-        OPT_INTRANGE("sample-rate", cfg_sample_rate, 0, 1000, 100000),
+        OPT_INTRANGE("frames-per-buffer", cfg_frames_per_buffer, 0, 1, 96000),
         {0}
     },
     .options_prefix = "opensles",

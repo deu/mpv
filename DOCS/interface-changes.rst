@@ -20,6 +20,7 @@ Interface changes
 ::
 
  --- mpv 0.29.0 ---
+    - drop --opensles-sample-rate, as --audio-samplerate should be used if desired
     - drop deprecated --videotoolbox-format, --ff-aid, --ff-vid, --ff-sid,
       --ad-spdif-dtshd, --softvol options
     - fix --external-files: strictly never select any tracks from them, unless
@@ -84,6 +85,7 @@ Interface changes
       (such as "sub-file"), deprecated in mpv 0.26.0
     - deprecate the old command based hook API, and introduce a proper C API
       (the high level Lua API for this does not change)
+    - rename the the lua-settings/ config directory to script-opts/
  --- mpv 0.28.0 ---
     - rename --hwdec=mediacodec option to mediacodec-copy, to reflect
       conventions followed by other hardware video decoding APIs
