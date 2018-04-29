@@ -724,8 +724,10 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
             sh->title = talloc_asprintf(sh, "visual impaired");
         if (!sh->title && st->disposition & AV_DISPOSITION_HEARING_IMPAIRED)
             sh->title = talloc_asprintf(sh, "hearing impaired");
+        if (st->disposition & AV_DISPOSITION_DEPENDENT)
+            sh->dependent_track = true;
         AVDictionaryEntry *lang = av_dict_get(st->metadata, "language", NULL, 0);
-        if (lang && lang->value)
+        if (lang && lang->value && strcmp(lang->value, "und") != 0)
             sh->lang = talloc_strdup(sh, lang->value);
         sh->hls_bitrate = dict_get_decimal(st->metadata, "variant_bitrate", 0);
         if (!sh->title && sh->hls_bitrate > 0)
@@ -746,13 +748,13 @@ static void add_new_streams(demuxer_t *demuxer)
         handle_new_stream(demuxer, priv->num_streams);
 }
 
-static void update_metadata(demuxer_t *demuxer, AVPacket *pkt)
+static void update_metadata(demuxer_t *demuxer)
 {
     lavf_priv_t *priv = demuxer->priv;
     if (priv->avfc->event_flags & AVFMT_EVENT_FLAG_METADATA_UPDATED) {
         mp_tags_copy_from_av_dictionary(demuxer->metadata, priv->avfc->metadata);
         priv->avfc->event_flags = 0;
-        demux_changed(demuxer, DEMUX_EVENT_METADATA);
+        demux_metadata_changed(demuxer);
     }
 
     for (int n = 0; n < priv->num_streams; n++) {
@@ -921,7 +923,6 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
     add_new_streams(demuxer);
 
     mp_tags_copy_from_av_dictionary(demuxer->metadata, avfc->metadata);
-    update_metadata(demuxer, NULL);
 
     demuxer->ts_resets_possible =
         priv->avif_flags & (AVFMT_TS_DISCONT | AVFMT_NOTIMESTAMPS);
@@ -992,7 +993,7 @@ static int demux_lavf_fill_buffer(demuxer_t *demux)
     }
 
     add_new_streams(demux);
-    update_metadata(demux, pkt);
+    update_metadata(demux);
 
     assert(pkt->stream_index >= 0 && pkt->stream_index < priv->num_streams);
     struct sh_stream *stream = priv->streams[pkt->stream_index];
@@ -1141,31 +1142,16 @@ redo:
         priv->cur_program = prog->progid = program->id;
 
         mp_tags_copy_from_av_dictionary(demuxer->metadata, priv->avfc->programs[p]->metadata);
-        update_metadata(demuxer, NULL);
+        update_metadata(demuxer);
         // Enforce metadata update even if no explicit METADATA_UPDATED since we switched program.
-        demux_changed(demuxer, DEMUX_EVENT_METADATA);
+        demux_metadata_changed(demuxer);
 
         return CONTROL_OK;
     }
     case DEMUXER_CTRL_RESYNC:
-        /* NOTE:
-         *
-         * We actually want to call ff_read_frame_flush() here, but it is
-         * internal.
-         *
-         * This function call seems to do the same for now.
-         *
-         * Once ff_read_frame_flush() is exported in some way, change this to
-         * call the new API instead of relying on av_seek_frame() to do this
-         * for us.
-         */
-        // avio_flush() is designed for write-only streams, and does the wrong
-        // thing when reading. Flush it manually instead.
         stream_drop_buffers(priv->stream);
-        priv->avfc->pb->buf_ptr = priv->avfc->pb->buf_end = priv->avfc->pb->buffer;
-        priv->avfc->pb->pos = stream_tell(priv->stream);
-        av_seek_frame(priv->avfc, 0, stream_tell(priv->stream),
-                      AVSEEK_FLAG_BYTE);
+        avio_flush(priv->avfc->pb);
+        avformat_flush(priv->avfc);
         return CONTROL_OK;
     case DEMUXER_CTRL_REPLACE_STREAM:
         if (priv->own_stream)

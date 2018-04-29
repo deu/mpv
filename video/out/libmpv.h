@@ -12,6 +12,9 @@
 void *get_mpv_render_param(mpv_render_param *params, mpv_render_param_type type,
                            void *def);
 
+#define GET_MPV_RENDER_PARAM(params, type, ctype, def) \
+    (*(ctype *)get_mpv_render_param(params, type, &(ctype){(def)}))
+
 typedef int (*mp_render_cb_control_fn)(void *cb_ctx, int *events,
                                        uint32_t request, void *data);
 void mp_render_context_set_control_callback(mpv_render_context *ctx,
@@ -49,6 +52,11 @@ struct render_backend_fns {
     void (*reconfig)(struct render_backend *ctx, struct mp_image_params *params);
     // Like VOCTRL_RESET.
     void (*reset)(struct render_backend *ctx);
+    void (*screenshot)(struct render_backend *ctx, struct vo_frame *frame,
+                       struct voctrl_screenshot *args);
+    // Like vo_driver.get_image().
+    struct mp_image *(*get_image)(struct render_backend *ctx, int imgfmt,
+                                  int w, int h, int stride_align);
     // This has two purposes: 1. set queue attributes on VO, 2. update the
     // renderer's OSD pointer. Keep in mind that as soon as the caller releases
     // the renderer lock, the VO pointer can become invalid. The OSD pointer

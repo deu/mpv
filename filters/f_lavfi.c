@@ -93,6 +93,12 @@ struct lavfi {
 
     AVFrame *tmp_frame;
 
+    // Audio timestamp emulation.
+    bool emulate_audio_pts;
+    double in_pts;      // last input timestamps
+    int64_t in_samples; // samples ever sent to the filter
+    double delay;       // seconds of audio apparently buffered by filter
+
     struct mp_lavfi public;
 };
 
@@ -137,6 +143,9 @@ static void free_graph(struct lavfi *c)
     }
     c->initialized = false;
     c->draining_recover = false;
+    c->in_pts = MP_NOPTS_VALUE;
+    c->in_samples = 0;
+    c->delay = 0;
 }
 
 static void add_pad(struct lavfi *c, int dir, int index, AVFilterContext *filter,
@@ -262,7 +271,8 @@ static void precreate_graph(struct lavfi *c, bool first_init)
             goto error;
         }
 
-        if (mp_set_avopts(c->log, filter->priv, c->direct_filter_opts) < 0)
+        if (mp_set_avopts_pos(c->log, filter, filter->priv,
+                              c->direct_filter_opts) < 0)
             goto error;
 
         if (avfilter_init_str(filter, NULL) < 0) {
@@ -331,7 +341,8 @@ static bool is_vformat_ok(struct mp_image *a, struct mp_image *b)
 {
     return a->imgfmt == b->imgfmt &&
            a->w == b->w && a->h && b->h &&
-           a->params.p_w == b->params.p_w && a->params.p_h == b->params.p_h;
+           a->params.p_w == b->params.p_w && a->params.p_h == b->params.p_h &&
+           a->nominal_fps == b->nominal_fps;
 }
 static bool is_format_ok(struct mp_frame a, struct mp_frame b)
 {
@@ -474,6 +485,7 @@ static bool init_pads(struct lavfi *c)
             params->sample_aspect_ratio.num = fmt->params.p_w;
             params->sample_aspect_ratio.den = fmt->params.p_h;
             params->hw_frames_ctx = fmt->hwctx;
+            params->frame_rate = av_d2q(fmt->nominal_fps, 1000000);
             filter_name = "buffer";
         } else {
             assert(0);
@@ -611,6 +623,13 @@ static bool feed_input_pads(struct lavfi *c)
         AVFrame *frame = mp_frame_to_av(pad->pending, &pad->timebase);
         bool eof = pad->pending.type == MP_FRAME_EOF;
 
+        if (c->emulate_audio_pts && pad->pending.type == MP_FRAME_AUDIO) {
+            struct mp_aframe *aframe = pad->pending.data;
+            c->in_pts = mp_aframe_end_pts(aframe);
+            frame->pts = c->in_samples; // timebase is 1/sample_rate
+            c->in_samples += frame->nb_samples;
+        }
+
         mp_frame_unref(&pad->pending);
 
         if (!frame && !eof) {
@@ -656,6 +675,19 @@ static bool read_output_pads(struct lavfi *c)
 #endif
             struct mp_frame frame =
                 mp_frame_from_av(pad->type, c->tmp_frame, &pad->timebase);
+            if (c->emulate_audio_pts && frame.type == MP_FRAME_AUDIO) {
+                AVFrame *avframe = c->tmp_frame;
+                struct mp_aframe *aframe = frame.data;
+                double in_time = c->in_samples * av_q2d(c->in_pads[0]->timebase);
+                double out_time = avframe->pts * av_q2d(pad->timebase);
+                mp_aframe_set_pts(aframe, c->in_pts +
+                    (c->in_pts != MP_NOPTS_VALUE ? (out_time - in_time) : 0));
+            }
+            if (frame.type == MP_FRAME_VIDEO) {
+                struct mp_image *vframe = frame.data;
+                vframe->nominal_fps =
+                    av_q2d(av_buffersink_get_frame_rate(pad->buffer));
+            }
             av_frame_unref(c->tmp_frame);
             if (frame.type) {
                 mp_pin_in_write(pad->pin, frame);
@@ -871,6 +903,8 @@ struct lavfi_user_opts {
 
     char *filter_name;
     char **filter_opts;
+
+    int fix_pts;
 };
 
 static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
@@ -883,6 +917,10 @@ static struct mp_filter *lavfi_create(struct mp_filter *parent, void *options)
     } else {
         l = mp_lavfi_create_graph(parent, opts->type, true,
                                   opts->avopts, opts->graph);
+    }
+    if (l) {
+        struct lavfi *c = l->f->priv;
+        c->emulate_audio_pts = opts->fix_pts;
     }
     talloc_free(opts);
     return l ? l->f : NULL;
@@ -1030,6 +1068,7 @@ const struct mp_user_filter_entry af_lavfi = {
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .options = (const m_option_t[]){
             OPT_STRING("graph", graph, M_OPT_MIN, .min = 1),
+            OPT_FLAG("fix-pts", fix_pts, 0),
             OPT_KEYVALUELIST("o", avopts, 0),
             {0}
         },

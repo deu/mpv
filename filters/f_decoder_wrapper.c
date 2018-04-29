@@ -272,14 +272,13 @@ static void fix_image_params(struct priv *p,
         m.p_w = m.p_h = 1;
 
     m.rotate = p->codec->rotate;
-    m.stereo_in = p->codec->stereo_mode;
+    m.stereo3d = p->codec->stereo_mode;
 
     if (opts->video_rotate < 0) {
         m.rotate = 0;
     } else {
         m.rotate = (m.rotate + opts->video_rotate) % 360;
     }
-    m.stereo_out = opts->video_stereo_mode;
 
     mp_colorspace_merge(&m.color, &c->color);
 
@@ -336,7 +335,7 @@ static void process_video_frame(struct priv *p, struct mp_image *mpi)
 
         if (opts->correct_pts) {
             if (p->has_broken_decoded_pts <= 1) {
-                MP_WARN(p, "No video PTS! Making something up. using "
+                MP_WARN(p, "No video PTS! Making something up. Using "
                         "%f FPS.\n", fps);
                 if (p->has_broken_decoded_pts == 1)
                     MP_WARN(p, "Ignoring further missing PTS warnings.\n");
@@ -358,6 +357,7 @@ static void process_video_frame(struct priv *p, struct mp_image *mpi)
         fix_image_params(p, &mpi->params);
 
     mpi->params = p->fixed_format;
+    mpi->nominal_fps = p->public.fps;
 
     mpi->pts = pts;
     p->pts = pts;

@@ -263,13 +263,6 @@ void reinit_video_chain_src(struct MPContext *mpctx, struct track *track)
         mp_pin_connect(vo_c->filter->f->pins[0], vo_c->dec_src);
     }
 
-#if HAVE_ENCODING
-    if (mpctx->encode_lavc_ctx) {
-        encode_lavc_set_video_fps(mpctx->encode_lavc_ctx,
-                                  vo_c->filter->container_fps);
-    }
-#endif
-
     if (!recreate_video_filters(mpctx))
         goto err_out;
 
@@ -1019,6 +1012,9 @@ void write_video(struct MPContext *mpctx)
             } else {
                 mpctx->time_frame = 0;
             }
+            // Encode mode can't honor this; it'll only delay finishing.
+            if (mpctx->encode_lavc_ctx)
+                mpctx->time_frame = 0;
         }
 
         if (mpctx->video_status == STATUS_DRAINING) {
@@ -1063,7 +1059,7 @@ void write_video(struct MPContext *mpctx)
                 info->name, p.w, p.h, extra, mp_imgfmt_to_name(p.imgfmt), sfmt);
         MP_VERBOSE(mpctx, "VO: Description: %s\n", info->description);
 
-        int vo_r = vo_reconfig(vo, &p);
+        int vo_r = vo_reconfig2(vo, mpctx->next_frames[0]);
         if (vo_r < 0) {
             mpctx->error_playing = MPV_ERROR_VO_INIT_FAILED;
             goto error;

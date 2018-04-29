@@ -357,6 +357,7 @@ enum mp_filter_command_type {
     MP_FILTER_COMMAND_GET_META,
     MP_FILTER_COMMAND_SET_SPEED,
     MP_FILTER_COMMAND_SET_SPEED_RESAMPLE,
+    MP_FILTER_COMMAND_IS_ACTIVE,
 };
 
 struct mp_filter_command {
@@ -371,6 +372,9 @@ struct mp_filter_command {
 
     // For MP_FILTER_COMMAND_SET_SPEED and MP_FILTER_COMMAND_SET_SPEED_RESAMPLE
     double speed;
+
+    // For MP_FILTER_COMMAND_IS_ACTIVE
+    bool is_active;
 };
 
 // Run a command on the filter. Returns success. For libavfilter.
@@ -382,7 +386,6 @@ struct mp_stream_info {
     void *priv; // for use by whoever implements the callbacks
 
     double (*get_display_fps)(struct mp_stream_info *i);
-    double (*get_container_fps)(struct mp_stream_info *i);
 
     struct mp_hwdec_devices *hwdec_devs;
     struct osd_state *osd;

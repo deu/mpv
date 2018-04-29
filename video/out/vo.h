@@ -293,6 +293,12 @@ struct vo_driver {
     int (*reconfig)(struct vo *vo, struct mp_image_params *params);
 
     /*
+     * Like reconfig(), but provides the whole mp_image for which the change is
+     * required. (The image doesn't have to have real data.)
+     */
+    int (*reconfig2)(struct vo *vo, struct mp_image *img);
+
+    /*
      * Control interface
      */
     int (*control)(struct vo *vo, uint32_t request, void *data);
@@ -326,6 +332,14 @@ struct vo_driver {
      */
     struct mp_image *(*get_image)(struct vo *vo, int imgfmt, int w, int h,
                                   int stride_align);
+
+    /*
+     * Thread-safe variant of get_image. Set at most one of these callbacks.
+     * This excludes _all_ synchronization magic. The only guarantee is that
+     * vo_driver.uninit is not called before this function returns.
+     */
+    struct mp_image *(*get_image_ts)(struct vo *vo, int imgfmt, int w, int h,
+                                     int stride_align);
 
     /*
      * Render the given frame to the VO's backbuffer. This operation will be
@@ -432,6 +446,7 @@ struct vo {
 struct mpv_global;
 struct vo *init_best_video_out(struct mpv_global *global, struct vo_extra *ex);
 int vo_reconfig(struct vo *vo, struct mp_image_params *p);
+int vo_reconfig2(struct vo *vo, struct mp_image *img);
 
 int vo_control(struct vo *vo, int request, void *data);
 void vo_control_async(struct vo *vo, int request, void *data);

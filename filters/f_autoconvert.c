@@ -45,6 +45,9 @@ struct priv {
     double audio_speed;
     bool resampling_forced;
 
+    bool format_change_blocked;
+    bool format_change_cont;
+
     struct mp_autoconvert public;
 };
 
@@ -161,14 +164,7 @@ static void handle_video_frame(struct mp_filter *f)
 {
     struct priv *p = f->priv;
 
-    struct mp_frame frame = p->sub.frame;
-    if (frame.type != MP_FRAME_VIDEO) {
-        MP_ERR(p, "video input required!\n");
-        mp_filter_internal_mark_failed(f);
-        return;
-    }
-
-    struct mp_image *img = frame.data;
+    struct mp_image *img = p->sub.frame.data;
 
     if (p->force_update)
         p->in_imgfmt = p->in_subfmt = 0;
@@ -186,6 +182,11 @@ static void handle_video_frame(struct mp_filter *f)
     p->in_imgfmt = img->params.imgfmt;
     p->in_subfmt = img->params.hw_subfmt;
     p->force_update = false;
+
+    if (!p->num_imgfmts) {
+        mp_subfilter_continue(&p->sub);
+        return;
+    }
 
     bool different_subfmt = false;
 
@@ -278,30 +279,41 @@ static void handle_audio_frame(struct mp_filter *f)
 {
     struct priv *p = f->priv;
 
-    struct mp_frame frame = p->sub.frame;
-    if (frame.type != MP_FRAME_AUDIO) {
-        MP_ERR(p, "audio input required!\n");
-        mp_filter_internal_mark_failed(f);
-        return;
-    }
-
-    struct mp_aframe *aframe = frame.data;
+    struct mp_aframe *aframe = p->sub.frame.data;
 
     int afmt = mp_aframe_get_format(aframe);
     int srate = mp_aframe_get_rate(aframe);
     struct mp_chmap chmap = {0};
     mp_aframe_get_chmap(aframe, &chmap);
 
-    if (afmt == p->in_afmt && srate == p->in_srate &&
-        mp_chmap_equals(&chmap, &p->in_chmap) &&
-        (!p->resampling_forced || p->sub.filter) &&
-        !p->force_update)
-    {
-        goto cont;
+    if (p->resampling_forced && !af_fmt_is_pcm(afmt)) {
+        MP_WARN(p, "ignoring request to resample non-PCM audio for speed change\n");
+        p->resampling_forced = false;
     }
+
+    bool format_change = afmt != p->in_afmt ||
+                         srate != p->in_srate ||
+                         !mp_chmap_equals(&chmap, &p->in_chmap) ||
+                         p->force_update;
+
+    if (!format_change && (!p->resampling_forced || p->sub.filter))
+        goto cont;
 
     if (!mp_subfilter_drain_destroy(&p->sub))
         return;
+
+    if (format_change && p->public.on_audio_format_change) {
+        if (p->format_change_blocked)
+            return;
+
+        if (!p->format_change_cont) {
+            p->format_change_blocked = true;
+            p->public.
+                on_audio_format_change(p->public.on_audio_format_change_opaque);
+            return;
+        }
+        p->format_change_cont = false;
+    }
 
     p->in_afmt = afmt;
     p->in_srate = srate;
@@ -369,22 +381,28 @@ static void process(struct mp_filter *f)
     if (!mp_subfilter_read(&p->sub))
         return;
 
-    struct mp_frame frame = p->sub.frame;
+    if (p->sub.frame.type == MP_FRAME_VIDEO) {
+        handle_video_frame(f);
+        return;
+    }
 
-    if (!mp_frame_is_signaling(frame)) {
-        if (p->num_imgfmts) {
-            handle_video_frame(f);
-            return;
-        }
-        if (p->num_afmts || p->num_srates || p->chmaps.num_chmaps ||
-            p->resampling_forced)
-        {
-            handle_audio_frame(f);
-            return;
-        }
+    if (p->sub.frame.type == MP_FRAME_AUDIO) {
+        handle_audio_frame(f);
+        return;
     }
 
     mp_subfilter_continue(&p->sub);
+}
+
+void mp_autoconvert_format_change_continue(struct mp_autoconvert *c)
+{
+    struct priv *p = c->f->priv;
+
+    if (p->format_change_blocked) {
+        p->format_change_cont = true;
+        p->format_change_blocked = false;
+        mp_filter_wakeup(c->f);
+    }
 }
 
 static bool command(struct mp_filter *f, struct mp_filter_command *cmd)
@@ -400,6 +418,11 @@ static bool command(struct mp_filter *f, struct mp_filter_command *cmd)
         return true;
     }
 
+    if (cmd->type == MP_FILTER_COMMAND_IS_ACTIVE) {
+        cmd->is_active = !!p->sub.filter;
+        return true;
+    }
+
     return false;
 }
 
@@ -408,6 +431,9 @@ static void reset(struct mp_filter *f)
     struct priv *p = f->priv;
 
     mp_subfilter_reset(&p->sub);
+
+    p->format_change_cont = false;
+    p->format_change_blocked = false;
 }
 
 static void destroy(struct mp_filter *f)

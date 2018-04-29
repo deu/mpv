@@ -1153,6 +1153,9 @@ static void dispatch_compute(struct gl_video *p, int w, int h,
     int num_x = info.block_w > 0 ? (w + info.block_w - 1) / info.block_w : 1,
         num_y = info.block_h > 0 ? (h + info.block_h - 1) / info.block_h : 1;
 
+    if (!(p->ra->caps & RA_CAP_NUM_GROUPS))
+        PRELUDE("#define gl_NumWorkGroups uvec3(%d, %d, 1)\n", num_x, num_y);
+
     pass_record(p, gl_sc_dispatch_compute(p->sc, num_x, num_y, 1));
     cleanup_binds(p);
 }
@@ -2628,7 +2631,7 @@ static void pass_draw_osd(struct gl_video *p, int draw_flags, double pts,
     if ((draw_flags & OSD_DRAW_SUB_ONLY) && (draw_flags & OSD_DRAW_OSD_ONLY))
         return;
 
-    mpgl_osd_generate(p->osd, rect, pts, p->image_params.stereo_out, draw_flags);
+    mpgl_osd_generate(p->osd, rect, pts, p->image_params.stereo3d, draw_flags);
 
     timer_pool_start(p->osd_timer);
     for (int n = 0; n < MAX_OSD_PARTS; n++) {
@@ -3169,15 +3172,23 @@ done:
 void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
                          struct voctrl_screenshot *args)
 {
-    bool ok = false;
-    struct mp_image *res = NULL;
-
     if (!p->ra->fns->tex_download)
         return;
 
+    bool ok = false;
+    struct mp_image *res = NULL;
+    struct ra_tex *target = NULL;
     struct mp_rect old_src = p->src_rect;
     struct mp_rect old_dst = p->dst_rect;
     struct mp_osd_res old_osd = p->osd_rect;
+    struct vo_frame *nframe = vo_frame_ref(frame);
+
+    // Disable interpolation and such.
+    nframe->redraw = true;
+    nframe->repeat = false;
+    nframe->still = true;
+    nframe->pts = 0;
+    nframe->duration = -1;
 
     if (!args->scaled) {
         int w, h;
@@ -3216,7 +3227,7 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
 
     if (!params.format || !params.format->renderable)
         goto done;
-    struct ra_tex *target = ra_tex_create(p->ra, &params);
+    target = ra_tex_create(p->ra, &params);
     if (!target)
         goto done;
 
@@ -3225,7 +3236,7 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
         flags |= RENDER_FRAME_SUBS;
     if (args->osd)
         flags |= RENDER_FRAME_OSD;
-    gl_video_render_frame(p, frame, (struct ra_fbo){target}, flags);
+    gl_video_render_frame(p, nframe, (struct ra_fbo){target}, flags);
 
     res = mp_image_alloc(mpfmt, params.w, params.h);
     if (!res)
@@ -3244,6 +3255,7 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
 
     ok = true;
 done:
+    talloc_free(nframe);
     ra_tex_free(p->ra, &target);
     gl_video_resize(p, &old_src, &old_dst, &old_osd);
     if (!ok)
@@ -3285,7 +3297,7 @@ void gl_video_resize(struct gl_video *p,
     gl_video_reset_surfaces(p);
 
     if (p->osd)
-        mpgl_osd_resize(p->osd, p->osd_rect, p->image_params.stereo_out);
+        mpgl_osd_resize(p->osd, p->osd_rect, p->image_params.stereo3d);
 }
 
 static void frame_perf_data(struct pass_info pass[], struct mp_frame_perf *out)
@@ -3506,7 +3518,6 @@ static void check_gl_features(struct gl_video *p)
     bool have_compute = ra->caps & RA_CAP_COMPUTE;
     bool have_ssbo = ra->caps & RA_CAP_BUF_RW;
     bool have_fragcoord = ra->caps & RA_CAP_FRAGCOORD;
-    bool have_numgroups = ra->caps & RA_CAP_NUM_GROUPS;
 
     const char *auto_fbo_fmts[] = {"rgba16", "rgba16f", "rgba16hf",
                                    "rgb10_a2", "rgba8", 0};
@@ -3540,10 +3551,12 @@ static void check_gl_features(struct gl_video *p)
         MP_VERBOSE(p, "Disabling alpha checkerboard (no gl_FragCoord).\n");
     }
 
-    bool have_compute_peak = have_compute && have_ssbo && have_numgroups;
+    bool have_compute_peak = have_compute && have_ssbo;
     if (!have_compute_peak && p->opts.compute_hdr_peak >= 0) {
         int msgl = p->opts.compute_hdr_peak == 1 ? MSGL_WARN : MSGL_V;
-        MP_MSG(p, msgl, "Disabling HDR peak computation (no compute shaders).\n");
+        MP_MSG(p, msgl, "Disabling HDR peak computation (one or more of the "
+                        "following is not supported: compute shaders=%d, "
+                        "SSBO=%d).\n", have_compute, have_ssbo);
         p->opts.compute_hdr_peak = -1;
     }
 

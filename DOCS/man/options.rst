@@ -1146,21 +1146,18 @@ Video
     N frames fail to decode in a row. 1 is equivalent to ``yes``.
 
 ``--vd-lavc-dr=<yes|no>``
-    Enable direct rendering (default: no). If this is set to ``yes``, the
+    Enable direct rendering (default: yes). If this is set to ``yes``, the
     video will be decoded directly to GPU video memory (or staging buffers).
     This can speed up video upload, and may help with large resolutions or
     slow hardware. This works only with the following VOs:
 
-        - ``gpu``: requires at least OpenGL 4.4.
+        - ``gpu``: requires at least OpenGL 4.4 or Vulkan.
 
-    (In particular, this can't be made work with ``opengl-cb``.)
+    (In particular, this can't be made work with ``opengl-cb``, but the libmpv
+    render API has optional support.)
 
     Using video filters of any kind that write to the image data (or output
     newly allocated frames) will silently disable the DR code path.
-
-    There are some corner cases that will result in undefined behavior (crashes
-    and other strange behavior) if this option is enabled. These are pending
-    towards being fixed properly at a later point.
 
 ``--vd-lavc-bitexact``
     Only use bit-exact algorithms in all decoding steps (for codec testing).
@@ -1553,9 +1550,10 @@ Audio
             changes, the audio device is closed and reopened. This means that
             you will normally get gapless audio with files that were encoded
             using the same settings, but might not be gapless in other cases.
-            (Unlike with ``yes``, you don't have to worry about corner cases
-            like the first file setting a very low quality output format, and
-            ruining the playback of higher quality files that follow.)
+            The exact conditions under which the audio device is kept open is
+            an implementation detail, and can change from version to version.
+            Currently, the device is kept even if the sample format changes,
+            but the sample formats are convertible.
 
     .. note::
 
@@ -2263,7 +2261,7 @@ Window
 
     .. admonition:: Note (X11)
 
-        This option does works properly only with window managers which
+        This option works properly only with window managers which
         understand the EWMH ``_NET_WM_FULLSCREEN_MONITORS`` hint.
 
     .. admonition:: Note (OS X)
@@ -4158,6 +4156,20 @@ ALSA audio output options
     this case you should always force the same layout with ``--audio-channels``,
     or it will work only for files which use the layout implicit to your
     ALSA device).
+
+``--alsa-buffer-time=<microseconds>``
+    Set the requested buffer time in microseconds. A value of 0 skips requesting
+    anything from the ALSA API. This and the ``--alsa-periods`` option uses the
+    ALSA ``near`` functions to set the requested parameters. If doing so results
+    in an empty configuration set, setting these parameters is skipped.
+
+    Both options control the buffer size. A low buffer size can lead to higher
+    CPU usage and audio dropouts, while a high buffer size can lead to higher
+    latency in volume changes and other filtering.
+
+``--alsa-periods=<number>``
+    Number of periods requested from the ALSA API. See ``--alsa-buffer-time``
+    for further remarks.
 
 
 GPU renderer options

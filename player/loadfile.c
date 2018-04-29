@@ -31,6 +31,7 @@
 #include "osdep/threads.h"
 #include "osdep/timer.h"
 
+#include "client.h"
 #include "common/msg.h"
 #include "common/global.h"
 #include "options/path.h"
@@ -1324,9 +1325,9 @@ reopen_file:
 
 #if HAVE_ENCODING
     if (mpctx->encode_lavc_ctx && mpctx->current_track[0][STREAM_VIDEO])
-        encode_lavc_expect_stream(mpctx->encode_lavc_ctx, AVMEDIA_TYPE_VIDEO);
+        encode_lavc_expect_stream(mpctx->encode_lavc_ctx, STREAM_VIDEO);
     if (mpctx->encode_lavc_ctx && mpctx->current_track[0][STREAM_AUDIO])
-        encode_lavc_expect_stream(mpctx->encode_lavc_ctx, AVMEDIA_TYPE_AUDIO);
+        encode_lavc_expect_stream(mpctx->encode_lavc_ctx, STREAM_AUDIO);
     if (mpctx->encode_lavc_ctx) {
         encode_lavc_set_metadata(mpctx->encode_lavc_ctx,
                                  mpctx->demuxer->metadata);
@@ -1542,6 +1543,15 @@ struct playlist_entry *mp_next_file(struct MPContext *mpctx, int direction,
 // Return if all done.
 void mp_play_files(struct MPContext *mpctx)
 {
+    // Wait for all scripts to load before possibly starting playback.
+    if (!mp_clients_all_initialized(mpctx)) {
+        MP_VERBOSE(mpctx, "Waiting for scripts...\n");
+        while (!mp_clients_all_initialized(mpctx))
+            mp_idle(mpctx);
+        mp_wakeup_core(mpctx); // avoid lost wakeups during waiting
+        MP_VERBOSE(mpctx, "Done loading scripts.\n");
+    }
+
     prepare_playlist(mpctx, mpctx->playlist);
 
     for (;;) {
@@ -1569,6 +1579,20 @@ void mp_play_files(struct MPContext *mpctx)
     }
 
     cancel_open(mpctx);
+
+#if HAVE_ENCODING
+    if (mpctx->encode_lavc_ctx) {
+        // Make sure all streams get finished.
+        uninit_audio_out(mpctx);
+        uninit_video_out(mpctx);
+
+        if (!encode_lavc_free(mpctx->encode_lavc_ctx))
+            mpctx->stop_play = PT_ERROR;
+
+        mpctx->encode_lavc_ctx = NULL;
+    }
+#endif
+
 }
 
 // Abort current playback and set the given entry to play next.

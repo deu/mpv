@@ -8,9 +8,8 @@ You can encode files from one format/codec to another using this facility.
 
 ``--of=<format>``
     Specifies the output format (overrides autodetection by the file name
-    extension of the file specified by ``-o``). This can be a comma separated
-    list of possible formats to try. See ``--of=help`` for a full list of
-    supported formats.
+    extension of the file specified by ``-o``). See ``--of=help`` for a full
+    list of supported formats.
 
 ``--ofopts=<options>``
     Specifies the output format options for libavformat.
@@ -59,13 +58,12 @@ You can encode files from one format/codec to another using this facility.
     avoid ``--oautofps``.
 
 ``--oac=<codec>``
-    Specifies the output audio codec. This can be a comma separated list of
-    possible codecs to try. See ``--oac=help`` for a full list of supported
-    codecs.
+    Specifies the output audio codec. See ``--oac=help`` for a full list of
+    supported codecs.
 
 ``--oaoffset=<value>``
     Shifts audio data by the given time (in seconds) by adding/removing
-    samples at the start.
+    samples at the start. Deprecated.
 
 ``--oacopts=<options>``
     Specifies the output audio codec options for libavcodec.
@@ -94,16 +92,15 @@ You can encode files from one format/codec to another using this facility.
 
 ``--oafirst``
     Force the audio stream to become the first stream in the output.
-    By default, the order is unspecified.
+    By default, the order is unspecified. Deprecated.
 
 ``--ovc=<codec>``
-    Specifies the output video codec. This can be a comma separated list of
-    possible codecs to try. See ``--ovc=help`` for a full list of supported
-    codecs.
+    Specifies the output video codec. See ``--ovc=help`` for a full list of
+    supported codecs.
 
 ``--ovoffset=<value>``
     Shifts video data by the given time (in seconds) by shifting the pts
-    values.
+    values. Deprecated.
 
 ``--ovcopts <options>``
     Specifies the output video codec options for libavcodec.
@@ -135,7 +132,7 @@ You can encode files from one format/codec to another using this facility.
 
 ``--ovfirst``
     Force the video stream to become the first stream in the output.
-    By default, the order is unspecified.
+    By default, the order is unspecified. Deprecated.
 
 ``--ocopyts``
     Copies input pts to the output video (not supported by some output

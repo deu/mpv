@@ -452,16 +452,16 @@ static void mp_destroy_client(mpv_handle *ctx, bool terminate)
         mpctx->stop_play = PT_QUIT;
         mp_dispatch_unlock(mpctx->dispatch);
 
-        // Stop the core thread.
+        pthread_t playthread;
+        mp_dispatch_run(mpctx->dispatch, get_thread, &playthread);
+
+        // Ask the core thread to stop.
         pthread_mutex_lock(&clients->lock);
         clients->terminate_core_thread = true;
         pthread_mutex_unlock(&clients->lock);
         mp_wakeup_core(mpctx);
 
         // Blocking wait for all clients and core thread to terminate.
-        pthread_t playthread;
-        mp_dispatch_run(mpctx->dispatch, get_thread, &playthread);
-
         pthread_join(playthread, NULL);
 
         mp_destroy(mpctx);
@@ -578,6 +578,7 @@ int mpv_initialize(mpv_handle *ctx)
 {
     lock_core(ctx);
     int res = mp_initialize(ctx->mpctx, NULL) ? MPV_ERROR_INVALID_PARAMETER : 0;
+    mp_wakeup_core(ctx->mpctx);
     unlock_core(ctx);
     return res;
 }
@@ -1748,18 +1749,39 @@ int64_t mpv_get_time_us(mpv_handle *ctx)
 
 #include "video/out/libmpv.h"
 
-// Used by vo_libmpv to synchronously uninitialize video.
-void kill_video(struct mp_client_api *client_api)
+struct kill_ctx {
+    struct MPContext *mpctx;
+    void (*fin)(void *ctx);
+    void *fin_ctx;
+};
+
+static void do_kill(void *ptr)
 {
-    struct MPContext *mpctx = client_api->mpctx;
-    mp_dispatch_lock(mpctx->dispatch);
+    struct kill_ctx *k = ptr;
+    struct MPContext *mpctx = k->mpctx;
+
     struct track *track = mpctx->vo_chain ? mpctx->vo_chain->track : NULL;
     uninit_video_out(mpctx);
     if (track) {
         mpctx->error_playing = MPV_ERROR_VO_INIT_FAILED;
         error_on_track(mpctx, track);
     }
-    mp_dispatch_unlock(mpctx->dispatch);
+
+    k->fin(k->fin_ctx);
+}
+
+// Used by vo_libmpv to (a)synchronously uninitialize video.
+void kill_video_async(struct mp_client_api *client_api, void (*fin)(void *ctx),
+                      void *fin_ctx)
+{
+    struct MPContext *mpctx = client_api->mpctx;
+    struct kill_ctx *k = talloc_ptrtype(NULL, k);
+    *k = (struct kill_ctx){
+        .mpctx = mpctx,
+        .fin = fin,
+        .fin_ctx = fin_ctx,
+    };
+    mp_dispatch_enqueue_autofree(mpctx->dispatch, do_kill, k);
 }
 
 // Used by vo_libmpv to set the current render context.

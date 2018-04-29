@@ -58,25 +58,27 @@ Interface changes
           between PCM and AC3 output, the audio output won't be reconfigured,
           and audio playback will fail due to libswresample being unable to
           convert between PCM and AC3 (Note: the responsible developer didn't
-          give a shit)
-        - inserting a filter that changes the output channel layout will not
+          give a shit. Later changes might have improved or worsened this.)
+        - inserting a filter that changes the output sample format will not
           reconfigure the AO - you need to run an additional "ao-reload"
           command to force this if you want that
         - using "strong" gapless audio (--gapless-audio=yes) can fail if the
           audio formats are not convertible (such as switching between PCM and
           AC3 passthrough)
         - if filters do not pass through PTS values correctly, A/V sync can
-          result over time
+          result over time. Some libavfilter filters are known to be affected by
+          this, such as af_loudnorm, which can desync over time, depending on
+          how the audio track was muxed (af_lavfi's fix-pts suboption can help).
     - remove out-format sub-parameter from "format" audio filter (no replacement)
     - --lavfi-complex now requires uniquely named filter pads. In addition,
       unconnected filter pads are not allowed anymore (that means every filter
       pad must be connected either to another filter, or to a video/audio track
       or video/audio output). If they are disconnected at runtime, the stream
       will probably stall.
-    - deprecate the OpenGL cocoa backend, option choice --gpu-context=cocoa
-      when used with --gpu-api=opengl (use --vo=opengl-cb)
     - rename --vo=opengl-cb to --vo=libmpv (goes in hand with the opengl-cb
       API deprecation, see client-api-changes.rst)
+    - deprecate the OpenGL cocoa backend, option choice --gpu-context=cocoa
+      when used with --gpu-api=opengl (use --vo=libmpv)
     - make --deinterlace=yes always deinterlace, instead of trying to check
       certain unreliable video metadata. Also flip the defaults of all builtin
       HW deinterlace filters to always deinterlace.
@@ -86,6 +88,18 @@ Interface changes
     - deprecate the old command based hook API, and introduce a proper C API
       (the high level Lua API for this does not change)
     - rename the the lua-settings/ config directory to script-opts/
+    - the way the player waits for scripts getting loaded changes slightly. Now
+      scripts are loaded in parallel, and block the player from continuing
+      playback only in the player initialization phase. It could change again in
+      the future. (This kind of waiting was always a feature to prevent that
+      playback is started while scripts are only half-loaded.)
+    - deprecate --ovoffset, --oaoffset, --ovfirst, --oafirst
+    - remove --video-stereo-mode. This option was broken out of laziness, and
+      nobody wants to fix it. Automatic 3D down-conversion to 2D is also broken,
+      although you can just insert the stereo3d filter manually. The obscurity
+      of 3D content doesn't justify such an option anyway.
+    - change cycle-values command to use the current value, instead of an
+      internal counter that remembered the current position.
  --- mpv 0.28.0 ---
     - rename --hwdec=mediacodec option to mediacodec-copy, to reflect
       conventions followed by other hardware video decoding APIs
