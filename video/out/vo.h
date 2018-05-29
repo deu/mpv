@@ -45,10 +45,13 @@ enum {
     VO_EVENT_LIVE_RESIZING              = 1 << 5,
     // Window fullscreen state changed via external influence.
     VO_EVENT_FULLSCREEN_STATE           = 1 << 6,
+    // Special thing for encode mode (vo_driver.initially_blocked).
+    // Part of VO_EVENTS_USER to make vo_is_ready_for_frame() work properly.
+    VO_EVENT_INITIAL_UNBLOCK            = 1 << 7,
 
     // Set of events the player core may be interested in.
     VO_EVENTS_USER = VO_EVENT_RESIZE | VO_EVENT_WIN_STATE |
-                     VO_EVENT_FULLSCREEN_STATE,
+                     VO_EVENT_FULLSCREEN_STATE | VO_EVENT_INITIAL_UNBLOCK,
 };
 
 enum mp_voctrl {
@@ -264,6 +267,12 @@ struct vo_driver {
     // Encoding functionality, which can be invoked via --o only.
     bool encode;
 
+    // This requires waiting for a VO_EVENT_INITIAL_UNBLOCK event before the
+    // first frame can be sent. Doing vo_reconfig*() calls is allowed though.
+    // Encode mode uses this, the core uses vo_is_ready_for_frame() to
+    // implicitly check for this.
+    bool initially_blocked;
+
     // VO_CAP_* bits
     int caps;
 
@@ -354,6 +363,9 @@ struct vo_driver {
 
     /* Render the given frame. Note that this is also called when repeating
      * or redrawing frames.
+     *
+     * frame is freed by the caller, but the callee can still modify the
+     * contained data and references.
      */
     void (*draw_frame)(struct vo *vo, struct vo_frame *frame);
 

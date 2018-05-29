@@ -256,6 +256,7 @@ void reinit_video_chain_src(struct MPContext *mpctx, struct track *track)
         vo_c->dec_src = track->dec->f->pins[0];
         vo_c->filter->container_fps = track->dec->fps;
         vo_c->is_coverart = !!track->stream->attached_picture;
+        vo_c->is_sparse = track->stream->still_image;
 
         track->vo_c = vo_c;
         vo_c->track = track;
@@ -365,9 +366,12 @@ static void handle_new_frame(struct MPContext *mpctx)
 
     double frame_time = 0;
     double pts = mpctx->next_frames[0]->pts;
+    bool is_sparse = mpctx->vo_chain && mpctx->vo_chain->is_sparse;
+
     if (mpctx->video_pts != MP_NOPTS_VALUE) {
         frame_time = pts - mpctx->video_pts;
-        double tolerance = mpctx->demuxer->ts_resets_possible ? 5 : 1e4;
+        double tolerance = mpctx->demuxer->ts_resets_possible &&
+                           !is_sparse ? 5 : 1e4;
         if (frame_time <= 0 || frame_time >= tolerance) {
             // Assume a discontinuity.
             MP_WARN(mpctx, "Invalid video timestamp: %f -> %f\n",
@@ -401,6 +405,9 @@ static int get_req_frames(struct MPContext *mpctx, bool eof)
         return 1;
 
     if (mpctx->video_out->driver->caps & VO_CAP_NORETAIN)
+        return 1;
+
+    if (mpctx->vo_chain && mpctx->vo_chain->is_sparse)
         return 1;
 
     if (mpctx->opts->untimed || mpctx->video_out->driver->untimed)
@@ -592,6 +599,9 @@ static void update_av_diff(struct MPContext *mpctx, double offset)
 
     if (mpctx->audio_status != STATUS_PLAYING ||
         mpctx->video_status != STATUS_PLAYING)
+        return;
+
+    if (mpctx->vo_chain && mpctx->vo_chain->is_sparse)
         return;
 
     double a_pos = playing_audio_pts(mpctx);
@@ -1017,12 +1027,17 @@ void write_video(struct MPContext *mpctx)
                 mpctx->time_frame = 0;
         }
 
-        if (mpctx->video_status == STATUS_DRAINING) {
+        // Wait for the VO to signal actual EOF, then exit if the frame timer
+        // has expired.
+        if (mpctx->video_status == STATUS_DRAINING &&
+            vo_is_ready_for_frame(vo, -1))
+        {
             mpctx->time_frame -= get_relative_time(mpctx);
             mp_set_timeout(mpctx, mpctx->time_frame);
             if (mpctx->time_frame <= 0) {
                 MP_VERBOSE(mpctx, "video EOF reached\n");
                 mpctx->video_status = STATUS_EOF;
+                encode_lavc_stream_eof(mpctx->encode_lavc_ctx, STREAM_VIDEO);
             }
         }
 

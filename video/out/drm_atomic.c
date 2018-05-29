@@ -78,6 +78,17 @@ int drm_object_get_property(struct drm_object *object, char *name, uint64_t *val
    return -EINVAL;
 }
 
+drmModePropertyBlobPtr drm_object_get_property_blob(struct drm_object *object, char *name)
+{
+   uint64_t blob_id;
+
+   if (!drm_object_get_property(object, name, &blob_id)) {
+       return drmModeGetPropertyBlob(object->fd, blob_id);
+   }
+
+   return NULL;
+}
+
 int drm_object_set_property(drmModeAtomicReq *request, struct drm_object *object,
                             char *name, uint64_t value)
 {
@@ -98,6 +109,7 @@ struct drm_object * drm_object_create(struct mp_log *log, int fd,
     obj = talloc_zero(NULL, struct drm_object);
     obj->id = object_id;
     obj->type = type;
+    obj->fd = fd;
 
     if (drm_object_create_properties(log, fd, obj)) {
         talloc_free(obj);
@@ -125,16 +137,18 @@ void drm_object_print_info(struct mp_log *log, struct drm_object *object)
                (long long)object->props->prop_values[i]);
 }
 
-struct drm_atomic_context *drm_atomic_create_context(struct mp_log *log, int fd,
-                                                     int crtc_id, int overlay_id)
+struct drm_atomic_context *drm_atomic_create_context(struct mp_log *log, int fd, int crtc_id,
+                                                     int connector_id, int osd_plane_id, int video_plane_id)
 {
-    drmModePlane *drmplane = NULL;
     drmModePlaneRes *plane_res = NULL;
     drmModeRes *res = NULL;
     struct drm_object *plane = NULL;
     struct drm_atomic_context *ctx;
     int crtc_index = -1;
-    int layercount = 0;
+    int layercount = -1;
+    int primary_id = 0;
+    int overlay_id = 0;
+
     uint64_t value;
 
     res = drmModeGetResources(fd);
@@ -169,55 +183,95 @@ struct drm_atomic_context *drm_atomic_create_context(struct mp_log *log, int fd,
         }
     }
 
+    for (int i = 0; i < res->count_connectors; i++) {
+        drmModeConnector *connector = drmModeGetConnector(fd, res->connectors[i]);
+        if (connector) {
+            if (connector->connector_id == connector_id)
+                ctx->connector =  drm_object_create(log, ctx->fd, connector->connector_id,
+                                                    DRM_MODE_OBJECT_CONNECTOR);
+
+            drmModeFreeConnector(connector);
+            if (ctx->connector)
+                break;
+        }
+    }
+
     for (unsigned int j = 0; j < plane_res->count_planes; j++) {
 
-        drmplane = drmModeGetPlane (ctx->fd, plane_res->planes[j]);
-        if (drmplane->possible_crtcs & (1 << crtc_index)) {
-            plane = drm_object_create(log, ctx->fd, drmplane->plane_id,
-                                      DRM_MODE_OBJECT_PLANE);
-
-            if (plane) {
-                if (drm_object_get_property(plane, "TYPE", &value) == -EINVAL) {
-                    mp_err(log, "Unable to retrieve type property from plane %d\n", j);
-                    goto fail;
-                } else {
-                    if ((value == DRM_PLANE_TYPE_OVERLAY) &&
-                            (layercount == overlay_id)) {
-                        ctx->overlay_plane = plane;
-                    }
-                    else if (value == DRM_PLANE_TYPE_PRIMARY) {
-                        ctx->primary_plane = plane;
-                    }
-                    else {
-                        drm_object_free(plane);
-                        plane = NULL;
-                    }
-
-                    if (value == DRM_PLANE_TYPE_OVERLAY)
-                        layercount++;
-                }
-            } else {
-                mp_err(log, "Failed to create Plane object from plane ID %d\n",
-                       drmplane->plane_id);
-                goto fail;
-            }
-        }
+        drmModePlane *drmplane = drmModeGetPlane(ctx->fd, plane_res->planes[j]);
+        const uint32_t possible_crtcs = drmplane->possible_crtcs;
+        const uint32_t plane_id = drmplane->plane_id;
         drmModeFreePlane(drmplane);
         drmplane = NULL;
+
+        if (possible_crtcs & (1 << crtc_index)) {
+            plane = drm_object_create(log, ctx->fd, plane_id,
+                                      DRM_MODE_OBJECT_PLANE);
+
+            if (!plane) {
+                mp_err(log, "Failed to create Plane object from plane ID %d\n",
+                       plane_id);
+                goto fail;
+            }
+
+            if (drm_object_get_property(plane, "TYPE", &value) == -EINVAL) {
+                mp_err(log, "Unable to retrieve type property from plane %d\n", j);
+                goto fail;
+            }
+
+            if (value != DRM_PLANE_TYPE_CURSOR) { // Skip cursor planes
+                layercount++;
+
+                if ((!primary_id) && (value == DRM_PLANE_TYPE_PRIMARY))
+                    primary_id = plane_id;
+
+                if ((!overlay_id) && (value == DRM_PLANE_TYPE_OVERLAY))
+                    overlay_id = plane_id;
+
+                if (layercount == osd_plane_id) {
+                    ctx->osd_plane = plane;
+                    continue;
+                }
+
+                if (layercount == video_plane_id) {
+                    ctx->video_plane = plane;
+                    continue;
+                }
+            }
+
+            drm_object_free(plane);
+            plane = NULL;
+        }
     }
 
-    if (!ctx->primary_plane) {
-        mp_err(log, "Failed to find primary plane\n");
-        goto fail;
+    // default OSD plane to primary if unspecified
+    if (!ctx->osd_plane) {
+        if (primary_id) {
+            mp_verbose(log, "Using default plane %d for OSD\n", primary_id);
+            ctx->osd_plane = drm_object_create(log, ctx->fd, primary_id, DRM_MODE_OBJECT_PLANE);
+        } else {
+            mp_err(log, "Failed to find OSD plane with id=%d\n", osd_plane_id);
+            goto fail;
+        }
+    } else {
+        mp_verbose(log, "Found OSD plane with ID %d\n", ctx->osd_plane->id);
     }
 
-    if (!ctx->overlay_plane) {
-        mp_err(log, "Failed to find overlay plane with id=%d\n", overlay_id);
-        goto fail;
+    // default video plane to overlay if unspecified
+    if (!ctx->video_plane) {
+        if (overlay_id) {
+            mp_verbose(log, "Using default plane %d for video\n", overlay_id);
+            ctx->video_plane = drm_object_create(log, ctx->fd, overlay_id, DRM_MODE_OBJECT_PLANE);
+        } else {
+            mp_err(log, "Failed to find video plane with id=%d\n", video_plane_id);
+            goto fail;
+        }
+    } else {
+        mp_verbose(log, "Found video plane with ID %d\n", ctx->video_plane->id);
     }
 
-    mp_verbose(log, "Found Primary plane with ID %d, overlay with ID %d\n",
-               ctx->primary_plane->id, ctx->overlay_plane->id);
+    mp_verbose(log, "Found Video plane with ID %d, OSD with ID %d\n",
+               ctx->video_plane->id, ctx->osd_plane->id);
 
     drmModeFreePlaneResources(plane_res);
     drmModeFreeResources(res);
@@ -229,8 +283,6 @@ fail:
         drmModeFreeResources(res);
     if (plane_res)
         drmModeFreePlaneResources(plane_res);
-    if (drmplane)
-        drmModeFreePlane(drmplane);
     if (plane)
         drm_object_free(plane);
     return NULL;
@@ -239,7 +291,8 @@ fail:
 void drm_atomic_destroy_context(struct drm_atomic_context *ctx)
 {
     drm_object_free(ctx->crtc);
-    drm_object_free(ctx->primary_plane);
-    drm_object_free(ctx->overlay_plane);
+    drm_object_free(ctx->connector);
+    drm_object_free(ctx->osd_plane);
+    drm_object_free(ctx->video_plane);
     talloc_free(ctx);
 }

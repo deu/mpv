@@ -22,11 +22,14 @@
 #include "common/msg.h"
 #include "options/m_option.h"
 
-#include "cmd_parse.h"
-#include "cmd_list.h"
+#include "cmd.h"
 #include "input.h"
 
 #include "libmpv/client.h"
+
+const struct mp_cmd_def mp_cmd_list = {
+    .name = "list",
+};
 
 static void destroy_cmd(void *ptr)
 {
@@ -82,7 +85,6 @@ static bool find_cmd(struct mp_log *log, struct mp_cmd *cmd, bstr name)
         if (strcmp(nname, mp_cmds[n].name) == 0) {
             cmd->def = &mp_cmds[n];
             cmd->name = (char *)cmd->def->name;
-            cmd->id = cmd->def->id;
             return true;
         }
     }
@@ -251,13 +253,6 @@ static struct mp_cmd *parse_cmd_str(struct mp_log *log, void *tmp,
     };
 
     ctx->str = bstr_lstrip(ctx->str);
-    bstr old = ctx->str;
-    if (mp_replace_legacy_cmd(ctx->tmp, &ctx->str)) {
-        MP_WARN(ctx, "Warning: command '%.*s' is deprecated, "
-                "replaced with '%.*s' at %s.\n",
-                BSTR_P(old), BSTR_P(ctx->str), loc);
-        ctx->start = ctx->str;
-    }
 
     bstr cur_token;
     if (pctx_read_token(ctx, &cur_token) < 0)
@@ -321,12 +316,7 @@ error:
     return NULL;
 }
 
-static struct mp_cmd_def list_def = {
-    .id = MP_CMD_COMMAND_LIST,
-    .name = "list",
-};
-
-mp_cmd_t *mp_input_parse_cmd_(struct mp_log *log, bstr str, const char *loc)
+mp_cmd_t *mp_input_parse_cmd_str(struct mp_log *log, bstr str, const char *loc)
 {
     void *tmp = talloc_new(NULL);
     bstr original = str;
@@ -348,9 +338,8 @@ mp_cmd_t *mp_input_parse_cmd_(struct mp_log *log, bstr str, const char *loc)
             struct mp_cmd *list = talloc_ptrtype(NULL, list);
             talloc_set_destructor(list, destroy_cmd);
             *list = (struct mp_cmd) {
-                .id = list_def.id,
-                .name = (char *)list_def.name,
-                .def = &list_def,
+                .name = (char *)mp_cmd_list.name,
+                .def = &mp_cmd_list,
                 .original = bstrdup(list, original),
             };
             talloc_steal(list, cmd);
@@ -414,7 +403,7 @@ mp_cmd_t *mp_cmd_clone(mp_cmd_t *cmd)
     ret->original = bstrdup(ret, cmd->original);
     ret->key_name = talloc_strdup(ret, ret->key_name);
 
-    if (cmd->id == MP_CMD_COMMAND_LIST) {
+    if (cmd->def == &mp_cmd_list) {
         struct mp_cmd *prev = NULL;
         for (struct mp_cmd *sub = cmd->args[0].v.p; sub; sub = sub->queue_next) {
             sub = mp_cmd_clone(sub);
@@ -452,6 +441,61 @@ void mp_cmd_dump(struct mp_log *log, int msgl, char *header, struct mp_cmd *cmd)
         talloc_free(s);
     }
     mp_msg(log, msgl, "]\n");
+}
+
+// 0: no, 1: maybe, 2: sure
+static int is_abort_cmd(struct mp_cmd *cmd)
+{
+    if (cmd->def->is_abort)
+        return 2;
+    if (cmd->def->is_soft_abort)
+        return 1;
+    if (cmd->def == &mp_cmd_list) {
+        int r = 0;
+        for (struct mp_cmd *sub = cmd->args[0].v.p; sub; sub = sub->queue_next) {
+            int x = is_abort_cmd(sub);
+            r = MPMAX(r, x);
+        }
+        return r;
+    }
+    return 0;
+}
+
+bool mp_input_is_maybe_abort_cmd(struct mp_cmd *cmd)
+{
+    return is_abort_cmd(cmd) >= 1;
+}
+
+bool mp_input_is_abort_cmd(struct mp_cmd *cmd)
+{
+    return is_abort_cmd(cmd) >= 2;
+}
+
+bool mp_input_is_repeatable_cmd(struct mp_cmd *cmd)
+{
+    return (cmd->def->allow_auto_repeat) || cmd->def == &mp_cmd_list ||
+           (cmd->flags & MP_ALLOW_REPEAT);
+}
+
+bool mp_input_is_scalable_cmd(struct mp_cmd *cmd)
+{
+    return cmd->def->scalable;
+}
+
+void mp_print_cmd_list(struct mp_log *out)
+{
+    for (int i = 0; mp_cmds[i].name; i++) {
+        const struct mp_cmd_def *def = &mp_cmds[i];
+        mp_info(out, "%-20.20s", def->name);
+        for (int j = 0; j < MP_CMD_DEF_MAX_ARGS && def->args[j].type; j++) {
+            const char *type = def->args[j].type->name;
+            if (def->args[j].defval)
+                mp_info(out, " [%s]", type);
+            else
+                mp_info(out, " %s", type);
+        }
+        mp_info(out, "\n");
+    }
 }
 
 static int parse_cycle_dir(struct mp_log *log, const struct m_option *opt,

@@ -342,10 +342,6 @@ iconv support use --disable-iconv.",
                     check_statement('zlib.h', 'inflate(0, Z_NO_FLUSH)')),
         'req': True,
         'fmsg': 'Unable to find development files for zlib.'
-    } , {
-        'name' : '--encoding',
-        'desc' : 'Encoding',
-        'func': check_true,
     }, {
         'name': '--libbluray',
         'desc': 'Bluray support',
@@ -846,8 +842,7 @@ hwaccel_features = [
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',
         'deps': 'gl && ffnvcodec',
-        'func': check_cc(fragment=load_fragment('cuda.c'),
-                         use='libavcodec'),
+        'func': check_true,
     }
 ]
 

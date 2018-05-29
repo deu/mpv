@@ -101,9 +101,7 @@ const struct vo_driver *const video_out_drivers[] =
 #if HAVE_DRM
     &video_out_drm,
 #endif
-#if HAVE_ENCODING
     &video_out_lavc,
-#endif
     NULL
 };
 
@@ -750,7 +748,9 @@ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts)
 {
     struct vo_internal *in = vo->in;
     pthread_mutex_lock(&in->lock);
-    bool r = vo->config_ok && !in->frame_queued &&
+    bool blocked = vo->driver->initially_blocked &&
+                   !(in->internal_events & VO_EVENT_INITIAL_UNBLOCK);
+    bool r = vo->config_ok && !in->frame_queued && !blocked &&
              (!in->current_frame || in->current_frame->num_vsyncs < 1);
     if (r && next_pts >= 0) {
         // Don't show the frame too early - it would basically freeze the

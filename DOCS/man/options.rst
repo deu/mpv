@@ -76,17 +76,6 @@ Track Selection
     streamed with youtube-dl, because it saves bandwidth. This is done by
     setting the ytdl_format to "bestaudio/best" in the ytdl_hook.lua script.
 
-``--ff-aid=<ID|auto|no>``, ``--ff-sid=<ID|auto|no>``, ``--ff-vid=<ID|auto|no>``
-    Select audio/subtitle/video streams by the FFmpeg stream index. The FFmpeg
-    stream index is relatively arbitrary, but useful when interacting with
-    other software using FFmpeg (consider ``ffprobe``).
-
-    Note that with external tracks (added with ``--sub-files`` and similar
-    options), there will be streams with duplicate IDs. In this case, the
-    first stream in order is selected.
-
-    Deprecated.
-
 ``--edition=<ID|auto>``
     (Matroska files only)
     Specify the edition (set of chapters) to use, where 0 is the first. If set
@@ -910,19 +899,6 @@ Video
     videotoolbox is known to require ``uyvy422`` for good performance on some
     older hardware. d3d11va can always use ``yuv420p``, which uses an opaque
     format, with likely no advantages.
-
-``--videotoolbox-format=<name>``
-    Set the internal pixel format used by ``--hwdec=videotoolbox`` on OSX. The
-    choice of the format can influence performance considerably. On the other
-    hand, there doesn't appear to be a good way to detect the best format for
-    the given hardware. ``nv12``, the default, works better on modern hardware,
-    while ``uyvy422`` appears to be better for old hardware. ``yuv420p`` also
-    works.
-    Since mpv 0.25.0, ``no`` is an accepted value, which lets the decoder pick
-    the format on newer FFmpeg versions (will use ``nv12`` on older versions).
-
-    Deprecated. Use ``--hwdec-image-format`` if you really need this. If both
-    are specified, ``--hwdec-image-format`` wins.
 
 ``--cuda-decode-device=<auto|0..>``
     Choose the GPU device used for decoding when using the ``cuda`` hwdec.
@@ -2973,8 +2949,7 @@ Demuxer
 
     Keep in mind that some events can flush the cache or force a low level
     seek anyway, such as switching tracks, or attempting to seek before the
-    start or after the end of the file. This option is experimental - thus
-    disabled, and bugs are to be expected.
+    start or after the end of the file.
 
     The special value ``auto`` means ``yes`` in the same situation as
     ``--cache-secs`` is used (i.e. when the stream appears to be a network
@@ -4778,7 +4753,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
 ``--deband``
     Enable the debanding algorithm. This greatly reduces the amount of visible
-    banding, blocking and other quantization artifacts, at the expensive of
+    banding, blocking and other quantization artifacts, at the expense of
     very slightly blurring some of the finest details. In practice, it's
     virtually always an improvement - the only reason to disable it would be
     for performance.
@@ -5076,7 +5051,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
     are:
 
     auto
-        Disable any adaptation (default)
+        Disable any adaptation, except for atypical color spaces. Specifically,
+        wide/unusual gamuts get automatically adapted to BT.709, while standard
+        gamut (i.e. BT.601 and BT.709) content is not touched. (default)
     bt.470m
         ITU-R BT.470 M
     bt.601-525
@@ -5108,7 +5085,9 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Valid values are:
 
     auto
-        Disable any adaptation (default)
+        Disable any adaptation, except for atypical transfers. Specifically,
+        HDR or linear light source material gets automatically converted to
+        gamma 2.2, while SDR content is not touched. (default)
     bt.1886
         ITU-R BT.1886 curve (assuming infinite contrast)
     srgb
@@ -5314,7 +5293,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Size of the 3D LUT generated from the ICC profile in each dimension.
     Default is 64x64x64. Sizes may range from 2 to 512.
 
-``--icc-contrast=<0-100000>``
+``--icc-contrast=<0-1000000>``
     Specifies an upper limit on the target device's contrast ratio. This is
     detected automatically from the profile if possible, but for some profiles
     it might be missing, causing the contrast to be assumed as infinite. As a

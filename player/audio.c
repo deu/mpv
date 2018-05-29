@@ -555,9 +555,7 @@ static int write_to_ao(struct MPContext *mpctx, uint8_t **planes, int samples,
     int format;
     struct mp_chmap channels;
     ao_get_format(ao, &samplerate, &format, &channels);
-#if HAVE_ENCODING
     encode_lavc_set_audio_pts(mpctx->encode_lavc_ctx, playing_audio_pts(mpctx));
-#endif
     if (samples == 0)
         return 0;
     double real_samplerate = samplerate / mpctx->audio_speed;
@@ -790,6 +788,10 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
     if (mpctx->ao && ao_query_and_reset_events(mpctx->ao, AO_EVENT_RELOAD))
         reload_audio_output(mpctx);
 
+    if (mpctx->ao && ao_query_and_reset_events(mpctx->ao,
+                                               AO_EVENT_INITIAL_UNBLOCK))
+        ao_unblock(mpctx->ao);
+
     struct ao_chain *ao_c = mpctx->ao_chain;
     if (!ao_c)
         return;
@@ -811,6 +813,7 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
             mpctx->audio_status = STATUS_EOF;
             MP_VERBOSE(mpctx, "audio EOF without any data\n");
             mp_filter_reset(ao_c->filter->f);
+            encode_lavc_stream_eof(mpctx->encode_lavc_ctx, STREAM_AUDIO);
         }
         return; // try again next iteration
     }
@@ -994,6 +997,7 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
             if (!was_eof) {
                 MP_VERBOSE(mpctx, "audio EOF reached\n");
                 mp_wakeup_core(mpctx);
+                encode_lavc_stream_eof(mpctx->encode_lavc_ctx, STREAM_AUDIO);
             }
         }
     }

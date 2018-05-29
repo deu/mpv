@@ -39,8 +39,6 @@
 
 #include "input.h"
 #include "keycodes.h"
-#include "cmd_list.h"
-#include "cmd_parse.h"
 #include "osdep/threads.h"
 #include "osdep/timer.h"
 #include "common/msg.h"
@@ -547,7 +545,7 @@ static struct mp_cmd *resolve_key(struct input_ctx *ictx, int code)
     update_mouse_section(ictx);
     struct mp_cmd *cmd = get_cmd_from_keys(ictx, NULL, code);
     key_buf_add(ictx->key_history, code);
-    if (cmd && cmd->id != MP_CMD_IGNORE && !should_drop_cmd(ictx, cmd))
+    if (cmd && !cmd->def->is_ignore && !should_drop_cmd(ictx, cmd))
         return cmd;
     talloc_free(cmd);
     return NULL;
@@ -1452,7 +1450,7 @@ bool mp_input_use_media_keys(struct input_ctx *ictx)
 struct mp_cmd *mp_input_parse_cmd(struct input_ctx *ictx, bstr str,
                                   const char *location)
 {
-    return mp_input_parse_cmd_(ictx->log, str, location);
+    return mp_input_parse_cmd_str(ictx->log, str, location);
 }
 
 void mp_input_run_cmd(struct input_ctx *ictx, const char **cmd)
@@ -1605,7 +1603,7 @@ void mp_input_src_feed_cmd_text(struct mp_input_src *src, char *buf, size_t len)
             if (term) {
                 bstr s = {in->cmd_buffer, in->cmd_buffer_size};
                 s = bstr_strip(s);
-                struct mp_cmd *cmd= mp_input_parse_cmd_(src->log, s, "<>");
+                struct mp_cmd *cmd = mp_input_parse_cmd_str(src->log, s, "<>");
                 if (cmd)
                     mp_input_queue_cmd(src->input_ctx, cmd);
                 in->cmd_buffer_size = 0;

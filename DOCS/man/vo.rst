@@ -488,10 +488,19 @@ Available video output drivers are:
         Mode ID to use (resolution and frame rate).
         (default: 0)
 
-    ``--drm-overlay=<number>``
-        Select the DRM overlay index to use.
-        Overlay index is zero based, and related to crtc.
-        (default: 0)
+    ``--drm-osd-plane-id=<number>``
+        Select the DRM plane index to use for OSD (or OSD and video).
+        Index is zero based, and related to crtc.
+        When using this option with the drm_prime renderer, it will only affect
+        the OSD contents. Otherwise it will set OSD & video plane.
+        (default: primary plane)
+
+    ``--drm-video-plane-id=<number>``
+        Select the DRM plane index to use for video layer.
+        Index is zero based, and related to crtc.
+        This option only has effect when using the drm_prime renderer (which
+        supports several layers) together with ``vo=gpu`` and ``gpu-context=drm``.
+        (default: first overlay plane)
 
     ``--drm-format=<xrgb8888,xrgb2101010>``
         Select the DRM format to use (default: xrgb8888). This allows you to
@@ -505,6 +514,13 @@ Available video output drivers are:
 
         This currently only has an effect when used together with the ``drm``
         backend for the ``gpu`` VO. The ``drm`` VO always uses xrgb8888.
+
+    ``--drm-osd-size=<[WxH]>``
+        Sets the OSD OpenGL size to the specified size. OSD will then be upscaled
+        to the current screen resolution. This option can be useful when using
+        several layers in high resolutions with a GPU which cannot handle it.
+        Note : this option is only available with DRM atomic support.
+        (default: display resolution)
 
 ``mediacodec_embed`` (Android)
     Renders ``IMGFMT_MEDIACODEC`` frames directly to an ``android.view.Surface``.

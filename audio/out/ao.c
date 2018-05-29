@@ -93,9 +93,7 @@ static const struct ao_driver * const audio_out_drivers[] = {
     &audio_out_coreaudio_exclusive,
 #endif
     &audio_out_pcm,
-#if HAVE_ENCODING
     &audio_out_lavc,
-#endif
 #if HAVE_RSOUND
     &audio_out_rsound,
 #endif
@@ -422,7 +420,7 @@ int ao_query_and_reset_events(struct ao *ao, int events)
     return atomic_fetch_and(&ao->events_, ~(unsigned)events) & events;
 }
 
-static void ao_add_events(struct ao *ao, int events)
+void ao_add_events(struct ao *ao, int events)
 {
     atomic_fetch_or(&ao->events_, events);
     ao->wakeup_cb(ao->wakeup_ctx);

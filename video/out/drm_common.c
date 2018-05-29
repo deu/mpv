@@ -47,11 +47,17 @@ const struct m_sub_options drm_conf = {
         OPT_STRING_VALIDATE("drm-connector", drm_connector_spec,
                             0, drm_validate_connector_opt),
         OPT_INT("drm-mode", drm_mode_id, 0),
-        OPT_INT("drm-overlay", drm_overlay_id, 0),
+        OPT_INT("drm-osd-plane-id", drm_osd_plane_id, 0),
+        OPT_INT("drm-video-plane-id", drm_video_plane_id, 0),
         OPT_CHOICE("drm-format", drm_format, 0,
                    ({"xrgb8888",    DRM_OPTS_FORMAT_XRGB8888},
                     {"xrgb2101010", DRM_OPTS_FORMAT_XRGB2101010})),
+        OPT_SIZE_BOX("drm-osd-size", drm_osd_size, 0),
         {0},
+    },
+    .defaults = &(const struct drm_opts) {
+        .drm_osd_plane_id = -1,
+        .drm_video_plane_id = -1,
     },
     .size = sizeof(struct drm_opts),
 };
@@ -167,6 +173,27 @@ static bool setup_connector(struct kms *kms, const drmModeRes *res,
 
 static bool setup_crtc(struct kms *kms, const drmModeRes *res)
 {
+    // First try to find currently connected encoder and its current CRTC
+    for (unsigned int i = 0; i < res->count_encoders; i++) {
+        drmModeEncoder *encoder = drmModeGetEncoder(kms->fd, res->encoders[i]);
+        if (!encoder) {
+            MP_WARN(kms, "Cannot retrieve encoder %u:%u: %s\n",
+                    i, res->encoders[i], mp_strerror(errno));
+            continue;
+        }
+
+        if (encoder->encoder_id == kms->connector->encoder_id && encoder->crtc_id != 0) {
+            MP_VERBOSE(kms, "Connector %u currently connected to encoder %u\n",
+                       kms->connector->connector_id, kms->connector->encoder_id);
+            kms->encoder = encoder;
+            kms->crtc_id = encoder->crtc_id;
+            goto success;
+        }
+
+        drmModeFreeEncoder(encoder);
+    }
+
+    // Otherwise pick first legal encoder and CRTC combo for the connector
     for (unsigned int i = 0; i < kms->connector->count_encoders; ++i) {
         drmModeEncoder *encoder
             = drmModeGetEncoder(kms->fd, kms->connector->encoders[i]);
@@ -184,7 +211,7 @@ static bool setup_crtc(struct kms *kms, const drmModeRes *res)
 
             kms->encoder = encoder;
             kms->crtc_id = res->crtcs[j];
-            return true;
+            goto success;
         }
 
         drmModeFreeEncoder(encoder);
@@ -193,6 +220,11 @@ static bool setup_crtc(struct kms *kms, const drmModeRes *res)
     MP_ERR(kms, "Connector %u has no suitable CRTC\n",
            kms->connector->connector_id);
     return false;
+
+  success:
+    MP_VERBOSE(kms, "Selected Encoder %u with CRTC %u\n",
+               kms->encoder->encoder_id, kms->crtc_id);
+    return true;
 }
 
 static bool setup_mode(struct kms *kms, int mode_id)
@@ -237,7 +269,7 @@ static void parse_connector_spec(struct mp_log *log,
 
 
 struct kms *kms_create(struct mp_log *log, const char *connector_spec,
-                       int mode_id, int overlay_id)
+                       int mode_id, int osd_plane_id, int video_plane_id)
 {
     int card_no = -1;
     char *connector_name = NULL;
@@ -284,7 +316,8 @@ struct kms *kms_create(struct mp_log *log, const char *connector_spec,
         mp_verbose(log, "No DRM Atomic support found\n");
     } else {
         mp_verbose(log, "DRM Atomic support found\n");
-        kms->atomic_context = drm_atomic_create_context(kms->log, kms->fd, kms->crtc_id, overlay_id);
+        kms->atomic_context = drm_atomic_create_context(kms->log, kms->fd, kms->crtc_id,
+                                                        kms->connector->connector_id, osd_plane_id, video_plane_id);
         if (!kms->atomic_context) {
             mp_err(log, "Failed to create DRM atomic context\n");
             goto err;

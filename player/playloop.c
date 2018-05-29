@@ -227,9 +227,7 @@ void reset_playback_state(struct MPContext *mpctx)
     mpctx->cache_buffer = 100;
     mpctx->seek_slave = NULL;
 
-#if HAVE_ENCODING
     encode_lavc_discontinuity(mpctx->encode_lavc_ctx);
-#endif
 
     update_internal_pause_state(mpctx);
     update_core_idle_state(mpctx);
@@ -676,11 +674,16 @@ static void handle_pause_on_low_cache(struct MPContext *mpctx)
     if (mpctx->cache_buffer != cache_buffer) {
         if ((mpctx->cache_buffer == 100) != (cache_buffer == 100)) {
             if (cache_buffer < 100) {
-                MP_VERBOSE(mpctx, "Enter buffering.\n");
+                MP_VERBOSE(mpctx, "Enter buffering (buffer went from %d%% -> %d%%) [%fs].\n",
+                           mpctx->cache_buffer, cache_buffer, s.ts_duration);
             } else {
                 double t = now - mpctx->cache_stop_time;
-                MP_VERBOSE(mpctx, "End buffering (waited %f secs).\n", t);
+                MP_VERBOSE(mpctx, "End buffering (waited %f secs) [%fs].\n",
+                           t, s.ts_duration);
             }
+        } else {
+            MP_VERBOSE(mpctx, "Still buffering (buffer went from %d%% -> %d%%) [%fs].\n",
+                       mpctx->cache_buffer, cache_buffer, s.ts_duration);
         }
         mpctx->cache_buffer = cache_buffer;
         force_update = true;
@@ -947,7 +950,9 @@ static void handle_dummy_ticks(struct MPContext *mpctx)
 // Update current playback time.
 static void handle_playback_time(struct MPContext *mpctx)
 {
-    if (mpctx->vo_chain && !mpctx->vo_chain->is_coverart &&
+    if (mpctx->vo_chain &&
+        !mpctx->vo_chain->is_coverart &&
+        !mpctx->vo_chain->is_sparse &&
         mpctx->video_status >= STATUS_PLAYING &&
         mpctx->video_status < STATUS_EOF)
     {
@@ -983,6 +988,13 @@ static void handle_playback_restart(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
 
+    // Do not wait for video stream if it only has sparse frames.
+    if (mpctx->vo_chain &&
+        mpctx->vo_chain->is_sparse &&
+        mpctx->video_status < STATUS_READY) {
+        mpctx->video_status = STATUS_READY;
+    }
+
     if (mpctx->audio_status < STATUS_READY ||
         mpctx->video_status < STATUS_READY)
         return;
@@ -1005,7 +1017,9 @@ static void handle_playback_restart(struct MPContext *mpctx)
         }
 
         // Video needed, but not started yet -> wait.
-        if (mpctx->vo_chain && !mpctx->vo_chain->is_coverart &&
+        if (mpctx->vo_chain &&
+            !mpctx->vo_chain->is_coverart &&
+            !mpctx->vo_chain->is_sparse &&
             mpctx->video_status <= STATUS_READY)
             return;
 
@@ -1067,12 +1081,10 @@ static void handle_eof(struct MPContext *mpctx)
 
 void run_playloop(struct MPContext *mpctx)
 {
-#if HAVE_ENCODING
     if (encode_lavc_didfail(mpctx->encode_lavc_ctx)) {
         mpctx->stop_play = PT_QUIT;
         return;
     }
-#endif
 
     update_demuxer_properties(mpctx);
 

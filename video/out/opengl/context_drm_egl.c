@@ -28,7 +28,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include "libmpv/opengl_cb.h"
+#include "libmpv/render_gl.h"
 #include "video/out/drm_common.h"
 #include "common/common.h"
 #include "osdep/timer.h"
@@ -80,7 +80,8 @@ struct priv {
     bool vt_switcher_active;
     struct vt_switcher vt_switcher;
 
-    struct mpv_opengl_cb_drm_params drm_params;
+    struct mpv_opengl_drm_params drm_params;
+    struct mpv_opengl_drm_osd_size osd_size;
 };
 
 // Not general. Limited to only the formats being used in this module
@@ -194,11 +195,11 @@ static bool init_gbm(struct ra_ctx *ctx)
     }
 
     MP_VERBOSE(ctx->vo, "Initializing GBM surface (%d x %d)\n",
-        p->kms->mode.hdisplay, p->kms->mode.vdisplay);
+        p->osd_size.width, p->osd_size.height);
     p->gbm.surface = gbm_surface_create(
         p->gbm.device,
-        p->kms->mode.hdisplay,
-        p->kms->mode.vdisplay,
+        p->osd_size.width,
+        p->osd_size.height,
         p->gbm_format,
         GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
     if (!p->gbm.surface) {
@@ -246,17 +247,113 @@ static void update_framebuffer_from_bo(struct ra_ctx *ctx, struct gbm_bo *bo)
     p->fb = fb;
 }
 
+static bool crtc_setup_atomic(struct ra_ctx *ctx)
+{
+    struct priv *p = ctx->priv;
+    struct drm_atomic_context *atomic_ctx = p->kms->atomic_context;
+
+    drmModeAtomicReqPtr request = drmModeAtomicAlloc();
+    if (request) {
+        if (drm_object_set_property(request, atomic_ctx->connector, "CRTC_ID", p->kms->crtc_id) < 0) {
+            MP_ERR(ctx->vo, "Could not set CRTC_ID on connector\n");
+            return false;
+        }
+
+        uint32_t blob_id;
+        if (drmModeCreatePropertyBlob(p->kms->fd, &p->kms->mode, sizeof(drmModeModeInfo),
+                                      &blob_id) != 0) {
+            MP_ERR(ctx->vo, "Failed to create DRM mode blob\n");
+            return false;
+        }
+        if (drm_object_set_property(request, atomic_ctx->crtc, "MODE_ID", blob_id) < 0) {
+            MP_ERR(ctx->vo, "Could not set MODE_ID on crtc\n");
+            return false;
+        }
+        if (drm_object_set_property(request, atomic_ctx->crtc, "ACTIVE", 1) < 0) {
+            MP_ERR(ctx->vo, "Could not set ACTIVE on crtc\n");
+            return false;
+        }
+
+        drm_object_set_property(request, atomic_ctx->osd_plane, "FB_ID", p->fb->id);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "CRTC_ID", p->kms->crtc_id);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "SRC_X",   0);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "SRC_Y",   0);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "SRC_W",   p->osd_size.width << 16);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "SRC_H",   p->osd_size.height << 16);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "CRTC_X",  0);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "CRTC_Y",  0);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "CRTC_W",  p->kms->mode.hdisplay);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "CRTC_H",  p->kms->mode.vdisplay);
+
+        int ret = drmModeAtomicCommit(p->kms->fd, request, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+        if (ret) {
+           MP_ERR(ctx->vo, "Failed to commit ModeSetting atomic request (%d)\n", ret);
+           drmModeAtomicFree(request);
+           return false;
+        }
+
+        drmModeAtomicFree(request);
+
+        return ret == 0;
+    } else {
+        MP_ERR(ctx->vo, "Failed to allocate drm atomic request\n");
+    }
+
+    return false;
+}
+
+static bool crtc_release_atomic(struct ra_ctx *ctx)
+{
+    struct priv *p = ctx->priv;
+
+    struct drm_atomic_context *atomic_ctx = p->kms->atomic_context;
+    drmModeAtomicReqPtr request = drmModeAtomicAlloc();
+    if (request) {
+        drm_object_set_property(request, atomic_ctx->connector, "CRTC_ID", p->old_crtc->crtc_id);
+
+        uint32_t blob_id;
+        if (drmModeCreatePropertyBlob(p->kms->fd, &p->old_crtc->mode, sizeof(drmModeModeInfo),
+                                      &blob_id) != 0) {
+            MP_ERR(ctx->vo, "Failed to create DRM mode blob\n");
+            return false;
+        }
+        drm_object_set_property(request, atomic_ctx->crtc, "MODE_ID", blob_id);
+        drm_object_set_property(request, atomic_ctx->crtc, "ACTIVE", 1);
+        drm_object_set_property(request, atomic_ctx->osd_plane, "FB_ID", p->old_crtc->buffer_id);
+
+        int ret = drmModeAtomicCommit(p->kms->fd, request, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+
+        if (ret)
+           MP_WARN(ctx->vo, "Failed to commit ModeSetting atomic request (%d)\n", ret);
+
+        drmModeAtomicFree(request);
+
+        return ret == 0;
+    } else {
+        MP_ERR(ctx->vo, "Failed to allocate drm atomic request\n");
+    }
+
+    return false;
+}
+
 static bool crtc_setup(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv;
     if (p->active)
         return true;
     p->old_crtc = drmModeGetCrtc(p->kms->fd, p->kms->crtc_id);
-    int ret = drmModeSetCrtc(p->kms->fd, p->kms->crtc_id, p->fb->id,
-                             0, 0, &p->kms->connector->connector_id, 1,
-                             &p->kms->mode);
-    p->active = true;
-    return ret == 0;
+
+    if (p->kms->atomic_context) {
+        int ret = crtc_setup_atomic(ctx);
+        p->active = true;
+        return ret;
+    } else {
+        int ret = drmModeSetCrtc(p->kms->fd, p->kms->crtc_id, p->fb->id,
+                                 0, 0, &p->kms->connector->connector_id, 1,
+                                 &p->kms->mode);
+        p->active = true;
+        return ret == 0;
+    }
 }
 
 static void crtc_release(struct ra_ctx *ctx)
@@ -277,11 +374,16 @@ static void crtc_release(struct ra_ctx *ctx)
     }
 
     if (p->old_crtc) {
-        drmModeSetCrtc(p->kms->fd,
-                       p->old_crtc->crtc_id, p->old_crtc->buffer_id,
-                       p->old_crtc->x, p->old_crtc->y,
-                       &p->kms->connector->connector_id, 1,
-                       &p->old_crtc->mode);
+        if (p->kms->atomic_context) {
+            if (!crtc_release_atomic(ctx))
+                MP_ERR(ctx->vo, "Failed to restore previous mode\n");
+        } else {
+            drmModeSetCrtc(p->kms->fd,
+                           p->old_crtc->crtc_id, p->old_crtc->buffer_id,
+                           p->old_crtc->x, p->old_crtc->y,
+                           &p->kms->connector->connector_id, 1,
+                           &p->old_crtc->mode);
+        }
         drmModeFreeCrtc(p->old_crtc);
         p->old_crtc = NULL;
     }
@@ -325,7 +427,7 @@ static bool drm_atomic_egl_start_frame(struct ra_swapchain *sw, struct ra_fbo *o
     if (p->kms->atomic_context) {
         if (!p->kms->atomic_context->request) {
             p->kms->atomic_context->request = drmModeAtomicAlloc();
-            p->drm_params.atomic_request = p->kms->atomic_context->request;
+            p->drm_params.atomic_request_ptr = &p->kms->atomic_context->request;
         }
         return ra_gl_ctx_start_frame(sw, out_fbo);
     }
@@ -351,9 +453,9 @@ static void drm_egl_swap_buffers(struct ra_ctx *ctx)
     update_framebuffer_from_bo(ctx, p->gbm.next_bo);
 
     if (atomic_ctx) {
-        drm_object_set_property(atomic_ctx->request, atomic_ctx->primary_plane, "FB_ID", p->fb->id);
-        drm_object_set_property(atomic_ctx->request, atomic_ctx->primary_plane, "CRTC_ID", atomic_ctx->crtc->id);
-        drm_object_set_property(atomic_ctx->request, atomic_ctx->primary_plane, "ZPOS", 1);
+        drm_object_set_property(atomic_ctx->request, atomic_ctx->osd_plane, "FB_ID", p->fb->id);
+        drm_object_set_property(atomic_ctx->request, atomic_ctx->osd_plane, "CRTC_ID", atomic_ctx->crtc->id);
+        drm_object_set_property(atomic_ctx->request, atomic_ctx->osd_plane, "ZPOS", 1);
 
         ret = drmModeAtomicCommit(p->kms->fd, atomic_ctx->request,
                                   DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT, NULL);
@@ -383,7 +485,7 @@ static void drm_egl_swap_buffers(struct ra_ctx *ctx)
 
     if (atomic_ctx) {
         drmModeAtomicFree(atomic_ctx->request);
-        p->drm_params.atomic_request = atomic_ctx->request = drmModeAtomicAlloc();
+        atomic_ctx->request = drmModeAtomicAlloc();
     }
 
     gbm_surface_release_buffer(p->gbm.surface, p->gbm.bo);
@@ -424,24 +526,24 @@ static void drm_egl_uninit(struct ra_ctx *ctx)
     }
 }
 
-// If primary plane supports ARGB we want to use that, but if it doesn't we fall
+// If the OSD plane supports ARGB we want to use that, but if it doesn't we fall
 // back on XRGB. If the driver does not support atomic there is no particular
 // reason to be using ARGB (drmprime hwdec will not work without atomic,
 // anyway), so we fall back to XRGB (another reason is that we do not have the
-// convenient atomic_ctx and its convenient primary_plane field).
+// convenient atomic_ctx and its convenient plane fields).
 static bool probe_gbm_format(struct ra_ctx *ctx, uint32_t argb_format, uint32_t xrgb_format)
 {
     struct priv *p = ctx->priv;
 
     if (!p->kms->atomic_context) {
         p->gbm_format = xrgb_format;
-        MP_VERBOSE(ctx->vo, "Not using DRM Atomic: Use %s for primary plane.\n",
+        MP_VERBOSE(ctx->vo, "Not using DRM Atomic: Use %s for OSD plane.\n",
                    gbm_format_to_string(xrgb_format));
         return true;
     }
 
     drmModePlane *drmplane =
-        drmModeGetPlane(p->kms->fd, p->kms->atomic_context->primary_plane->id);
+        drmModeGetPlane(p->kms->fd, p->kms->atomic_context->osd_plane->id);
     bool have_argb = false;
     bool have_xrgb = false;
     bool result = false;
@@ -455,11 +557,11 @@ static bool probe_gbm_format(struct ra_ctx *ctx, uint32_t argb_format, uint32_t 
 
     if (have_argb) {
         p->gbm_format = argb_format;
-        MP_VERBOSE(ctx->vo, "%s supported by primary plane.\n", gbm_format_to_string(argb_format));
+        MP_VERBOSE(ctx->vo, "%s supported by OSD plane.\n", gbm_format_to_string(argb_format));
         result = true;
     } else if (have_xrgb) {
         p->gbm_format = xrgb_format;
-        MP_VERBOSE(ctx->vo, "%s not supported by primary plane: Falling back to %s.\n",
+        MP_VERBOSE(ctx->vo, "%s not supported by OSD plane: Falling back to %s.\n",
                    gbm_format_to_string(argb_format), gbm_format_to_string(xrgb_format));
         result = true;
     }
@@ -489,10 +591,25 @@ static bool drm_egl_init(struct ra_ctx *ctx)
     MP_VERBOSE(ctx, "Initializing KMS\n");
     p->kms = kms_create(ctx->log, ctx->vo->opts->drm_opts->drm_connector_spec,
                         ctx->vo->opts->drm_opts->drm_mode_id,
-                        ctx->vo->opts->drm_opts->drm_overlay_id);
+                        ctx->vo->opts->drm_opts->drm_osd_plane_id,
+                        ctx->vo->opts->drm_opts->drm_video_plane_id);
     if (!p->kms) {
         MP_ERR(ctx, "Failed to create KMS.\n");
         return false;
+    }
+
+    if (ctx->vo->opts->drm_opts->drm_osd_size.wh_valid) {
+        if (p->kms->atomic_context) {
+            p->osd_size.width = ctx->vo->opts->drm_opts->drm_osd_size.w;
+            p->osd_size.height = ctx->vo->opts->drm_opts->drm_osd_size.h;
+        } else {
+            p->osd_size.width = p->kms->mode.hdisplay;
+            p->osd_size.height = p->kms->mode.vdisplay;
+            MP_WARN(ctx, "Setting OSD size is only available with DRM atomic, defaulting to screen resolution\n");
+        }
+    } else {
+        p->osd_size.width = p->kms->mode.hdisplay;
+        p->osd_size.height = p->kms->mode.vdisplay;
     }
 
     uint32_t argb_format;
@@ -551,8 +668,9 @@ static bool drm_egl_init(struct ra_ctx *ctx)
 
     p->drm_params.fd = p->kms->fd;
     p->drm_params.crtc_id = p->kms->crtc_id;
+    p->drm_params.connector_id = p->kms->connector->connector_id;
     if (p->kms->atomic_context)
-        p->drm_params.atomic_request = p->kms->atomic_context->request;
+        p->drm_params.atomic_request_ptr = &p->kms->atomic_context->request;
     struct ra_gl_ctx_params params = {
         .swap_buffers = drm_egl_swap_buffers,
         .external_swapchain = p->kms->atomic_context ? &drm_atomic_swapchain :
@@ -561,7 +679,8 @@ static bool drm_egl_init(struct ra_ctx *ctx)
     if (!ra_gl_ctx_init(ctx, &p->gl, params))
         return false;
 
-    ra_add_native_resource(ctx->ra, "opengl-cb-drm-params", &p->drm_params);
+    ra_add_native_resource(ctx->ra, "drm_params", &p->drm_params);
+    ra_add_native_resource(ctx->ra, "drm_osd_size", &p->osd_size);
 
     return true;
 }
