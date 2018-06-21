@@ -154,13 +154,6 @@ def build(ctx):
                               bridge, header, tgt, src)
         return task.exec_command(cmd)
 
-    if ctx.dependency_satisfied('cocoa') and ctx.env.MACOS_SDK:
-        # on macOS we explicitly need to set the SDK path, otherwise it can lead to
-        # linking warnings or errors
-        ctx.env.append_value('LINKFLAGS', [
-            '-isysroot', ctx.env.MACOS_SDK
-        ])
-
     if ctx.dependency_satisfied('macos-cocoa-cb'):
         swift_source = [
             ( "osdep/macOS_mpv_helper.swift" ),
@@ -684,11 +677,15 @@ def build(ctx):
             _build_libmpv(False)
 
         def get_deps():
-            res = ""
+            res = []
             for k in ctx.env.keys():
-                if k.startswith("LIB_") and k != "LIB_ST":
-                    res += " ".join(["-l" + x for x in ctx.env[k]]) + " "
-            return res
+                if (k.startswith("LIB_") and k != "LIB_ST") \
+                or (k.startswith("STLIB_") and k != "STLIB_ST" and k != "STLIB_MARKER"):
+                    for l in ctx.env[k]:
+                        if l in res:
+                            res.remove(l)
+                        res.append(l)
+            return " ".join(["-l" + l for l in res])
 
         ctx(
             target       = 'libmpv/mpv.pc',

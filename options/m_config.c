@@ -525,7 +525,9 @@ static void m_config_add_option(struct m_config *config,
             // The required alignment is unknown, so go with the maximum C
             // could require. Slightly wasteful, but not that much.
             int align = (size - config->shadow_size % size) % size;
-            co.shadow_offset = config->shadow_size + align;
+            int offset = config->shadow_size + align;
+            assert(offset <= INT16_MAX);
+            co.shadow_offset = offset;
             config->shadow_size = co.shadow_offset + size;
         }
 
@@ -609,7 +611,7 @@ struct m_config_option *m_config_get_co(const struct m_config *config,
 {
     struct m_config_option *co = m_config_get_co_any(config, name);
     // CLI aliases should not be real options, and are explicitly handled by
-    // m_config_set_option_cli(). So petend it does not exist.
+    // m_config_set_option_cli(). So pretend it does not exist.
     if (co && co->opt->type == &m_option_type_cli_alias)
         co = NULL;
     return co;
@@ -1400,7 +1402,7 @@ void m_config_cache_set_dispatch_change_cb(struct m_config_cache *cache,
                                            struct mp_dispatch_queue *dispatch,
                                            void (*cb)(void *ctx), void *cb_ctx)
 {
-    // Remove the old one is tricky. Firts make sure no new notifications will
+    // Removing the old one is tricky. First make sure no new notifications will
     // come.
     m_config_cache_set_wakeup_cb(cache, NULL, NULL);
     // Remove any pending notifications (assume we're on the same thread as
@@ -1421,17 +1423,6 @@ void m_config_cache_set_dispatch_change_cb(struct m_config_cache *cache,
         cache->wakeup_dispatch_cb_ctx = cb_ctx;
         m_config_cache_set_wakeup_cb(cache, dispatch_notify, cache);
     }
-}
-
-bool m_config_is_in_group(struct m_config *config,
-                          const struct m_sub_options *group,
-                          struct m_config_option *co)
-{
-    for (int n = 0; n < config->num_groups; n++) {
-        if (config->groups[n].group == group)
-            return is_group_included(config, co->group, n);
-    }
-    return false;
 }
 
 void *mp_get_config_group(void *ta_parent, struct mpv_global *global,

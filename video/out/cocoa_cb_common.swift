@@ -30,12 +30,16 @@ class CocoaCB: NSObject {
     var cursorVisibilityWanted: Bool = true
     var isShuttingDown: Bool = false
 
-    enum State {
-        case uninit
-        case needsInit
-        case `init`
+    var title: String = "mpv" {
+        didSet { if window != nil { window.title = title } }
     }
-    var backendState: State = .uninit
+
+    enum State {
+        case uninitialized
+        case needsInit
+        case initialized
+    }
+    var backendState: State = .uninitialized
 
     let eventsLock = NSLock()
     var events: Int = 0
@@ -47,31 +51,29 @@ class CocoaCB: NSObject {
 
     let queue: DispatchQueue = DispatchQueue(label: "io.mpv.queue")
 
-    override init() {
-        super.init()
-        window = Window(cocoaCB: self)
-
-        view = EventsView(frame: window.contentView!.bounds, cocoaCB: self)
-        window.contentView!.addSubview(view)
-
+    convenience init(_ mpvHandle: OpaquePointer) {
+        self.init()
+        mpv = MPVHelper(mpvHandle)
         layer = VideoLayer(cocoaCB: self)
-        view.layer = layer
-        view.wantsLayer = true
-        view.layerContentsPlacement = .scaleProportionallyToFit
     }
 
-    func setMpvHandle(_ ctx: OpaquePointer) {
-        mpv = MPVHelper(ctx)
-        layer.setUpRender()
-    }
-
-    func preinit() {
-        if backendState == .uninit {
+    func preinit(_ vo: UnsafeMutablePointer<vo>) {
+        if backendState == .uninitialized {
             backendState = .needsInit
-            DispatchQueue.main.async {
-                self.updateICCProfile()
+
+            if let app = NSApp as? Application {
+                let ptr = mp_get_config_group(mpv.mpctx!, vo.pointee.global,
+                                              app.getMacOSConf())
+                mpv.macOpts = UnsafeMutablePointer<macos_opts>(OpaquePointer(ptr))!.pointee
             }
-            startDisplayLink()
+
+            view = EventsView(cocoaCB: self)
+            view.layer = layer
+            view.wantsLayer = true
+            view.layerContentsPlacement = .scaleProportionallyToFit
+            startDisplayLink(vo)
+            initLightSensor()
+            addDisplayReconfigureObserver()
         }
     }
 
@@ -80,40 +82,39 @@ class CocoaCB: NSObject {
         window.orderOut(nil)
     }
 
-    func reconfig() {
+    func reconfig(_ vo: UnsafeMutablePointer<vo>) {
         if backendState == .needsInit {
-            initBackend()
+            DispatchQueue.main.sync { self.initBackend(vo) }
         } else {
-            layer.setVideo(true)
-            updateWindowSize()
-            layer.update()
+            DispatchQueue.main.async {
+                self.layer.setVideo(true)
+                self.updateWindowSize(vo)
+                self.layer.update()
+            }
         }
     }
 
-    func initBackend() {
+    func initBackend(_ vo: UnsafeMutablePointer<vo>) {
+        let opts: mp_vo_opts = vo.pointee.opts.pointee
         NSApp.setActivationPolicy(.regular)
-
-        let targetScreen = getTargetScreen(forFullscreen: false) ?? NSScreen.main()
-        let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: mpv.mpctx!.pointee.video_out)
-        let win = Window(contentRect: wr, styleMask: window.styleMask,
-                              screen: targetScreen, cocoaCB: self)
-        win.title = window.title
-        win.setOnTop(mpv.getBoolProperty("ontop"))
-        win.keepAspect = mpv.getBoolProperty("keepaspect-window")
-        window.close()
-        window = win
-        window.contentView!.addSubview(view)
-        view.frame = window.contentView!.frame
-        window.initTitleBar()
-
         setAppIcon()
+
+        let targetScreen = getScreenBy(id: Int(opts.screen_id)) ?? NSScreen.main()
+        let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: vo)
+        window = Window(contentRect: wr, screen: targetScreen, view: view, cocoaCB: self)
+        updateICCProfile()
+        window.setOnTop(Bool(opts.ontop), Int(opts.ontop_level))
+        window.keepAspect = Bool(opts.keepaspect_window)
+        window.title = title
+        window.border = Bool(opts.border)
+
         window.isRestorable = false
         window.makeMain()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         layer.setVideo(true)
 
-        if mpv.getBoolProperty("fullscreen") {
+        if Bool(opts.fullscreen) {
             DispatchQueue.main.async {
                 self.window.toggleFullScreen(nil)
             }
@@ -121,14 +122,13 @@ class CocoaCB: NSObject {
             window.isMovableByWindowBackground = true
         }
 
-        initLightSensor()
-        addDisplayReconfigureObserver()
-        backendState = .init
+        backendState = .initialized
     }
 
-    func updateWindowSize() {
-        let targetScreen = getTargetScreen(forFullscreen: false) ?? NSScreen.main()
-        let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: mpv.mpctx!.pointee.video_out)
+    func updateWindowSize(_ vo: UnsafeMutablePointer<vo>) {
+        let opts: mp_vo_opts = vo.pointee.opts.pointee
+        let targetScreen = getScreenBy(id: Int(opts.screen_id)) ?? NSScreen.main()
+        let wr = getWindowGeometry(forScreen: targetScreen!, videoOut: vo)
         if !window.isVisible {
             window.makeKeyAndOrderFront(nil)
         }
@@ -154,8 +154,11 @@ class CocoaCB: NSObject {
         return kCVReturnSuccess
     }
 
-    func startDisplayLink() {
-        let displayId = UInt32(window.screen!.deviceDescription["NSScreenNumber"] as! Int)
+    func startDisplayLink(_ vo: UnsafeMutablePointer<vo>) {
+        let opts: mp_vo_opts = vo.pointee.opts.pointee
+        let screen = getScreenBy(id: Int(opts.screen_id)) ?? NSScreen.main()
+        let displayId = screen!.deviceDescription["NSScreenNumber"] as! UInt32
+
         CVDisplayLinkCreateWithActiveCGDisplays(&link)
         CVDisplayLinkSetCurrentCGDisplay(link!, displayId)
         if #available(macOS 10.12, *) {
@@ -323,8 +326,8 @@ class CocoaCB: NSObject {
     }
 
     func getTargetScreen(forFullscreen fs: Bool) -> NSScreen? {
-        let screenID = fs ? mpv.getStringProperty("fs-screen") ?? "current":
-                            mpv.getStringProperty("screen") ?? "current"
+        let screenType = fs ? "fs-screen" : "screen"
+        let screenID = mpv.getStringProperty(screenType) ?? "current"
 
         switch screenID {
         case "current", "default", "all":
@@ -380,7 +383,7 @@ class CocoaCB: NSObject {
         return ev
     }
 
-    var controlCallback: mp_render_cb_control_fn = { ( ctx, events, request, data ) -> Int32 in
+    var controlCallback: mp_render_cb_control_fn = { ( vo, ctx, events, request, data ) -> Int32 in
         let ccb: CocoaCB = MPVHelper.bridge(ptr: ctx!)
 
         switch mp_voctrl(request) {
@@ -431,21 +434,17 @@ class CocoaCB: NSObject {
             let titleData = data!.assumingMemoryBound(to: Int8.self)
             let title = String(cString: titleData)
             DispatchQueue.main.async {
-                ccb.window.title = String(cString: titleData)
+                ccb.title = String(cString: titleData)
             }
             return VO_TRUE
         case VOCTRL_PREINIT:
-            ccb.preinit()
+            DispatchQueue.main.sync { ccb.preinit(vo!) }
             return VO_TRUE
         case VOCTRL_UNINIT:
-            DispatchQueue.main.async {
-                ccb.uninit()
-            }
+            DispatchQueue.main.async { ccb.uninit() }
             return VO_TRUE
         case VOCTRL_RECONFIG:
-            DispatchQueue.main.async {
-                ccb.reconfig()
-            }
+            ccb.reconfig(vo!)
             return VO_TRUE
         default:
             return VO_NOTIMPL
@@ -471,13 +470,13 @@ class CocoaCB: NSObject {
     func processEvent(_ event: UnsafePointer<mpv_event>) {
         switch event.pointee.event_id {
         case MPV_EVENT_SHUTDOWN:
-            if window.isAnimating {
+            if window != nil && window.isAnimating {
                 isShuttingDown = true
                 return
             }
             shutdown()
         case MPV_EVENT_PROPERTY_CHANGE:
-            if backendState == .init {
+            if backendState == .initialized {
                 handlePropertyChange(event)
             }
         default:
@@ -498,7 +497,7 @@ class CocoaCB: NSObject {
             }
         case "ontop":
             if let data = MPVHelper.mpvFlagToBool(property.data) {
-                window.setOnTop(data)
+                window.setOnTop(data, mpv.getStringProperty("ontop-level") ?? "window")
             }
         case "keepaspect-window":
             if let data = MPVHelper.mpvFlagToBool(property.data) {

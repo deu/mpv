@@ -193,7 +193,7 @@ static bool check_stream_network(int fd)
 {
     struct statfs fs;
     const char *stypes[] = { "afpfs", "nfs", "smbfs", "webdav", "osxfusefs",
-                             NULL };
+                             "fuse", "fusefs.sshfs", NULL };
     if (fstatfs(fd, &fs) == 0)
         for (int i=0; stypes[i]; i++)
             if (strcmp(stypes[i], fs.f_fstypename) == 0)
@@ -309,7 +309,6 @@ static int open_f(stream_t *stream)
         openmode |= S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH;
         if (!write)
             m |= O_NONBLOCK;
-        p->use_poll = true;
 #endif
         p->fd = open(filename, m | O_BINARY, openmode);
         if (p->fd < 0) {
@@ -317,25 +316,25 @@ static int open_f(stream_t *stream)
                    filename, mp_strerror(errno));
             return STREAM_ERROR;
         }
-        struct stat st;
-        if (fstat(p->fd, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                p->use_poll = false;
-                stream->is_directory = true;
-                stream->allow_caching = false;
-                MP_INFO(stream, "This is a directory - adding to playlist.\n");
-            }
-#ifndef __MINGW32__
-            if (S_ISREG(st.st_mode)) {
-                p->use_poll = false;
-                p->regular_file = true;
-                // O_NONBLOCK has weird semantics on file locks; remove it.
-                int val = fcntl(p->fd, F_GETFL) & ~(unsigned)O_NONBLOCK;
-                fcntl(p->fd, F_SETFL, val);
-            }
-#endif
-        }
         p->close = true;
+    }
+
+    struct stat st;
+    if (fstat(p->fd, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            stream->is_directory = true;
+            stream->allow_caching = false;
+            MP_INFO(stream, "This is a directory - adding to playlist.\n");
+        } else if (S_ISREG(st.st_mode)) {
+            p->regular_file = true;
+#ifndef __MINGW32__
+            // O_NONBLOCK has weird semantics on file locks; remove it.
+            int val = fcntl(p->fd, F_GETFL) & ~(unsigned)O_NONBLOCK;
+            fcntl(p->fd, F_SETFL, val);
+#endif
+        } else {
+            p->use_poll = true;
+        }
     }
 
 #ifdef __MINGW32__
