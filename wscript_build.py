@@ -611,8 +611,8 @@ def build(ctx):
 
             wrapctx.env.cprogram_PATTERN = "%s.com"
             wrapflags = ['-municode', '-mconsole']
-            wrapctx.env.CFLAGS = wrapflags
-            wrapctx.env.LAST_LINKFLAGS = wrapflags
+            wrapctx.env.CFLAGS = ctx.env.CFLAGS + wrapflags
+            wrapctx.env.LAST_LINKFLAGS = ctx.env.LAST_LINKFLAGS + wrapflags
 
     if ctx.dependency_satisfied('test'):
         for test in ctx.path.ant_glob("test/*.c"):
@@ -693,7 +693,7 @@ def build(ctx):
             features     = 'subst',
             PREFIX       = ctx.env.PREFIX,
             LIBDIR       = ctx.env.LIBDIR,
-            INCDIR       = ctx.env.INCDIR,
+            INCDIR       = ctx.env.INCLUDEDIR,
             VERSION      = libversion,
             PRIV_LIBS    = get_deps(),
         )
@@ -701,7 +701,7 @@ def build(ctx):
         headers = ["client.h", "qthelper.hpp", "opengl_cb.h", "render.h",
                    "render_gl.h", "stream_cb.h"]
         for f in headers:
-            ctx.install_as(ctx.env.INCDIR + '/mpv/' + f, 'libmpv/' + f)
+            ctx.install_as(ctx.env.INCLUDEDIR + '/mpv/' + f, 'libmpv/' + f)
 
         ctx.install_as(ctx.env.LIBDIR + '/pkgconfig/mpv.pc', 'libmpv/mpv.pc')
 
