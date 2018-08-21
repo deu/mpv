@@ -741,7 +741,7 @@ const m_option_t mp_opts[] = {
     OPT_SUBSTRUCT("", macos_opts, macos_conf, 0),
 #endif
 
-#if HAVE_ANDROID
+#if HAVE_EGL_ANDROID
     OPT_SUBSTRUCT("", android_opts, android_conf, 0),
 #endif
 
