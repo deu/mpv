@@ -4,6 +4,10 @@
 #include "ra_vk.h"
 #include "malloc.h"
 
+#if HAVE_WIN32_DESKTOP
+#include <versionhelpers.h>
+#endif
+
 static struct ra_fns ra_fns_vk;
 
 enum queue_type {
@@ -689,7 +693,19 @@ struct ra_buf_vk {
     // "current" metadata, can change during course of execution
     VkPipelineStageFlags current_stage;
     VkAccessFlags current_access;
+    // Arbitrary user data for the creator of a buffer
+    void *user_data;
 };
+
+void ra_vk_buf_set_user_data(struct ra_buf *buf, void *user_data) {
+    struct ra_buf_vk *vk_priv = buf->priv;
+    vk_priv->user_data = user_data;
+}
+
+void *ra_vk_buf_get_user_data(struct ra_buf *buf) {
+    struct ra_buf_vk *vk_priv = buf->priv;
+    return vk_priv->user_data;
+}
 
 static void vk_buf_deref(struct ra *ra, struct ra_buf *buf)
 {
@@ -787,6 +803,7 @@ static struct ra_buf *vk_buf_create(struct ra *ra,
     VkBufferUsageFlags bufFlags = 0;
     VkMemoryPropertyFlags memFlags = 0;
     VkDeviceSize align = 4; // alignment 4 is needed for buf_update
+    bool exportable = false;
 
     switch (params->type) {
     case RA_BUF_TYPE_TEX_UPLOAD:
@@ -811,6 +828,11 @@ static struct ra_buf *vk_buf_create(struct ra *ra,
         bufFlags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         memFlags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
         break;
+    case RA_BUF_TYPE_SHARED_MEMORY:
+        bufFlags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        memFlags |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        exportable = true;
+        break;
     default: abort();
     }
 
@@ -826,7 +848,7 @@ static struct ra_buf *vk_buf_create(struct ra *ra,
     }
 
     if (!vk_malloc_buffer(vk, bufFlags, memFlags, params->size, align,
-                          &buf_vk->slice))
+                          exportable, &buf_vk->slice))
     {
         goto error;
     }
@@ -886,6 +908,7 @@ static bool vk_tex_upload(struct ra *ra,
             struct mp_rect *rc = params->rc;
             region.imageOffset = (VkOffset3D){rc->x0, rc->y0, 0};
             region.imageExtent = (VkExtent3D){mp_rect_w(*rc), mp_rect_h(*rc), 1};
+            region.bufferImageHeight = region.imageExtent.height;
         }
     }
 
@@ -913,6 +936,64 @@ static bool vk_tex_upload(struct ra *ra,
 
 error:
     return false;
+}
+
+static bool ra_vk_mem_get_external_info(struct ra *ra, struct vk_memslice *mem, struct vk_external_mem *ret)
+{
+    struct mpvk_ctx *vk = ra_vk_get(ra);
+
+#if HAVE_WIN32_DESKTOP
+    HANDLE mem_handle;
+
+    VkMemoryGetWin32HandleInfoKHR info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR,
+        .pNext = NULL,
+        .memory = mem->vkmem,
+        .handleType = IsWindows8OrGreater()
+            ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT_KHR
+            : VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT,
+    };
+
+    VK_LOAD_PFN(vkGetMemoryWin32HandleKHR);
+    VK(pfn_vkGetMemoryWin32HandleKHR(vk->dev, &info, &mem_handle));
+
+    ret->mem_handle = mem_handle;
+#else
+    int mem_fd;
+
+    VkMemoryGetFdInfoKHR info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+        .pNext = NULL,
+        .memory = mem->vkmem,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR,
+    };
+
+    VK_LOAD_PFN(vkGetMemoryFdKHR);
+    VK(pfn_vkGetMemoryFdKHR(vk->dev, &info, &mem_fd));
+
+    ret->mem_fd = mem_fd;
+#endif
+    ret->size = mem->size;
+    ret->offset = mem->offset;
+    ret->mem_size = mem->slab_size;
+
+    return true;
+
+error:
+    return false;
+}
+
+bool ra_vk_buf_get_external_info(struct ra *ra, struct ra_buf *buf, struct vk_external_mem *ret)
+{
+    if (buf->params.type != RA_BUF_TYPE_SHARED_MEMORY) {
+        MP_ERR(ra, "Buffer must be of TYPE_SHARED_MEMORY to be able to export it...");
+        return false;
+    }
+
+    struct ra_buf_vk *buf_vk = buf->priv;
+    struct vk_memslice *mem = &buf_vk->slice.mem;
+
+    return ra_vk_mem_get_external_info(ra, mem, ret);
 }
 
 #define MPVK_NUM_DS MPVK_MAX_STREAMING_DEPTH

@@ -552,18 +552,14 @@ Program Behavior
 
     If the script can't do anything with an URL, it will do nothing.
 
-    The `try_ytdl_first` script option accepts a boolean 'yes' or 'no', and if
+    The ``try_ytdl_first`` script option accepts a boolean 'yes' or 'no', and if
     'yes' will try parsing the URL with youtube-dl first, instead of the default
     where it's only after mpv failed to open it. This mostly depends on whether
     most of your URLs need youtube-dl parsing.
 
-    The `exclude` script option accepts a ``|``-separated list of URL patterns
+    The ``exclude`` script option accepts a ``|``-separated list of URL patterns
     which mpv should not use with youtube-dl. The patterns are matched after
     the ``http(s)://`` part of the URL.
-
-    The `use_manifests` script option makes mpv use the master manifest URL for
-    formats like HLS and DASH, if available, allowing for video/audio selection
-    in runtime. It's disabled ("no") by default for performance reasons.
 
     ``^`` matches the beginning of the URL, ``$`` matches its end, and you
     should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to match
@@ -579,6 +575,9 @@ Program Behavior
 
     See more lua patterns here: https://www.lua.org/manual/5.1/manual.html#5.4.1
 
+    The ``use_manifests`` script option makes mpv use the master manifest URL for
+    formats like HLS and DASH, if available, allowing for video/audio selection
+    in runtime. It's disabled ("no") by default for performance reasons.
 
 ``--ytdl-format=<best|worst|mp4|webm|...>``
     Video format/quality that is directly passed to youtube-dl. The possible
@@ -763,7 +762,7 @@ Video
     likely works with Intel GPUs only. It also requires the opengl EGL backend.
 
     The ``cuda`` and ``cuda-copy`` modes provides deinterlacing in the decoder
-    which is useful as there is no other deinterlacing mechanism in the opengl
+    which is useful as there is no other deinterlacing mechanism in the gpu
     output path. To use this deinterlacing you must pass the option:
     ``vd-lavc-o=deint=[weave|bob|adaptive]``.
     Pass ``weave`` (or leave the option unset) to not attempt any
@@ -791,6 +790,11 @@ Video
         When using this switch, hardware decoding is still only done for some
         codecs. See ``--hwdec-codecs`` to enable hardware decoding for more
         codecs.
+
+    .. note::
+
+       Most non-copy methods only work with the OpenGL GPU backend. Currently,
+       only the ``nvdec`` and ``cuda`` methods work with Vulkan.
 
     .. admonition:: Quality reduction with hardware decoding
 
@@ -901,14 +905,18 @@ Video
     format, with likely no advantages.
 
 ``--cuda-decode-device=<auto|0..>``
-    Choose the GPU device used for decoding when using the ``cuda`` hwdec.
+    Choose the GPU device used for decoding when using the ``cuda`` or
+    ``nvdec`` hwdecs with the OpenGL GPU backend.
 
-    By default, the device that is being used to provide OpenGL output will
+    By default, the device that is being used to provide ``gpu`` output will
     also be used for decoding (and in the vast majority of cases, only one
     GPU will be present).
 
-    Note that when using the ``cuda-copy`` hwdec, a different option must be
-    passed: ``--vd-lavc-o=gpu=<0..>``.
+    Note that when using the ``cuda-copy`` or ``nvdec-copy`` hwdec, a
+    different option must be passed: ``--vd-lavc-o=gpu=<0..>``.
+
+    Note that this option is not available with the Vulkan GPU backend. With
+    Vulkan, decoding must always happen on the display device.
 
 ``--vaapi-device=<device file>``
     Choose the DRM device for ``vaapi-copy``. This should be the path to a
@@ -4327,11 +4335,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
     will reproduce the source image perfectly if no scaling is performed.
     Enabled by default. Note that this option never affects ``--cscale``.
 
-``--linear-scaling``
-    Scale in linear light. It should only be used with a
-    ``--fbo-format`` that has at least 16 bit precision. This option
-    has no effect on HDR content.
-
 ``--correct-downscaling``
     When using convolution based filters, extend the filter size when
     downscaling. Increases quality, but reduces performance while downscaling.
@@ -4339,6 +4342,32 @@ The following video options are currently all specific to ``--vo=gpu`` and
     This will perform slightly sub-optimally for anamorphic video (but still
     better than without it) since it will extend the size to match only the
     milder of the scale factors between the axes.
+
+``--linear-downscaling``
+    Scale in linear light when downscaling. It should only be used with a
+    ``--fbo-format`` that has at least 16 bit precision. This option
+    has no effect on HDR content.
+
+``--linear-upscaling``
+    Scale in linear light when upscaling. Like ``--linear-downscaling``, it
+    should only be used with a ``--fbo-format`` that has at least 16 bits
+    precisions. This is not usually recommended except for testing/specific
+    purposes. Users are advised to either enable ``--sigmoid-upscaling`` or
+    keep both options disabled (i.e. scaling in gamma light).
+
+``--sigmoid-upscaling``
+    When upscaling, use a sigmoidal color transform to avoid emphasizing
+    ringing artifacts. This is incompatible with and replaces
+    ``--linear-upscaling``. (Note that sigmoidization also requires
+    linearization, so the ``LINEAR`` rendering step fires in both cases)
+
+``--sigmoid-center``
+    The center of the sigmoid curve used for ``--sigmoid-upscaling``, must be a
+    float between 0.0 and 1.0. Defaults to 0.75 if not specified.
+
+``--sigmoid-slope``
+    The slope of the sigmoid curve used for ``--sigmoid-upscaling``, must be a
+    float between 1.0 and 20.0. Defaults to 6.5 if not specified.
 
 ``--interpolation``
     Reduce stuttering caused by mismatches in the video fps and display refresh
@@ -4728,7 +4757,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     LINEAR (fixed)
         Linear light image, before scaling. This only fires when
-        ``--linear-scaling`` is in effect.
+        ``--linear-upscaling``, ``--linear-downscaling`` or
+        ``--sigmoid-upscaling`` is in effect.
 
     SIGMOID (fixed)
         Sigmoidized light, before scaling. This only fires when
@@ -4784,18 +4814,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Add some extra noise to the image. This significantly helps cover up
     remaining quantization artifacts. Higher numbers add more noise. (Default
     48)
-
-``--sigmoid-upscaling``
-    When upscaling, use a sigmoidal color transform to avoid emphasizing
-    ringing artifacts. This also implies ``--linear-scaling``.
-
-``--sigmoid-center``
-    The center of the sigmoid curve used for ``--sigmoid-upscaling``, must be a
-    float between 0.0 and 1.0. Defaults to 0.75 if not specified.
-
-``--sigmoid-slope``
-    The slope of the sigmoid curve used for ``--sigmoid-upscaling``, must be a
-    float between 1.0 and 20.0. Defaults to 6.5 if not specified.
 
 ``--sharpen=<value>``
     If set to a value other than 0, enable an unsharp masking filter. Positive
@@ -4891,6 +4909,15 @@ The following video options are currently all specific to ``--vo=gpu`` and
 ``--cocoa-force-dedicated-gpu=<yes|no>``
     Deactivates the automatic graphics switching and forces the dedicated GPU.
     (default: no)
+
+    OS X only.
+
+``--cocoa-cb-sw-renderer=<yes|no|auto>``
+    Use the Apple Software Renderer when using cocoa-cb (default: auto). If set
+    to ``no`` the software renderer is never used and instead fails when a the
+    usual pixel format could not be created, ``yes`` will always only use the
+    software renderer, and ``auto`` only falls back to the software renderer
+    when the usual pixel format couldn't be created.
 
     OS X only.
 

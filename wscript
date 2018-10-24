@@ -171,6 +171,11 @@ main_dependencies = [
         'fmsg': 'Unable to find either POSIX or MinGW-w64 environment, ' \
                 'or compiler does not work.',
     }, {
+        'name': '--swift',
+        'desc': 'macOS Swift build tools',
+        'deps': 'os-darwin',
+        'func': check_swift,
+    }, {
         'name': '--uwp',
         'desc': 'Universal Windows Platform',
         'default': 'disable',
@@ -508,7 +513,7 @@ audio_output_features = [
     }, {
         'name': '--openal',
         'desc': 'OpenAL audio output',
-        'func': check_openal,
+        'func': check_pkg_config('openal', '>= 1.13'),
         'default': 'disable'
     }, {
         'name': '--opensles',
@@ -841,11 +846,11 @@ hwaccel_features = [
     }, {
         'name': 'ffnvcodec',
         'desc': 'CUDA Headers and dynamic loader',
-        'func': check_pkg_config('ffnvcodec >= 8.1.24.1'),
+        'func': check_pkg_config('ffnvcodec >= 8.2.15.3'),
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',
-        'deps': 'gl && ffnvcodec',
+        'deps': '(gl || vulkan) && ffnvcodec',
         'func': check_true,
     }
 ]
@@ -914,7 +919,7 @@ standalone_features = [
      }, {
         'name': '--macos-cocoa-cb',
         'desc': 'macOS opengl-cb backend',
-        'deps': 'cocoa',
+        'deps': 'cocoa  && swift',
         'func': check_true
     }
 ]

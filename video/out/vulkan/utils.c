@@ -192,6 +192,7 @@ bool mpvk_instance_init(struct mpvk_ctx *vk, struct mp_log *log,
 
     // Enable whatever extensions were compiled in.
     const char *extensions[] = {
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
         VK_KHR_SURFACE_EXTENSION_NAME,
         surf_ext_name,
 
@@ -328,6 +329,27 @@ error:
     return false;
 }
 
+bool mpvk_get_phys_device_uuid(struct mpvk_ctx *vk, uint8_t uuid_out[VK_UUID_SIZE])
+{
+    assert(vk->physd);
+
+    VkPhysicalDeviceIDProperties idprops = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES,
+    };
+
+    VkPhysicalDeviceProperties2 props = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &idprops,
+    };
+
+    VK_LOAD_PFN(vkGetPhysicalDeviceProperties2KHR);
+    pfn_vkGetPhysicalDeviceProperties2KHR(vk->physd, &props);
+
+    memcpy(uuid_out, idprops.deviceUUID, VK_UUID_SIZE);
+
+    return true;
+}
+
 bool mpvk_pick_surface_format(struct mpvk_ctx *vk)
 {
     assert(vk->physd);
@@ -438,6 +460,38 @@ static void add_qinfo(void *tactx, VkDeviceQueueCreateInfo **qinfos,
     MP_TARRAY_APPEND(tactx, *qinfos, *num_qinfos, qinfo);
 }
 
+static bool detect_device_extensions(struct mpvk_ctx *vk)
+{
+    bool ret = false;
+    VkExtensionProperties *props = NULL;
+
+    uint32_t num_exts;
+    VK(vkEnumerateDeviceExtensionProperties(vk->physd, NULL,
+                                            &num_exts, NULL));
+
+    props = talloc_array(NULL, VkExtensionProperties, num_exts);
+    VK(vkEnumerateDeviceExtensionProperties(vk->physd,
+                                            NULL, &num_exts, props));
+
+    for (uint32_t i = 0; i < num_exts; i++) {
+        if (!strcmp(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+                    props[i].extensionName)) {
+            vk->has_ext_external_memory = true;
+            continue;
+        }
+        if (!strcmp(MP_VK_EXTERNAL_MEMORY_EXPORT_EXTENSION_NAME,
+                    props[i].extensionName)) {
+            vk->has_ext_external_memory_export = true;
+            continue;
+        }
+    }
+
+    ret = true;
+error:
+    talloc_free(props);
+    return ret;
+}
+
 bool mpvk_device_init(struct mpvk_ctx *vk, struct mpvk_device_opts opts)
 {
     assert(vk->physd);
@@ -493,9 +547,18 @@ bool mpvk_device_init(struct mpvk_ctx *vk, struct mpvk_device_opts opts)
     add_qinfo(tmp, &qinfos, &num_qinfos, qfs, idx_comp, opts.queue_count);
     add_qinfo(tmp, &qinfos, &num_qinfos, qfs, idx_tf, opts.queue_count);
 
+    if (!detect_device_extensions(vk)) {
+        MP_WARN(vk, "Failed to enumerate device extensions. "
+                    "Some features may be disabled.\n");
+    }
+
     const char **exts = NULL;
     int num_exts = 0;
     MP_TARRAY_APPEND(tmp, exts, num_exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (vk->has_ext_external_memory)
+        MP_TARRAY_APPEND(tmp, exts, num_exts, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+    if (vk->has_ext_external_memory_export)
+        MP_TARRAY_APPEND(tmp, exts, num_exts, MP_VK_EXTERNAL_MEMORY_EXPORT_EXTENSION_NAME);
     if (vk->spirv->required_ext)
         MP_TARRAY_APPEND(tmp, exts, num_exts, vk->spirv->required_ext);
 

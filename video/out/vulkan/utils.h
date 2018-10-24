@@ -10,6 +10,12 @@
 #define VK_LOAD_PFN(name) PFN_##name pfn_##name = (PFN_##name) \
                             vkGetInstanceProcAddr(vk->inst, #name);
 
+#if HAVE_WIN32_DESKTOP
+    #define MP_VK_EXTERNAL_MEMORY_EXPORT_EXTENSION_NAME VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME
+#else
+    #define MP_VK_EXTERNAL_MEMORY_EXPORT_EXTENSION_NAME VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME
+#endif
+
 // Return a human-readable name for various struct mpvk_ctx enums
 const char* vk_err(VkResult res);
 
@@ -49,6 +55,9 @@ bool mpvk_surface_init(struct vo *vo, struct mpvk_ctx *vk);
 // name: only match a device with this name
 // sw: also allow software/virtual devices
 bool mpvk_find_phys_device(struct mpvk_ctx *vk, const char *name, bool sw);
+
+// Get the UUID for the selected physical device
+bool mpvk_get_phys_device_uuid(struct mpvk_ctx *vk, uint8_t uuid_out[VK_UUID_SIZE]);
 
 // Pick a suitable surface format that's supported by this physical device.
 bool mpvk_pick_surface_format(struct mpvk_ctx *vk);
