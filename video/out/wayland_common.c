@@ -32,8 +32,8 @@
 // Generated from idle-inhibit-unstable-v1.xml
 #include "video/out/wayland/idle-inhibit-v1.h"
 
-// Generated from server-decoration.xml
-#include "video/out/wayland/srv-decor.h"
+// Generated from xdg-decoration-unstable-v1.xml
+#include "video/out/wayland/xdg-decoration-v1.h"
 
 static void xdg_shell_ping(void *data, struct xdg_wm_base *shell, uint32_t serial)
 {
@@ -823,8 +823,8 @@ static void registry_handle_add(void *data, struct wl_registry *reg, uint32_t id
         wl->dnd_devman = wl_registry_bind(reg, id, &wl_data_device_manager_interface, 3);
     }
 
-    if (!strcmp(interface, org_kde_kwin_server_decoration_manager_interface.name) && found++) {
-        wl->server_decoration_manager = wl_registry_bind(reg, id, &org_kde_kwin_server_decoration_manager_interface, 1);
+    if (!strcmp(interface, zxdg_decoration_manager_v1_interface.name) && found++) {
+        wl->xdg_decoration_manager = wl_registry_bind(reg, id, &zxdg_decoration_manager_v1_interface, 1);
     }
 
     if (!strcmp(interface, zwp_idle_inhibit_manager_v1_interface.name) && found++) {
@@ -970,17 +970,18 @@ static int create_xdg_surface(struct vo_wayland_state *wl)
 
 static int set_border_decorations(struct vo_wayland_state *wl, int state)
 {
-    if (!wl->server_decoration)
+    if (!wl->xdg_toplevel_decoration)
         return VO_NOTIMPL;
-    enum org_kde_kwin_server_decoration_mode mode;
+
+    enum zxdg_toplevel_decoration_v1_mode mode;
     if (state) {
         MP_VERBOSE(wl, "Enabling server decorations\n");
-        mode = ORG_KDE_KWIN_SERVER_DECORATION_MODE_SERVER;
+        mode = ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
     } else {
         MP_VERBOSE(wl, "Disabling server decorations\n");
-        mode = ORG_KDE_KWIN_SERVER_DECORATION_MODE_NONE;
+        mode = ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
     }
-    org_kde_kwin_server_decoration_request_mode(wl->server_decoration, mode);
+    zxdg_toplevel_decoration_v1_set_mode(wl->xdg_toplevel_decoration, mode);
     return VO_TRUE;
 }
 
@@ -1036,12 +1037,12 @@ int vo_wayland_init(struct vo *vo)
                    wl_data_device_manager_interface.name);
     }
 
-    if (wl->server_decoration_manager) {
-        wl->server_decoration = org_kde_kwin_server_decoration_manager_create(wl->server_decoration_manager, wl->surface);
+    if (wl->xdg_decoration_manager) {
+        wl->xdg_toplevel_decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(wl->xdg_decoration_manager, wl->xdg_toplevel);
         set_border_decorations(wl, vo->opts->border);
     } else {
         MP_VERBOSE(wl, "Compositor doesn't support the %s protocol!\n",
-                   org_kde_kwin_server_decoration_manager_interface.name);
+                   zxdg_decoration_manager_v1_interface.name);
     }
 
     if (!wl->idle_inhibit_manager)
@@ -1086,11 +1087,11 @@ void vo_wayland_uninit(struct vo *vo)
     if (wl->dnd_devman)
         wl_data_device_manager_destroy(wl->dnd_devman);
 
-    if (wl->server_decoration)
-        org_kde_kwin_server_decoration_destroy(wl->server_decoration);
+    if (wl->xdg_toplevel_decoration)
+        zxdg_toplevel_decoration_v1_destroy(wl->xdg_toplevel_decoration);
 
-    if (wl->server_decoration_manager)
-        org_kde_kwin_server_decoration_manager_destroy(wl->server_decoration_manager);
+    if (wl->xdg_decoration_manager)
+        zxdg_decoration_manager_v1_destroy(wl->xdg_decoration_manager);
 
     if (wl->surface)
         wl_surface_destroy(wl->surface);

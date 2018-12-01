@@ -333,12 +333,12 @@ bool mpvk_get_phys_device_uuid(struct mpvk_ctx *vk, uint8_t uuid_out[VK_UUID_SIZ
 {
     assert(vk->physd);
 
-    VkPhysicalDeviceIDProperties idprops = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES,
+    VkPhysicalDeviceIDPropertiesKHR idprops = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES_KHR,
     };
 
-    VkPhysicalDeviceProperties2 props = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+    VkPhysicalDeviceProperties2KHR props = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR,
         .pNext = &idprops,
     };
 
@@ -795,12 +795,6 @@ error:
     }
 
     vk->num_cmds_queued = 0;
-
-    // Rotate the queues to ensure good parallelism across frames
-    for (int i = 0; i < vk->num_pools; i++) {
-        struct vk_cmdpool *pool = vk->pools[i];
-        pool->idx_queues = (pool->idx_queues + 1) % pool->num_queues;
-    }
 
     return ret;
 }

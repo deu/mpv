@@ -129,29 +129,36 @@ def build(ctx):
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/idle-inhibit/idle-inhibit-unstable-v1",
             target    = "video/out/wayland/idle-inhibit-v1.h")
-        ctx.wayland_protocol_code(proto_dir = "video/out/wayland",
-            protocol          = "server-decoration",
-            vendored_protocol = True,
-            target            = "video/out/wayland/srv-decor.c")
-        ctx.wayland_protocol_header(proto_dir = "video/out/wayland",
-            protocol          = "server-decoration",
-            vendored_protocol = True,
-            target            = "video/out/wayland/srv-decor.h")
+        ctx.wayland_protocol_code(proto_dir = ctx.env.WL_PROTO_DIR,
+            protocol  = "unstable/xdg-decoration/xdg-decoration-unstable-v1",
+            target    = "video/out/wayland/xdg-decoration-v1.c")
+        ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
+            protocol  = "unstable/xdg-decoration/xdg-decoration-unstable-v1",
+            target    = "video/out/wayland/xdg-decoration-v1.h")
 
     ctx(features = "ebml_header", target = "ebml_types.h")
     ctx(features = "ebml_definitions", target = "ebml_defs.c")
 
     def swift(task):
-        src = ' '.join([x.abspath() for x in task.inputs])
+        src = [x.abspath() for x in task.inputs]
         bridge = ctx.path.find_node("osdep/macOS_swift_bridge.h").abspath()
         tgt = task.outputs[0].abspath()
         header = task.outputs[1].abspath()
         module = task.outputs[2].abspath()
+        module_name = os.path.basename(module).rsplit(".", 1)[0]
 
-        cmd = ('%s %s -module-name macOS_swift -emit-module-path %s '
-               '-import-objc-header %s -emit-objc-header-path %s -o %s %s '
-               '-I. -I%s') % (ctx.env.SWIFT, ctx.env.SWIFT_FLAGS, module,
-                              bridge, header, tgt, src, ctx.srcnode.abspath())
+        cmd = [ ctx.env.SWIFT ]
+        cmd.extend(ctx.env.SWIFT_FLAGS)
+        cmd.extend([
+            "-module-name", module_name,
+            "-emit-module-path", module,
+            "-import-objc-header", bridge,
+            "-emit-objc-header-path", header,
+            "-o", tgt,
+        ])
+        cmd.extend(src)
+        cmd.extend([ "-I.", "-I%s" % ctx.srcnode.abspath() ])
+
         return task.exec_command(cmd)
 
     if ctx.dependency_satisfied('macos-cocoa-cb'):
@@ -166,15 +173,15 @@ def build(ctx):
         ctx(
             rule   = swift,
             source = ctx.filtered_sources(swift_source),
-            target = ('osdep/macOS_swift.o '
-                      'osdep/macOS_swift.h '
-                      'osdep/macOS_swift.swiftmodule'),
+            target = [ "osdep/macOS_swift.o",
+                       "osdep/macOS_swift.h",
+                       "osdep/macOS_swift.swiftmodule" ],
             before = 'c',
         )
 
         ctx.env.append_value('LINKFLAGS', [
             '-Xlinker', '-add_ast_path',
-            '-Xlinker', '%s' % ctx.path.find_or_declare("osdep/macOS_swift.swiftmodule").abspath()
+            '-Xlinker', ctx.path.find_or_declare("osdep/macOS_swift.swiftmodule").abspath()
         ])
 
     if ctx.dependency_satisfied('cplayer'):
@@ -494,11 +501,10 @@ def build(ctx):
         ( "video/out/vulkan/formats.c",          "vulkan" ),
         ( "video/out/vulkan/malloc.c",           "vulkan" ),
         ( "video/out/vulkan/ra_vk.c",            "vulkan" ),
-        ( "video/out/vulkan/spirv_nvidia.c",     "vulkan" ),
         ( "video/out/vulkan/utils.c",            "vulkan" ),
         ( "video/out/w32_common.c",              "win32-desktop" ),
         ( "video/out/wayland/idle-inhibit-v1.c", "wayland" ),
-        ( "video/out/wayland/srv-decor.c",       "wayland" ),
+        ( "video/out/wayland/xdg-decoration-v1.c", "wayland" ),
         ( "video/out/wayland/xdg-shell.c",       "wayland" ),
         ( "video/out/wayland_common.c",          "wayland" ),
         ( "video/out/win32/displayconfig.c",     "win32-desktop" ),

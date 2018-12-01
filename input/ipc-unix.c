@@ -73,7 +73,7 @@ static int ipc_write_str(struct client_arg *client, const char *buf)
             if (rc == 0)
                 return -1;
 
-            if (errno == EBADF) {
+            if (errno == EBADF || errno == ENOTSOCK) {
                 client->writable = false;
                 return 0;
             }
@@ -324,7 +324,7 @@ static void *ipc_thread(void *p)
     }
 
     ipc_un.sun_family = AF_UNIX,
-    strncpy(ipc_un.sun_path, arg->path, sizeof(ipc_un.sun_path));
+    strncpy(ipc_un.sun_path, arg->path, sizeof(ipc_un.sun_path) - 1);
 
     unlink(ipc_un.sun_path);
 

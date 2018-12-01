@@ -20,6 +20,18 @@ Interface changes
 ::
 
  --- mpv 0.30.0 ---
+    - rename `--drm-osd-plane-id` to `--drm-draw-plane`, `--drm-video-plane-id` to
+      `--drm-drmprime-video-plane` and `--drm-osd-size` to `--drm-draw-surface-size`
+      to better reflect what the options actually control, that the values they
+      accept aren't actually internal DRM ID's (like with similar options in
+      ffmpeg's KMS support), and that the video plane is only used when the drmprime
+      overlay hwdec interop is active, with the video being drawn to the draw plane
+      otherwise.
+    - in addition to the above, the `--drm-draw-plane` and `--drm-drmprime-video-plane`
+      options now accept either an integer index, or the values primary or overlay.
+      `--drm-draw-plane` now defaults to primary and `--drm-drmprime-video-plane`
+      defaults to overlay. This should be similar to previous behavior on most drivers
+      due to how planes are usually sorted.
     - rename --opensles-frames-per-buffer to --opensles-frames-per-enqueue to
       better reflect its purpose. In the past it overrides the buffer size the AO
       requests (but not the default/value of the generic --audio-buffer option).
@@ -32,6 +44,9 @@ Interface changes
       `--linear-downscaling`. This means that `--sigmoid-upscaling` no longer
       implies linear light downscaling as well, which was confusing.
     - the built-in `gpu-hq` profile now includes` --linear-downscaling`.
+    - support for `--spirv-compiler=nvidia` has been removed, leaving `shaderc`
+      as the only option. The `--spirv-compiler` option itself has been marked
+      as deprecated, and may be removed in the future.
  --- mpv 0.29.0 ---
     - drop --opensles-sample-rate, as --audio-samplerate should be used if desired
     - drop deprecated --videotoolbox-format, --ff-aid, --ff-vid, --ff-sid,

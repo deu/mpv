@@ -133,6 +133,9 @@ struct priv {
     int num_sems;
     int idx_sems;             // index of next free semaphore pair
     int last_imgidx;          // the image index last acquired (for submit)
+
+    // This is used to pre-fetch the next frame at the end of swap_buffers
+    struct ra_fbo queued_fbo;
 };
 
 static const struct ra_swapchain_fns vulkan_swapchain;
@@ -405,6 +408,9 @@ bool ra_vk_ctx_resize(struct ra_swapchain *sw, int w, int h)
         p->sems_out[idx] = sem_out;
     }
 
+    // Invalidate the queued texture
+    p->queued_fbo = (struct ra_fbo) {0};
+
     // Recreate the ra_tex wrappers
     for (int i = 0; i < p->num_images; i++)
         ra_tex_free(ra, &p->images[i]);
@@ -454,6 +460,13 @@ static bool start_frame(struct ra_swapchain *sw, struct ra_fbo *out_fbo)
     struct mpvk_ctx *vk = p->vk;
     if (!p->swapchain)
         return false;
+
+    if (p->queued_fbo.tex) {
+        assert(out_fbo != &p->queued_fbo);
+        *out_fbo = p->queued_fbo;
+        p->queued_fbo = (struct ra_fbo) {0};
+        return true;
+    }
 
     VkSemaphore sem_in = p->sems_in[p->idx_sems];
     MP_TRACE(vk, "vkAcquireNextImageKHR signals %p\n", (void *)sem_in);
@@ -521,12 +534,15 @@ static bool submit_frame(struct ra_swapchain *sw, const struct vo_frame *frame)
     if (!mpvk_flush_commands(vk))
         return false;
 
-    // Older nvidia drivers can spontaneously combust when submitting to the
-    // same queue as we're rendering from, in a multi-queue scenario. Safest
-    // option is to flush the commands first and then submit to the next queue.
-    // We can drop this hack in the future, I suppose.
-    struct vk_cmdpool *pool = vk->pool_graphics;
-    VkQueue queue = pool->queues[pool->idx_queues];
+    // Submit to the same queue that we were currently rendering to
+    struct vk_cmdpool *pool_gfx = vk->pool_graphics;
+    VkQueue queue = pool_gfx->queues[pool_gfx->idx_queues];
+
+    // Rotate the queues to ensure good parallelism across frames
+    for (int i = 0; i < vk->num_pools; i++) {
+        struct vk_cmdpool *pool = vk->pools[i];
+        pool->idx_queues = (pool->idx_queues + 1) % pool->num_queues;
+    }
 
     VkPresentInfoKHR pinfo = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -562,6 +578,12 @@ static void swap_buffers(struct ra_swapchain *sw)
 
     while (p->frames_in_flight >= sw->ctx->opts.swapchain_depth)
         mpvk_poll_commands(p->vk, 100000); // 100μs
+
+    // Also try and block until the next hardware buffer swap early. this
+    // prevents start_frame from blocking later, thus slightly improving the
+    // frame timing stats. (since mpv assumes most blocking will happen in
+    // swap_buffers)
+    start_frame(sw, &p->queued_fbo);
 }
 
 static const struct ra_swapchain_fns vulkan_swapchain = {

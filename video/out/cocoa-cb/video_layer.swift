@@ -28,9 +28,8 @@ class VideoLayer: CAOpenGLLayer {
 
     let videoLock = NSLock()
     let displayLock = NSLock()
-    var hasVideo: Bool = false
     var needsFlip: Bool = false
-    var canDrawOffScreen: Bool = false
+    var forceDraw: Bool = false
     var cglContext: CGLContextObj? = nil
     var cglPixelFormat: CGLPixelFormatObj? = nil
     var surfaceSize: NSSize?
@@ -53,7 +52,7 @@ class VideoLayer: CAOpenGLLayer {
             if inLiveResize {
                 isAsynchronous = true
             }
-            update()
+            update(force: true)
         }
     }
 
@@ -91,7 +90,8 @@ class VideoLayer: CAOpenGLLayer {
         if inLiveResize == false {
             isAsynchronous = false
         }
-        return mpv != nil && cocoaCB.backendState == .initialized
+        return mpv != nil && cocoaCB.backendState == .initialized &&
+               (forceDraw || mpv.isRenderUpdateFrame())
     }
 
     override func draw(inCGLContext ctx: CGLContextObj,
@@ -99,11 +99,8 @@ class VideoLayer: CAOpenGLLayer {
                        forLayerTime t: CFTimeInterval,
                        displayTime ts: UnsafePointer<CVTimeStamp>?) {
         needsFlip = false
-        canDrawOffScreen = true
-        draw(ctx)
-    }
+        forceDraw = false
 
-    func draw(_ ctx: CGLContextObj) {
         if draw.rawValue >= Draw.atomic.rawValue {
              if draw == .atomic {
                 draw = .atomicEnd
@@ -135,7 +132,7 @@ class VideoLayer: CAOpenGLLayer {
     }
 
     func atomicDrawingStart() {
-        if draw == .normal && hasVideo {
+        if draw == .normal {
             NSDisableScreenUpdates()
             draw = .atomic
         }
@@ -150,6 +147,18 @@ class VideoLayer: CAOpenGLLayer {
 
     override func copyCGLPixelFormat(forDisplayMask mask: UInt32) -> CGLPixelFormatObj {
         if cglPixelFormat != nil { return cglPixelFormat! }
+
+        let attributeLookUp: [UInt32:String] = [
+            kCGLOGLPVersion_3_2_Core.rawValue:     "kCGLOGLPVersion_3_2_Core",
+            kCGLOGLPVersion_Legacy.rawValue:       "kCGLOGLPVersion_Legacy",
+            kCGLPFAOpenGLProfile.rawValue:         "kCGLPFAOpenGLProfile",
+            kCGLPFAAccelerated.rawValue:           "kCGLPFAAccelerated",
+            kCGLPFADoubleBuffer.rawValue:          "kCGLPFADoubleBuffer",
+            kCGLPFABackingStore.rawValue:          "kCGLPFABackingStore",
+            kCGLPFAAllowOfflineRenderers.rawValue: "kCGLPFAAllowOfflineRenderers",
+            kCGLPFASupportsAutomaticGraphicsSwitching.rawValue: "kCGLPFASupportsAutomaticGraphicsSwitching",
+            0: ""
+        ]
 
         let glVersions: [CGLOpenGLProfile] = [
             kCGLOGLPVersion_3_2_Core,
@@ -178,6 +187,13 @@ class VideoLayer: CAOpenGLLayer {
                 if err == kCGLBadAttribute || err == kCGLBadPixelFormat || pix == nil {
                     glAttributes.remove(at: index)
                 } else {
+                    var attArray = glAttributes.map({ (value: _CGLPixelFormatAttribute) -> String in
+                        return attributeLookUp[value.rawValue]!
+                    })
+                    attArray.removeLast()
+
+                    mpv.sendVerbose("Created CGL pixel format with attributes: " +
+                                    "\(attArray.joined(separator: ", "))")
                     break verLoop
                 }
             }
@@ -225,33 +241,22 @@ class VideoLayer: CAOpenGLLayer {
         let isUpdate = needsFlip
         super.display()
         CATransaction.flush()
-        if isUpdate {
-            if !cocoaCB.window.occlusionState.contains(.visible) &&
-                needsFlip && canDrawOffScreen
-            {
-                CGLSetCurrentContext(cglContext!)
-                draw(cglContext!)
-            } else if needsFlip {
-                update()
+        if isUpdate && needsFlip {
+            CGLSetCurrentContext(cglContext!)
+            if mpv.isRenderUpdateFrame() {
+                mpv.drawRender(NSZeroSize, skip: true)
             }
         }
         displayLock.unlock()
     }
 
-    func setVideo(_ state: Bool) {
-        videoLock.lock()
-        hasVideo = state
-        videoLock.unlock()
-    }
-
-    func update() {
+    func update(force: Bool = false) {
+        if force { forceDraw = true }
         queue.async {
-            self.videoLock.lock()
-            if !self.inLiveResize && self.hasVideo {
+            if self.forceDraw || !self.inLiveResize {
                 self.needsFlip = true
                 self.display()
             }
-            self.videoLock.unlock()
         }
     }
 
