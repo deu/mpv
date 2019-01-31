@@ -29,7 +29,9 @@ BUILD_LIBS="$(pwd)/build_libs"
 
 if choice "Build ffmpeg?"; then
     pushd "ffmpeg"
-    git pull
+    if choice "--- Update ffmpeg?"; then
+        git pull
+    fi
     if choice "--- Reconfigure ffmpeg?"; then
         make distclean
         ./configure \
@@ -48,7 +50,9 @@ fi
 
 if choice "Build libass?"; then
     pushd "libass"
-    git pull
+    if choice "--- Update libass?"; then
+        git pull
+    fi
     if choice "--- Reconfigure libass?"; then
         make distclean
         ./autogen.sh \
@@ -69,8 +73,11 @@ fi
 
 if choice "Build fribidi?"; then
     pushd "fribidi"
-    git pull
+    if choice "--- Update fribidi?"; then
+        git pull
+    fi
     if choice "--- Reconfigure fribidi?"; then
+        ./autogen.sh
         make distclean
         ./bootstrap
         ./configure \
