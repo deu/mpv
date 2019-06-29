@@ -34,6 +34,7 @@ class MPVHelper: NSObject {
     var mpvLog: OpaquePointer?
     var inputContext: OpaquePointer?
     var mpctx: UnsafeMutablePointer<MPContext>?
+    var vo: UnsafeMutablePointer<vo>?
     var macOpts: macos_opts?
     var fbo: GLint = 1
     let deinitLock = NSLock()
@@ -43,19 +44,30 @@ class MPVHelper: NSObject {
         mpvHandle = mpv
         mpvLog = mp_log_new(UnsafeMutablePointer<MPContext>(mpvHandle),
                             mp_client_get_log(mpvHandle), "cocoacb")
-        mpctx = UnsafeMutablePointer<MPContext>(mp_client_get_core(mpvHandle))
-        inputContext = mpctx!.pointee.input
-
-        if let app = NSApp as? Application {
-            let ptr = mp_get_config_group(mpctx!, mp_client_get_global(mpvHandle),
-                                          app.getMacOSConf())
-            macOpts = UnsafeMutablePointer<macos_opts>(OpaquePointer(ptr))!.pointee
+        guard let mpctx = UnsafeMutablePointer<MPContext>(mp_client_get_core(mpvHandle)) else {
+            sendError("No MPContext available")
+            exit(1)
         }
+
+        self.mpctx = mpctx
+        inputContext = mpctx.pointee.input
+        guard let app = NSApp as? Application,
+              let ptr = mp_get_config_group(mpctx,
+                                            mp_client_get_global(mpvHandle),
+                                            app.getMacOSConf()) else
+        {
+            sendError("macOS config group couldn't be retrieved'")
+            exit(1)
+        }
+        macOpts = UnsafeMutablePointer<macos_opts>(OpaquePointer(ptr)).pointee
 
         mpv_observe_property(mpvHandle, 0, "ontop", MPV_FORMAT_FLAG)
         mpv_observe_property(mpvHandle, 0, "border", MPV_FORMAT_FLAG)
         mpv_observe_property(mpvHandle, 0, "keepaspect-window", MPV_FORMAT_FLAG)
         mpv_observe_property(mpvHandle, 0, "macos-title-bar-style", MPV_FORMAT_STRING)
+        mpv_observe_property(mpvHandle, 0, "macos-title-bar-appearance", MPV_FORMAT_STRING)
+        mpv_observe_property(mpvHandle, 0, "macos-title-bar-material", MPV_FORMAT_STRING)
+        mpv_observe_property(mpvHandle, 0, "macos-title-bar-color", MPV_FORMAT_STRING)
     }
 
     func initRender() {
@@ -79,7 +91,7 @@ class MPVHelper: NSObject {
     }
 
     let getProcAddress: (@convention(c) (UnsafeMutableRawPointer?, UnsafePointer<Int8>?)
-                        -> UnsafeMutableRawPointer?)! =
+                        -> UnsafeMutableRawPointer?) =
     {
         (ctx: UnsafeMutableRawPointer?, name: UnsafePointer<Int8>?)
                         -> UnsafeMutableRawPointer? in
@@ -127,7 +139,7 @@ class MPVHelper: NSObject {
         return flags & UInt64(MPV_RENDER_UPDATE_FRAME.rawValue) > 0
     }
 
-    func drawRender(_ surface: NSSize, skip: Bool = false) {
+    func drawRender(_ surface: NSSize, _ ctx: CGLContextObj, skip: Bool = false) {
         deinitLock.lock()
         if mpvRenderContext != nil {
             var i: GLint = 0
@@ -153,6 +165,9 @@ class MPVHelper: NSObject {
             glClearColor(0, 0, 0, 1)
             glClear(GLbitfield(GL_COLOR_BUFFER_BIT))
         }
+
+        if !skip { CGLFlushDrawable(ctx) }
+
         deinitLock.unlock()
     }
 
@@ -207,27 +222,31 @@ class MPVHelper: NSObject {
     }
 
     func getStringProperty(_ name: String) -> String? {
-        if mpvHandle == nil { return nil }
-        let value = mpv_get_property_string(mpvHandle, name)
-        let str = value == nil ? nil : String(cString: value!)
+        guard let mpv = mpvHandle,
+              let value = mpv_get_property_string(mpv, name) else
+        {
+            return nil
+        }
+
+        let str = String(cString: value)
         mpv_free(value)
         return str
     }
 
     func canBeDraggedAt(_ pos: NSPoint) -> Bool {
-        if inputContext == nil { return false }
-        let canDrag = !mp_input_test_dragging(inputContext!, Int32(pos.x), Int32(pos.y))
+        guard let input = inputContext else { return false }
+        let canDrag = !mp_input_test_dragging(input, Int32(pos.x), Int32(pos.y))
         return canDrag
     }
 
     func setMousePosition(_ pos: NSPoint) {
-        if inputContext == nil { return }
-        mp_input_set_mouse_pos(inputContext!, Int32(pos.x), Int32(pos.y))
+        guard let input = inputContext else { return }
+        mp_input_set_mouse_pos(input, Int32(pos.x), Int32(pos.y))
     }
 
     func putAxis(_ mpkey: Int32, delta: Double) {
-        if inputContext == nil { return }
-        mp_input_put_wheel(inputContext!, mpkey, delta)
+        guard let input = inputContext else { return }
+        mp_input_put_wheel(input, mpkey, delta)
     }
 
     func sendVerbose(_ msg: String) {
@@ -250,7 +269,7 @@ class MPVHelper: NSObject {
         if mpvLog == nil {
             sendFallback(message: msg, type: t)
         } else {
-            let args: [CVarArg] = [ (msg as NSString).utf8String! ]
+            let args: [CVarArg] = [ (msg as NSString).utf8String ?? "NO MESSAGE"]
             mp_msg_va(mpvLog, Int32(t), "%s\n", getVaList(args))
         }
     }

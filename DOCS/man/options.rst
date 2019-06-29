@@ -1104,7 +1104,7 @@ Video
     You can get the list of allowed codecs with ``mpv --vd=help``. Remove the
     prefix, e.g. instead of ``lavc:h264`` use ``h264``.
 
-    By default, this is set to ``h264,vc1,wmv3,hevc,mpeg2video,vp9``. Note that
+    By default, this is set to ``h264,vc1,hevc,vp9``. Note that
     the hardware acceleration special codecs like ``h264_vdpau`` are not
     relevant anymore, and in fact have been removed from Libav in this form.
 
@@ -2966,6 +2966,19 @@ Demuxer
 
     Disabling this option is not recommended. Use it for debugging only.
 
+``--demuxer-termination-timeout=<seconds>``
+    Number of seconds the player should wait to shutdown the demuxer (default:
+    0.1). The player will wait up to this much time before it closes the
+    stream layer forcefully. Forceful closing usually means the network I/O is
+    given no chance to close its connections gracefully (of course the OS can
+    still close TCP connections properly), and might result in annoying messages
+    being logged, and in some cases, confused remote servers.
+
+    This timeout is usually only applied when loading has finished properly. If
+    loading is aborted by the user, or in some corner cases like removing
+    external tracks sourced from network during playback, forceful closing is
+    always used.
+
 ``--demuxer-readahead-secs=<seconds>``
     If ``--demuxer-thread`` is enabled, this controls how much the demuxer
     should buffer ahead in seconds (default: 1). As long as no packet has
@@ -3844,97 +3857,15 @@ TV
 Cache
 -----
 
-``--cache=<kBytes|yes|no|auto>``
-    Set the size of the cache in kilobytes, disable it with ``no``, or
-    automatically enable it if needed with ``auto`` (default: ``auto``).
-    With ``auto``, the cache will usually be enabled for network streams,
-    using the size set by ``--cache-default``. With ``yes``, the cache will
-    always be enabled with the size set by ``--cache-default`` (unless the
-    stream cannot be cached, or ``--cache-default`` disables caching).
+``--cache=<yes|no|auto>``
+    Decide whether to use network cache settings (default: auto).
 
-    May be useful when playing files from slow media, but can also have
-    negative effects, especially with file formats that require a lot of
-    seeking, such as MP4.
+    If enabled, use the maximum of ``--cache-secs`` and ``--demuxer-max-bytes``
+    for the cache size. If disabled, ``--cache-pause`` and related are
+    implicitly disabled.
 
-    Note that half the cache size will be used to allow fast seeking back. This
-    is also the reason why a full cache is usually not reported as 100% full.
-    The cache fill display does not include the part of the cache reserved for
-    seeking back. The actual maximum percentage will usually be the ratio
-    between readahead and backbuffer sizes.
-
-``--cache-default=<kBytes|no>``
-    Set the size of the cache in kilobytes (default: 10000 KB). Using ``no``
-    will not automatically enable the cache e.g. when playing from a network
-    stream. Note that using ``--cache`` will always override this option.
-
-``--cache-initial=<kBytes>``
-    Playback will start when the cache has been filled up with this many
-    kilobytes of data (default: 0).
-
-``--cache-seek-min=<kBytes>``
-    If a seek is to be made to a position within ``<kBytes>`` of the cache
-    size from the current position, mpv will wait for the cache to be
-    filled to this position rather than performing a stream seek (default:
-    500).
-
-    This matters for small forward seeks. With slow streams (especially HTTP
-    streams) there is a tradeoff between skipping the data between current
-    position and seek destination, or performing an actual seek. Depending
-    on the situation, either of these might be slower than the other method.
-    This option allows control over this.
-
-``--cache-backbuffer=<kBytes>``
-    Size of the cache back buffer (default: 10000 KB). This will add to the total
-    cache size, and reserved the amount for seeking back. The reserved amount
-    will not be used for readahead, and instead preserves already read data to
-    enable fast seeking back.
-
-``--cache-file=<TMP|path>``
-    Create a cache file on the filesystem.
-
-    There are two ways of using this:
-
-    1. Passing a path (a filename). The file will always be overwritten. When
-       the general cache is enabled, this file cache will be used to store
-       whatever is read from the source stream.
-
-       This will always overwrite the cache file, and you can't use an existing
-       cache file to resume playback of a stream. (Technically, mpv wouldn't
-       even know which blocks in the file are valid and which not.)
-
-       The resulting file will not necessarily contain all data of the source
-       stream. For example, if you seek, the parts that were skipped over are
-       never read and consequently are not written to the cache. The skipped over
-       parts are filled with zeros. This means that the cache file doesn't
-       necessarily correspond to a full download of the source stream.
-
-       Both of these issues could be improved if there is any user interest.
-
-       .. warning:: Causes random corruption when used with ordered chapters or
-                    with ``--audio-file``.
-
-    2. Passing the string ``TMP``. This will not be interpreted as filename.
-       Instead, an invisible temporary file is created. It depends on your
-       C library where this file is created (usually ``/tmp/``), and whether
-       filename is visible (the ``tmpfile()`` function is used). On some
-       systems, automatic deletion of the cache file might not be guaranteed.
-
-       If you want to use a file cache, this mode is recommended, because it
-       doesn't break ordered chapters or ``--audio-file``. These modes open
-       multiple cache streams, and using the same file for them obviously
-       clashes.
-
-    See also: ``--cache-file-size``.
-
-``--cache-file-size=<kBytes>``
-    Maximum size of the file created with ``--cache-file``. For read accesses
-    above this size, the cache is simply not used.
-
-    Keep in mind that some use-cases, like playing ordered chapters with cache
-    enabled, will actually create multiple cache files, each of which will
-    use up to this much disk space.
-
-    (Default: 1048576, 1 GB.)
+    The ``auto`` choice sets this depending on whether the stream is thought to
+    involve network accesses (this is an imperfect heuristic).
 
 ``--no-cache``
     Turn off input stream caching. See ``--cache``.
@@ -4427,9 +4358,15 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Used in ``--dither=fruit`` mode only.
 
-``--dither=<fruit|ordered|no>``
+``--dither=<fruit|ordered|error-diffusion|no>``
     Select dithering algorithm (default: fruit). (Normally, the
     ``--dither-depth`` option controls whether dithering is enabled.)
+
+    The ``error-diffusion`` option requires compute shader support. It also
+    requires large amount of shared memory to run, the size of which depends on
+    both the kernel (see ``--error-diffusion`` option below) and the height of
+    video window. It will fallback to ``fruit`` dithering if there is no enough
+    shared memory to run the shader.
 
 ``--temporal-dither``
     Enable temporal dithering. (Only active if dithering is enabled in
@@ -4442,6 +4379,29 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Determines how often the dithering pattern is updated when
     ``--temporal-dither`` is in use. 1 (the default) will update on every video
     frame, 2 on every other frame, etc.
+
+``--error-diffusion=<kernel>``
+    The error diffusion kernel to use when ``--dither=error-diffusion`` is set.
+
+    ``simple``
+        Propagate error to only two adjacent pixels. Fastest but low quality.
+
+    ``sierra-lite``
+        Fast with reasonable quality. This is the default.
+
+    ``floyd-steinberg``
+        Most notable error diffusion kernel.
+
+    ``atkinson``
+        Looks different from other kernels because only fraction of errors will
+        be propagated during dithering. A typical use case of this kernel is
+        saving dithered screenshot (in window mode). This kernel produces
+        slightly smaller file, with still reasonable dithering quality.
+
+    There are other kernels (use ``--error-diffusion=help`` to list) but most of
+    them are much slower and demanding even larger amount of shared memory.
+    Among these kernels, ``burkes`` achieves a good balance between performance
+    and quality, and probably is the one you want to try first.
 
 ``--gpu-debug``
     Enables GPU debugging. What this means depends on the API type. For OpenGL,
@@ -4653,12 +4613,18 @@ The following video options are currently all specific to ``--vo=gpu`` and
         hook point can still cause that hook point to be saved, which has some
         minor overhead)
 
-    OFFSET <ox> <oy>
+    OFFSET <ox oy | ALIGN>
         Indicates a pixel shift (offset) introduced by this pass. These pixel
         offsets will be accumulated and corrected during the next scaling pass
         (``cscale`` or ``scale``). The default values are 0 0 which correspond
         to no shift. Note that offsets are ignored when not overwriting the
         hooked texture.
+
+        A special value of ``ALIGN`` will attempt to fix existing offset of
+        HOOKED by align it with reference. It requires HOOKED to be resizable
+        (see below). It works transparently with fragment shader. For compute
+        shader, the predefined ``texmap`` macro is required to handle coordinate
+        mapping.
 
     COMPONENTS <n>
         Specifies how many components of this pass's output are relevant and
@@ -4923,17 +4889,74 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     OS X only.
 
-``--macos-title-bar-style=<dark|ultradark|light|mediumlight|auto>``
-    Sets the styling of the title bar (default: dark).
-    OS X and cocoa-cb only
+``--macos-title-bar-appearance=<appearance>``
+    Sets the appearance of the title bar (default: auto). Not all combinations
+    of appearances and ``--macos-title-bar-material`` materials make sense or
+    are unique. Appearances that are not supported by you current macOS version
+    fall back to the default value.
+    macOS and cocoa-cb only
 
-    :dark:        Dark title bar with vibrancy, a subtle blurring effect that
-                  dynamically blends the background (Video) into the title bar.
-    :ultradark:   Darker title bar with vibrancy (like QuickTime Player).
-    :light:       Bright title bar with vibrancy.
-    :mediumlight: Less bright title bar with vibrancy.
-    :auto:        Detects the system settings and sets the title bar styling
-                  appropriately, either ultradark or mediumlight.
+    ``<appearance>`` can be one of the following:
+
+    :auto:                     Detects the system settings and sets the title
+                               bar appearance appropriately. On macOS 10.14 it
+                               also detects run time changes.
+    :aqua:                     The standard macOS Light appearance.
+    :darkAqua:                 The standard macOS Dark appearance. (macOS 10.14+)
+    :vibrantLight:             Light vibrancy appearance with.
+    :vibrantDark:              Dark vibrancy appearance with.
+    :aquaHighContrast:         Light Accessibility appearance. (macOS 10.14+)
+    :darkAquaHighContrast:     Dark Accessibility appearance. (macOS 10.14+)
+    :vibrantLightHighContrast: Light vibrancy Accessibility appearance.
+                               (macOS 10.14+)
+    :vibrantDarkHighContrast:  Dark vibrancy Accessibility appearance.
+                               (macOS 10.14+)
+
+``--macos-title-bar-material=<material>``
+    Sets the material of the title bar (default: titlebar). All deprecated
+    materials should not be used on macOS 10.14+ because their functionality
+    is not guaranteed. Not all combinations of materials and
+    ``--macos-title-bar-appearance`` appearances make sense or are unique.
+    Materials that are not supported by you current macOS version fall back to
+    the default value.
+    macOS and cocoa-cb only
+
+    ``<material>`` can be one of the following:
+
+    :titlebar:              The standard macOS titel bar material.
+    :selection:             The standard macOS selection material.
+    :menu:                  The standard macOS menu material. (macOS 10.11+)
+    :popover:               The standard macOS popover material. (macOS 10.11+)
+    :sidebar:               The standard macOS sidebar material. (macOS 10.11+)
+    :headerView:            The standard macOS header view material.
+                            (macOS 10.14+)
+    :sheet:                 The standard macOS sheet material. (macOS 10.14+)
+    :windowBackground:      The standard macOS window background material.
+                            (macOS 10.14+)
+    :hudWindow:             The standard macOS hudWindow material. (macOS 10.14+)
+    :fullScreen:            The standard macOS full screen material.
+                            (macOS 10.14+)
+    :toolTip:               The standard macOS tool tip material. (macOS 10.14+)
+    :contentBackground:     The standard macOS content background material.
+                            (macOS 10.14+)
+    :underWindowBackground: The standard macOS under window background material.
+                            (macOS 10.14+)
+    :underPageBackground:   The standard macOS under page background material.
+                            (deprecated in macOS 10.14+)
+    :dark:                  The standard macOS dark material.
+                            (deprecated in macOS 10.14+)
+    :light:                 The standard macOS light material.
+                            (macOS 10.14+)
+    :mediumLight:           The standard macOS mediumLight material.
+                            (macOS 10.11+, deprecated in macOS 10.14+)
+    :ultraDark:             The standard macOS ultraDark material.
+                            (macOS 10.11+ deprecated in macOS 10.14+)
+
+``--macos-title-bar-color=<color>``
+    Sets the color of the title bar (default: completely transparent). Is
+    influenced by ``--macos-title-bar-appearance`` and
+    ``--macos-title-bar-material``.
+    See ``--sub-color`` for color syntax.
 
 ``--macos-fs-animation-duration=<default|0-1000>``
     Sets the fullscreen resize animation duration in ms (default: default).
@@ -5247,6 +5270,14 @@ The following video options are currently all specific to ``--vo=gpu`` and
     linear
         Specifies the scale factor to use while stretching. Defaults to 1.0.
 
+``--tone-mapping-max-boost=<1.0..10.0>``
+    Upper limit for how much the tone mapping algorithm is allowed to boost
+    the average brightness by over-exposing the image. The default value of 1.0
+    allows no additional brightness boost. A value of 2.0 would allow
+    over-exposing by a factor of 2, and so on. Raising this setting can help
+    reveal details that would otherwise be hidden in dark scenes, but raising
+    it too high will make dark scenes appear unnaturally bright.
+
 ``--hdr-compute-peak=<auto|yes|no>``
     Compute the HDR peak and frame average brightness per-frame instead of
     relying on tagged metadata. These values are averaged over local regions as
@@ -5257,17 +5288,50 @@ The following video options are currently all specific to ``--vo=gpu`` and
     The special value ``auto`` (default) will enable HDR peak computation
     automatically if compute shaders and SSBOs are supported.
 
-``--tone-mapping-desaturate=<value>``
-    Apply desaturation for highlights. The parameter essentially controls the
-    steepness of the desaturation curve. The higher the parameter, the more
-    aggressively colors will be desaturated. This setting helps prevent
-    unnaturally blown-out colors for super-highlights, by (smoothly) turning
-    into white instead. This makes images feel more natural, at the cost of
-    reducing information about out-of-range colors.
+``--hdr-peak-decay-rate=<1.0..1000.0>``
+    The decay rate used for the HDR peak detection algorithm (default: 100.0).
+    This is only relevant when ``--hdr-compute-peak`` is enabled. Higher values
+    make the peak decay more slowly, leading to more stable values at the cost
+    of more "eye adaptation"-like effects (although this is mitigated somewhat
+    by ``--hdr-scene-threshold``). A value of 1.0 (the lowest possible) disables
+    all averaging, meaning each frame's value is used directly as measured,
+    but doing this is not recommended for "noisy" sources since it may lead
+    to excessive flicker. (In signal theory terms, this controls the time
+    constant "tau" of an IIR low pass filter)
 
-    The default of 0.5 provides a good balance. This value is weaker than the
-    ACES ODT curves' recommendation, but works better for most content in
-    practice. A setting of 0.0 disables this option.
+``--hdr-scene-threshold-low=<0.0..100.0>``, ``--hdr-scene-threshold-high=<0.0..100.0>``
+    The lower and upper thresholds (in dB) for a brightness difference
+    to be considered a scene change (default: 5.5 low, 10.0 high). This is only
+    relevant when ``--hdr-compute-peak`` is enabled. Normally, small
+    fluctuations in the frame brightness are compensated for by the peak
+    averaging mechanism, but for large jumps in the brightness this can result
+    in the frame remaining too bright or too dark for up to several seconds,
+    depending on the value of ``--hdr-peak-decay-rate``. To counteract this,
+    when the brightness between the running average and the current frame
+    exceeds the low threshold, mpv will make the averaging filter more
+    aggressive, up to the limit of the high threshold (at which point the
+    filter becomes instant).
+
+``--tone-mapping-desaturate=<0.0..1.0>``
+    Apply desaturation for highlights (default: 0.75). The parameter controls
+    the strength of the desaturation curve. A value of 0.0 completely disables
+    it, while a value of 1.0 means that overly bright colors will tend towards
+    white. (This is not always the case, especially not for highlights that are
+    near primary colors)
+
+    Values in between apply progressively more/less aggressive desaturation.
+    This setting helps prevent unnaturally oversaturated colors for
+    super-highlights, by (smoothly) turning them into less saturated (per
+    channel tone mapped) colors instead. This makes images feel more natural,
+    at the cost of chromatic distortions for out-of-range colors. The default
+    value of 0.75 provides a good balance. Setting this to 0.0 preserves the
+    chromatic accuracy of the tone mapping process.
+
+``--tone-mapping-desaturate-exponent=<0.0..20.0>``
+    This setting controls the exponent of the desaturation curve, which
+    controls how bright a color needs to be in order to start being
+    desaturated. The default of 1.5 provides a reasonable balance.  Decreasing
+    this exponent makes the curve more aggressive.
 
 ``--gamut-warning``
     If enabled, mpv will mark all clipped/out-of-gamut pixels that exceed a
@@ -5328,12 +5392,14 @@ The following video options are currently all specific to ``--vo=gpu`` and
     Size of the 3D LUT generated from the ICC profile in each dimension.
     Default is 64x64x64. Sizes may range from 2 to 512.
 
-``--icc-contrast=<0-1000000>``
+``--icc-contrast=<0-1000000|inf>``
     Specifies an upper limit on the target device's contrast ratio. This is
     detected automatically from the profile if possible, but for some profiles
     it might be missing, causing the contrast to be assumed as infinite. As a
     result, video may appear darker than intended. This only affects BT.1886
-    content. The default of 0 means no limit.
+    content. The default of 0 means no limit if the detected contrast is less
+    than 100000, and limits to 1000 otherwise. Use ``--icc-contrast=inf`` to
+    preserve the infinite contrast (most likely when using OLED displays).
 
 ``--blend-subtitles=<yes|video|no>``
     Blend subtitles directly onto upscaled video frames, before interpolation
@@ -5647,6 +5713,12 @@ Miscellaneous
     The behavior of this option might changed in the future, such as changing
     it to a template (similar to ``--screenshot-template``), being renamed,
     removed, or anything else, until it is declared semi-stable.
+
+``--stream-record=<file>``
+    Similar to ``--record-file``, but write packets as they are received. The
+    implementation of this does not tolerate seeks (outside of demuxer cache),
+    or streams being selected/deselected during recording. Can not be set at
+    runtime. Use with care.
 
 ``--lavfi-complex=<string>``
     Set a "complex" libavfilter filter, which means a single filter graph can

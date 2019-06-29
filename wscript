@@ -747,13 +747,26 @@ video_output_features = [
         'deps': 'shaderc-shared || shaderc-static',
         'func': check_true,
     }, {
-        'name': '--crossc',
-        'desc': 'libcrossc SPIR-V translator',
-        'func': check_pkg_config('crossc'),
+        'name': 'spirv-cross-shared',
+        'desc': 'SPIRV-Cross SPIR-V shader converter (shared library)',
+        'deps': '!static-build',
+        'groups': ['spirv-cross'],
+        'func': check_pkg_config('spirv-cross-c-shared'),
+    }, {
+        'name': 'spirv-cross-static',
+        'desc': 'SPIRV-Cross SPIR-V shader converter (static library)',
+        'deps': '!spirv-cross-shared',
+        'groups': ['spirv-cross'],
+        'func': check_pkg_config('spirv-cross'),
+    }, {
+        'name': '--spirv-cross',
+        'desc': 'SPIRV-Cross SPIR-V shader converter',
+        'deps': 'spirv-cross-shared || spirv-cross-static',
+        'func': check_true,
     }, {
         'name': '--d3d11',
         'desc': 'Direct3D 11 video output',
-        'deps': 'win32-desktop && shaderc && crossc',
+        'deps': 'win32-desktop && shaderc && spirv-cross',
         'func': check_cc(header_name=['d3d11_1.h', 'dxgi1_2.h']),
     }, {
         # We need MMAL/bcm_host/dispmanx APIs. Also, most RPI distros require
@@ -805,11 +818,14 @@ video_output_features = [
                 "Aborting. If you really mean to compile without OpenGL " +
                 "video outputs use --disable-gl.",
     }, {
+        'name': '--libplacebo',
+        'desc': 'libplacebo support',
+        'func': check_pkg_config('libplacebo >= 1.18.0'),
+    }, {
         'name': '--vulkan',
-        'desc': 'Vulkan context support',
-        'deps': 'shaderc',
-        # Lowest version tested, Ubuntu 16.04's
-        'func': check_pkg_config('vulkan >= 1.0.61'),
+        'desc':  'Vulkan context support',
+        'deps': 'libplacebo',
+        'func': check_pkg_config('vulkan'),
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
@@ -849,7 +865,7 @@ hwaccel_features = [
     }, {
         'name': 'ffnvcodec',
         'desc': 'CUDA Headers and dynamic loader',
-        'func': check_pkg_config('ffnvcodec >= 8.2.15.3'),
+        'func': check_pkg_config('ffnvcodec >= 8.2.15.7'),
     }, {
         'name': '--cuda-hwaccel',
         'desc': 'CUDA hwaccel',

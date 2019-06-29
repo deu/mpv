@@ -35,13 +35,13 @@
 // Generated from xdg-decoration-unstable-v1.xml
 #include "video/out/wayland/xdg-decoration-v1.h"
 
-static void xdg_shell_ping(void *data, struct xdg_wm_base *shell, uint32_t serial)
+static void xdg_wm_base_ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial)
 {
-    xdg_wm_base_pong(shell, serial);
+    xdg_wm_base_pong(wm_base, serial);
 }
 
-static const struct xdg_wm_base_listener xdg_shell_listener = {
-    xdg_shell_ping,
+static const struct xdg_wm_base_listener xdg_wm_base_listener = {
+    xdg_wm_base_ping,
 };
 
 static int spawn_cursor(struct vo_wayland_state *wl)
@@ -806,8 +806,8 @@ static void registry_handle_add(void *data, struct wl_registry *reg, uint32_t id
 
     if (!strcmp(interface, xdg_wm_base_interface.name) && found++) {
         ver = MPMIN(ver, 2); /* We can use either 1 or 2 */
-        wl->shell = wl_registry_bind(reg, id, &xdg_wm_base_interface, ver);
-        xdg_wm_base_add_listener(wl->shell, &xdg_shell_listener, wl);
+        wl->wm_base = wl_registry_bind(reg, id, &xdg_wm_base_interface, ver);
+        xdg_wm_base_add_listener(wl->wm_base, &xdg_wm_base_listener, wl);
     }
 
     if (!strcmp(interface, wl_seat_interface.name) && found++) {
@@ -956,7 +956,7 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 static int create_xdg_surface(struct vo_wayland_state *wl)
 {
-    wl->xdg_surface = xdg_wm_base_get_xdg_surface(wl->shell, wl->surface);
+    wl->xdg_surface = xdg_wm_base_get_xdg_surface(wl->wm_base, wl->surface);
     xdg_surface_add_listener(wl->xdg_surface, &xdg_surface_listener, wl);
 
     wl->xdg_toplevel = xdg_surface_get_toplevel(wl->xdg_surface);
@@ -1013,7 +1013,7 @@ int vo_wayland_init(struct vo *vo)
     /* Do a roundtrip to run the registry */
     wl_display_roundtrip(wl->display);
 
-    if (!wl->shell) {
+    if (!wl->wm_base) {
         MP_FATAL(wl, "Compositor doesn't support the required %s protocol!\n",
                  xdg_wm_base_interface.name);
         return false;
@@ -1063,6 +1063,9 @@ void vo_wayland_uninit(struct vo *vo)
 
     mp_input_put_key(wl->vo->input_ctx, MP_INPUT_RELEASE_ALL);
 
+    if (wl->current_output && wl->current_output->output)
+        wl_output_destroy(wl->current_output->output);
+
     if (wl->cursor_theme)
         wl_cursor_theme_destroy(wl->cursor_theme);
 
@@ -1072,17 +1075,26 @@ void vo_wayland_uninit(struct vo *vo)
     if (wl->xkb_context)
         xkb_context_unref(wl->xkb_context);
 
+    if (wl->xkb_state)
+        xkb_state_unref(wl->xkb_state);
+
+    if (wl->xkb_keymap)
+        xkb_keymap_unref(wl->xkb_keymap);
+
     if (wl->idle_inhibitor)
         zwp_idle_inhibitor_v1_destroy(wl->idle_inhibitor);
 
     if (wl->idle_inhibit_manager)
         zwp_idle_inhibit_manager_v1_destroy(wl->idle_inhibit_manager);
 
-    if (wl->shell)
-        xdg_wm_base_destroy(wl->shell);
+    if (wl->wm_base)
+        xdg_wm_base_destroy(wl->wm_base);
 
     if (wl->shm)
         wl_shm_destroy(wl->shm);
+
+    if (wl->dnd_ddev)
+        wl_data_device_destroy(wl->dnd_ddev);
 
     if (wl->dnd_devman)
         wl_data_device_manager_destroy(wl->dnd_devman);
@@ -1093,11 +1105,32 @@ void vo_wayland_uninit(struct vo *vo)
     if (wl->xdg_decoration_manager)
         zxdg_decoration_manager_v1_destroy(wl->xdg_decoration_manager);
 
+    if (wl->xdg_toplevel)
+        xdg_toplevel_destroy(wl->xdg_toplevel);
+
+    if (wl->xdg_surface)
+        xdg_surface_destroy(wl->xdg_surface);
+
+    if (wl->compositor)
+        wl_compositor_destroy(wl->compositor);
+
     if (wl->surface)
         wl_surface_destroy(wl->surface);
 
     if (wl->frame_callback)
         wl_callback_destroy(wl->frame_callback);
+
+    if (wl->pointer)
+        wl_pointer_destroy(wl->pointer);
+
+    if (wl->keyboard)
+        wl_keyboard_destroy(wl->keyboard);
+
+    if (wl->seat)
+        wl_seat_destroy(wl->seat);
+
+    if (wl->registry)
+        wl_registry_destroy(wl->registry);
 
     if (wl->display) {
         close(wl_display_get_fd(wl->display));

@@ -479,14 +479,36 @@ Available video output drivers are:
     ``--drm-connector=[<gpu_number>.]<name>``
         Select the connector to use (usually this is a monitor.) If ``<name>``
         is empty or ``auto``, mpv renders the output on the first available
-        connector. Use ``--drm-connector=help`` to get list of available
+        connector. Use ``--drm-connector=help`` to get a list of available
         connectors. When using multiple graphic cards, use the ``<gpu_number>``
         argument to disambiguate.
         (default: empty)
 
-    ``--drm-mode=<number>``
-        Mode ID to use (resolution and frame rate).
-        (default: 0)
+    ``--drm-mode=<preferred|highest|N|WxH[@R]>``
+        Mode to use (resolution and frame rate).
+        Possible values:
+
+        :preferred: Use the preferred mode for the screen on the selected
+                    connector. (default)
+        :highest:   Use the mode with the highest resolution available on the
+                    selected connector.
+        :N:         Select mode by index.
+        :WxH[@R]:   Specify mode by width, height, and optionally refresh rate.
+                    In case several modes match, selects the mode that comes
+                    first in the EDID list of modes.
+
+        Use ``--drm-mode=help`` to get a list of available modes for all active
+        connectors.
+
+    ``--drm-atomic=<no|auto>``
+        Toggle use of atomic modesetting. Mostly useful for debugging.
+
+        :no:    Use legacy modesetting.
+        :auto:  Use atomic modesetting, falling back to legacy modesetting if
+                not available. (default)
+
+        Note: Only affects ``gpu-context=drm``. ``vo=drm`` supports legacy
+        modesetting only.
 
     ``--drm-draw-plane=<primary|overlay|N>``
         Select the DRM plane to which video and OSD is drawn to, under normal

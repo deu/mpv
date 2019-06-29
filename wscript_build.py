@@ -164,9 +164,11 @@ def build(ctx):
     if ctx.dependency_satisfied('macos-cocoa-cb'):
         swift_source = [
             ( "osdep/macOS_mpv_helper.swift" ),
+            ( "osdep/macOS_swift_extensions.swift" ),
             ( "video/out/cocoa-cb/events_view.swift" ),
             ( "video/out/cocoa-cb/video_layer.swift" ),
             ( "video/out/cocoa-cb/window.swift" ),
+            ( "video/out/cocoa-cb/title_bar.swift" ),
             ( "video/out/cocoa_cb_common.swift" ),
         ]
 
@@ -321,6 +323,7 @@ def build(ctx):
         ( "misc/rendezvous.c" ),
         ( "misc/ring.c" ),
         ( "misc/thread_pool.c" ),
+        ( "misc/thread_tools.c" ),
 
         ## Options
         ( "options/m_config.c" ),
@@ -354,8 +357,6 @@ def build(ctx):
         ( "stream/ai_oss.c",                     "oss-audio && audio-input" ),
         ( "stream/ai_sndio.c",                   "sndio && audio-input" ),
         ( "stream/audio_in.c",                   "audio-input" ),
-        ( "stream/cache.c" ),
-        ( "stream/cache_file.c" ),
         ( "stream/cookies.c" ),
         ( "stream/dvb_tune.c",                   "dvbin" ),
         ( "stream/frequencies.c",                "tv" ),
@@ -432,6 +433,7 @@ def build(ctx):
         ( "video/out/filter_kernels.c" ),
         ( "video/out/gpu/context.c" ),
         ( "video/out/gpu/d3d11_helpers.c",       "d3d11 || egl-angle-win32" ),
+        ( "video/out/gpu/error_diffusion.c" ),
         ( "video/out/gpu/hwdec.c" ),
         ( "video/out/gpu/lcms.c" ),
         ( "video/out/gpu/libmpv_gpu.c" ),
@@ -444,6 +446,11 @@ def build(ctx):
         ( "video/out/gpu/utils.c" ),
         ( "video/out/gpu/video.c" ),
         ( "video/out/gpu/video_shaders.c" ),
+        ( "video/out/hwdec/hwdec_cuda.c",        "cuda-hwaccel" ),
+        ( "video/out/hwdec/hwdec_cuda_gl.c",     "cuda-hwaccel && gl" ),
+        ( "video/out/hwdec/hwdec_cuda_vk.c",     "cuda-hwaccel && vulkan" ),
+        ( "video/out/placebo/ra_pl.c",           "libplacebo" ),
+        ( "video/out/placebo/utils.c",           "libplacebo" ),
         ( "video/out/opengl/angle_dynamic.c",    "egl-angle" ),
         ( "video/out/opengl/common.c",           "gl" ),
         ( "video/out/opengl/context.c",          "gl" ),
@@ -461,7 +468,6 @@ def build(ctx):
         ( "video/out/opengl/context_x11egl.c",   "egl-x11" ),
         ( "video/out/opengl/egl_helpers.c",      "egl-helpers" ),
         ( "video/out/opengl/formats.c",          "gl" ),
-        ( "video/out/opengl/hwdec_cuda.c",       "cuda-hwaccel" ),
         ( "video/out/opengl/hwdec_d3d11egl.c",   "d3d-hwaccel && egl-angle" ),
         ( "video/out/opengl/hwdec_d3d11eglrgb.c","d3d-hwaccel && egl-angle" ),
         ( "video/out/opengl/hwdec_drmprime_drm.c","drmprime && drm" ),
@@ -496,9 +502,6 @@ def build(ctx):
         ( "video/out/vulkan/context_wayland.c",  "vulkan && wayland" ),
         ( "video/out/vulkan/context_win.c",      "vulkan && win32-desktop" ),
         ( "video/out/vulkan/context_xlib.c",     "vulkan && x11" ),
-        ( "video/out/vulkan/formats.c",          "vulkan" ),
-        ( "video/out/vulkan/malloc.c",           "vulkan" ),
-        ( "video/out/vulkan/ra_vk.c",            "vulkan" ),
         ( "video/out/vulkan/utils.c",            "vulkan" ),
         ( "video/out/w32_common.c",              "win32-desktop" ),
         ( "video/out/wayland/idle-inhibit-v1.c", "wayland" ),

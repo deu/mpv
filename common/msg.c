@@ -127,19 +127,19 @@ static void update_loglevel(struct mp_log *log)
     pthread_mutex_unlock(&mp_msg_lock);
 }
 
-// Return whether the message at this verbosity level would be actually printed.
+// Get the current effective msg level.
 // Thread-safety: see mp_msg().
-bool mp_msg_test(struct mp_log *log, int lev)
+int mp_msg_level(struct mp_log *log)
 {
     struct mp_log_root *root = log->root;
     if (!root)
-        return false;
+        return -1;
     if (atomic_load_explicit(&log->reload_counter, memory_order_relaxed) !=
         atomic_load_explicit(&root->reload_counter, memory_order_relaxed))
     {
         update_loglevel(log);
     }
-    return lev <= log->level;
+    return log->level;
 }
 
 // Reposition cursor and clear lines for outputting the status line. In certain
@@ -460,8 +460,6 @@ void mp_msg_init(struct mpv_global *global)
     struct mp_log *log = mp_log_new(root, &dummy, "");
 
     global->log = log;
-
-    mp_msg_update_msglevels(global);
 }
 
 // If opt is different from *current_path, reopen *file and update *current_path.
@@ -501,13 +499,9 @@ static void reopen_file(char *opt, char **current_path, FILE **file,
     talloc_free(tmp);
 }
 
-void mp_msg_update_msglevels(struct mpv_global *global)
+void mp_msg_update_msglevels(struct mpv_global *global, struct MPOpts *opts)
 {
     struct mp_log_root *root = global->log->root;
-    struct MPOpts *opts = global->opts;
-
-    if (!opts)
-        return;
 
     pthread_mutex_lock(&mp_msg_lock);
 
@@ -522,8 +516,7 @@ void mp_msg_update_msglevels(struct mpv_global *global)
     }
 
     m_option_type_msglevels.free(&root->msg_levels);
-    m_option_type_msglevels.copy(NULL, &root->msg_levels,
-                                 &global->opts->msg_levels);
+    m_option_type_msglevels.copy(NULL, &root->msg_levels, &opts->msg_levels);
 
     atomic_fetch_add(&root->reload_counter, 1);
     pthread_mutex_unlock(&mp_msg_lock);
