@@ -31,7 +31,6 @@
 #include <assert.h>
 
 #include <libavutil/common.h>
-#include <libavutil/avstring.h>
 
 #include "libmpv/client.h"
 #include "player/client.h"
@@ -84,15 +83,6 @@ int m_option_required_params(const m_option_t *opt)
         }
     }
     return 1;
-}
-
-const m_option_t *m_option_list_find(const m_option_t *list, const char *name)
-{
-    for (int i = 0; list[i].name; i++) {
-        if (strcmp(list[i].name, name) == 0)
-            return &list[i];
-    }
-    return NULL;
 }
 
 int m_option_set_node_or_string(struct mp_log *log, const m_option_t *opt,
@@ -403,7 +393,9 @@ static int parse_byte_size(struct mp_log *log, const m_option_t *opt,
     long long tmp_int = bstrtoll(param, &r, 0);
     int64_t unit = 1;
     if (r.len) {
-        if (bstrcasecmp0(r, "kib") == 0 || bstrcasecmp0(r, "k") == 0) {
+        if (bstrcasecmp0(r, "b") == 0) {
+            unit = 1;
+        } else if (bstrcasecmp0(r, "kib") == 0 || bstrcasecmp0(r, "k") == 0) {
             unit = 1024;
         } else if (bstrcasecmp0(r, "mib") == 0 || bstrcasecmp0(r, "m") == 0) {
             unit = 1024 * 1024;
@@ -415,7 +407,7 @@ static int parse_byte_size(struct mp_log *log, const m_option_t *opt,
             mp_err(log, "The %.*s option must be an integer: %.*s\n",
                    BSTR_P(name), BSTR_P(param));
             mp_err(log, "The following suffixes are also allowed: "
-                   "KiB, MiB, GiB, TiB, K, M, G, T.\n");
+                   "KiB, MiB, GiB, TiB, B, K, M, G, T.\n");
             return M_OPT_INVALID;
         }
     }
@@ -456,7 +448,7 @@ char *format_file_size(int64_t size)
 {
     double s = size;
     if (size < 1024)
-        return talloc_asprintf(NULL, "%.0f", s);
+        return talloc_asprintf(NULL, "%.0f B", s);
 
     if (size < (1024 * 1024))
         return talloc_asprintf(NULL, "%.3f KiB", s / (1024.0));
@@ -609,12 +601,12 @@ static void choice_get_min_max(const struct m_option *opt, int *min, int *max)
     *min = INT_MAX;
     *max = INT_MIN;
     for (struct m_opt_choice_alternatives *alt = opt->priv; alt->name; alt++) {
-        *min = FFMIN(*min, alt->value);
-        *max = FFMAX(*max, alt->value);
+        *min = MPMIN(*min, alt->value);
+        *max = MPMAX(*max, alt->value);
     }
     if ((opt->flags & M_OPT_MIN) && (opt->flags & M_OPT_MAX)) {
-        *min = FFMIN(*min, opt->min);
-        *max = FFMAX(*max, opt->max);
+        *min = MPMIN(*min, opt->min);
+        *max = MPMAX(*max, opt->max);
     }
 }
 
@@ -916,6 +908,11 @@ static int parse_double(struct mp_log *log, const m_option_t *opt,
     if (bstr_eatstart0(&rest, ":") || bstr_eatstart0(&rest, "/"))
         tmp_float /= bstrtod(rest, &rest);
 
+    if ((opt->flags & M_OPT_DEFAULT_NAN) && bstr_equals0(param, "default")) {
+        tmp_float = NAN;
+        goto done;
+    }
+
     if (rest.len) {
         mp_err(log, "The %.*s option must be a floating point number or a "
                "ratio (numerator[:/]denominator): %.*s\n",
@@ -929,6 +926,7 @@ static int parse_double(struct mp_log *log, const m_option_t *opt,
         return M_OPT_OUT_OF_RANGE;
     }
 
+done:
     if (dst)
         VAL(dst) = tmp_float;
     return 1;
@@ -936,12 +934,18 @@ static int parse_double(struct mp_log *log, const m_option_t *opt,
 
 static char *print_double(const m_option_t *opt, const void *val)
 {
-    return talloc_asprintf(NULL, "%f", VAL(val));
+    double f = VAL(val);
+    if (isnan(f) && (opt->flags & M_OPT_DEFAULT_NAN))
+        return talloc_strdup(NULL, "default");
+    return talloc_asprintf(NULL, "%f", f);
 }
 
 static char *print_double_f3(const m_option_t *opt, const void *val)
 {
-    return talloc_asprintf(NULL, "%.3f", VAL(val));
+    double f = VAL(val);
+    if (isnan(f))
+        return print_double(opt, val);
+    return talloc_asprintf(NULL, "%.3f", f);
 }
 
 static void add_double(const m_option_t *opt, void *val, double add, bool wrap)
@@ -987,8 +991,14 @@ static int double_set(const m_option_t *opt, void *dst, struct mpv_node *src)
 static int double_get(const m_option_t *opt, void *ta_parent,
                       struct mpv_node *dst, void *src)
 {
-    dst->format = MPV_FORMAT_DOUBLE;
-    dst->u.double_ = *(double *)src;
+    double f = *(double *)src;
+    if (isnan(f) && (opt->flags & M_OPT_DEFAULT_NAN)) {
+        dst->format = MPV_FORMAT_STRING;
+        dst->u.string = talloc_strdup(ta_parent, "default");
+    } else {
+        dst->format = MPV_FORMAT_DOUBLE;
+        dst->u.double_ = f;
+    }
     return 1;
 }
 
@@ -1021,12 +1031,14 @@ static int parse_float(struct mp_log *log, const m_option_t *opt,
 
 static char *print_float(const m_option_t *opt, const void *val)
 {
-    return talloc_asprintf(NULL, "%f", VAL(val));
+    double tmp = VAL(val);
+    return print_double(opt, &tmp);
 }
 
 static char *print_float_f3(const m_option_t *opt, const void *val)
 {
-    return talloc_asprintf(NULL, "%.3f", VAL(val));
+    double tmp = VAL(val);
+    return print_double_f3(opt, &tmp);
 }
 
 static void add_float(const m_option_t *opt, void *val, double add, bool wrap)
@@ -1055,9 +1067,8 @@ static int float_set(const m_option_t *opt, void *dst, struct mpv_node *src)
 static int float_get(const m_option_t *opt, void *ta_parent,
                      struct mpv_node *dst, void *src)
 {
-    dst->format = MPV_FORMAT_DOUBLE;
-    dst->u.double_ = VAL(src);
-    return 1;
+    double tmp = VAL(src);
+    return double_get(opt, ta_parent, dst, &tmp);
 }
 
 const m_option_type_t m_option_type_float = {

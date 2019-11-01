@@ -43,6 +43,16 @@
 // align must be a power of two (align >= 1), x >= 0
 #define MP_ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 #define MP_ALIGN_DOWN(x, align) ((x) & ~((align) - 1))
+#define MP_IS_ALIGNED(x, align) (!((x) & ((align) - 1)))
+#define MP_IS_POWER_OF_2(x) ((x) > 0 && !((x) & ((x) - 1)))
+
+// Return "a", or if that is NOPTS, return "def".
+#define MP_PTS_OR_DEF(a, def) ((a) == MP_NOPTS_VALUE ? (def) : (a))
+// If one of the values is NOPTS, always pick the other one.
+#define MP_PTS_MIN(a, b) MPMIN(MP_PTS_OR_DEF(a, b), MP_PTS_OR_DEF(b, a))
+#define MP_PTS_MAX(a, b) MPMAX(MP_PTS_OR_DEF(a, b), MP_PTS_OR_DEF(b, a))
+// Return a+b, unless a is NOPTS. b must not be NOPTS.
+#define MP_ADD_PTS(a, b) ((a) == MP_NOPTS_VALUE ? (a) : ((a) + (b)))
 
 #define CONTROL_OK 1
 #define CONTROL_TRUE 1
@@ -77,6 +87,8 @@ void mp_rect_union(struct mp_rect *rc, const struct mp_rect *src);
 bool mp_rect_intersection(struct mp_rect *rc, const struct mp_rect *rc2);
 bool mp_rect_contains(struct mp_rect *rc, int x, int y);
 bool mp_rect_equals(struct mp_rect *rc1, struct mp_rect *rc2);
+
+unsigned int mp_log2(uint32_t v);
 
 int mp_snprintf_cat(char *str, size_t size, const char *format, ...)
     PRINTF_ATTRIBUTE(3, 4);

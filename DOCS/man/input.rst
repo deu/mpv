@@ -378,6 +378,9 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     Similar to ``run``, but gives more control about process execution to the
     caller, and does does not detach the process.
 
+    You can avoid blocking until the process terminates by running this command
+    asynchronously. (For example ``mp.command_native_async()`` in Lua scripting.)
+
     This has the following named arguments. The order of them is not guaranteed,
     so you should always call them with named arguments, see `Named arguments`_.
 
@@ -436,8 +439,10 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         killed by mpv as a result of ``playback_only`` being set to ``yes``.
 
     ``killed_by_us`` (``MPV_FORMAT_FLAG``)
-        Set to ``yes`` if the process has been killed by mpv as a result
-        of ``playback_only`` being set to ``yes``.
+        Set to ``yes`` if the process has been killed by mpv, for example as a
+        result of ``playback_only`` being set to ``yes``, aborting the command
+        (e.g. by ``mp.abort_async_command()``), or if the player is about to
+        exit.
 
     Note that the command itself will always return success as long as the
     parameters are correct. Whether the process could be spawned or whether
@@ -446,8 +451,15 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
     This command can be asynchronously aborted via API.
 
-    In all cases, the subprocess will be terminated on player exit. Only the
-    ``run`` command can start processes in a truly detached way.
+    In all cases, the subprocess will be terminated on player exit. Also see
+    `Asynchronous command details`_. Only the ``run`` command can start
+    processes in a truly detached way.
+
+    .. admonition:: Warning
+
+        Don't forget to set the ``playback_only`` field if you want the command
+        run while the player is in idle mode, or if you don't want that end of
+        playback kills the command.
 
 ``quit [<code>]``
     Exit the player. If an argument is given, it's used as process exit code.
@@ -529,6 +541,18 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     used only through the client API or from a script using
     ``mp.command_native``. (see `Property Expansion`_).
 
+``expand-path "<string>"``
+    Expand a path's double-tilde placeholders into a platform-specific path.
+    As ``expand-text``, this can only be used through the client API or from
+    a script using ``mp.command_native``.
+
+    .. admonition:: Example
+
+        ``mp.osd_message(mp.command_native({"expand-path", "~~home/"}))``
+
+        This line of Lua would show the location of the user's mpv
+        configuration directory on the OSD.
+
 ``show-progress``
     Show the progress bar, the elapsed time and the total duration of the file
     on the OSD.
@@ -576,6 +600,12 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     empty string, ``KEYUP`` will be set on all keys. Otherwise, ``KEYUP`` will
     only be set on the key specified by ``name``.
 
+``keybind <name> <command>``
+    Binds a key to an input command. ``command`` must be a complete command
+    containing all the desired arguments and flags. Both ``name`` and
+    ``command`` use the ``input.conf`` naming scheme. This is primarily
+    useful for the client API.
+
 ``audio-add <url> [<flags> [<title> [<lang>]]]``
     Load the given audio file. See ``sub-add`` command.
 
@@ -584,6 +614,15 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
 ``audio-reload [<id>]``
     Reload the given audio tracks. See ``sub-reload`` command.
+
+``video-add <url> [<flags> [<title> [<lang>]]]``
+    Load the given video file. See ``sub-add`` command.
+
+``video-remove [<id>]``
+    Remove the given video track. See ``sub-remove`` command.
+
+``video-reload [<id>]``
+    Reload the given video tracks. See ``sub-reload`` command.
 
 ``rescan-external-files [<mode>]``
     Rescan external files according to the current ``--sub-auto`` and
@@ -876,6 +915,12 @@ Input Commands that are Possibly Subject to Change
     is freed as soon as the result mpv_node is freed. As usual with client API
     semantics, you are not allowed to write to the image data.
 
+    The ``stride`` is the number of bytes from a pixel at ``(x0, y0)`` to the
+    pixel at ``(x0, y0 + 1)``. This can be larger than ``w * 4`` if the image
+    was cropped, or if there is padding. This number can be negative as well.
+    You access a pixel with ``byte_index = y * stride + x * 4`` (assuming the
+    ``bgr0`` format).
+
     The ``flags`` argument is like the first argument to ``screenshot`` and
     supports ``subtitles``, ``video``, ``window``.
 
@@ -920,9 +965,75 @@ Input Commands that are Possibly Subject to Change
         equivalent is ``--glsl-shaders-append=file.glsl`` or alternatively
         ``--glsl-shader=file.glsl``.
 
+``dump-cache <start> <end> <filename>``
+    Dump the current cache to the given filename. The ``<filename>`` file is
+    overwritten if it already exists. ``<start>`` and ``<end>`` give the
+    time range of what to dump. If no data is cached at the given time range,
+    nothing may be dumped (creating a file with no packets).
 
-Undocumented commands: ``tv-last-channel`` (TV/DVB only),
-``ao-reload`` (experimental/internal).
+    Dumping a larger part of the cache will freeze the player. No effort was
+    made to fix this, as this feature was meant mostly for creating small
+    excerpts.
+
+    See ``--stream-record`` for various caveats that mostly apply to this
+    command too, as both use the same underlying code for writing the output
+    file.
+
+    If ``<filename>`` is an empty string, an ongoing ``dump-cache`` is stopped.
+
+    If ``<end>`` is ``no``, then continuous dumping is enabled. Then, after
+    dumping the existing parts of the cache, anything read from network is
+    appended to the cache as well. This behaves similar to ``--stream-record``
+    (although it does not conflict with that option, and they can be both active
+    at the same time).
+
+    If the ``<end>`` time is after the cache, the command will _not_ wait and
+    write newly received data to it.
+
+    The end of the resulting file may be slightly damaged or incomplete at the
+    end. (Not enough effort was made to ensure that the end lines up properly.)
+
+    Note that this command will finish only once dumping ends. That means it
+    works similar to the ``screenshot`` command, just that it can block much
+    longer. If continuous dumping is used, the command will not finish until
+    playback is stopped, an error happens, another ``dump-cache`` command is
+    run, or an API like ``mp.abort_async_command`` was called to explicitly stop
+    the command. See `Synchronous vs. Asynchronous`_.
+
+    .. note::
+
+        This was mostly created for network streams. For local files, there may
+        be much better methods to create excerpts and such. There are tons of
+        much more user-friendly Lua scripts, that will reencode parts of a file
+        by spawning a separate instance of ``ffmpeg``. With network streams,
+        this is not that easily possible, as the stream would have to be
+        downloaded again. Even if ``--stream-record`` is used to record the
+        stream to the local filesystem, there may be problems, because the
+        recorded file is still written to.
+
+    This command is experimental, and all details about it may change in the
+    future.
+
+``ab-loop-dump-cache <filename>``
+    Essentially calls ``dump-cache`` with the current AB-loop points as
+    arguments. Like ``dump-cache``, this will overwrite the file at
+    ``<filename>``. Likewise, if the B point is set to ``no``, it will enter
+    continuous dumping after the existing cache was dumped.
+
+    The author reserves the right to remove this command if enough motivation
+    is found to move this functionality to a trivial Lua script.
+
+``ab-loop-align-cache``
+    Re-adjust the A/B loop points to the start and end within the cache the
+    ``ab-loop-dump-cache`` command will (probably) dump. Basically, it aligns
+    the times on keyframes. The guess might be off especially at the end (due to
+    granularity issues due to remuxing). If the cache shrinks in the meantime,
+    the points set by the command will not be the effective parameters either.
+
+    This command has an even more uncertain future than ``ab-loop-dump-cache``
+    and might disappear without replacement if the author decides it's useless.
+
+Undocumented commands: ``ao-reload`` (experimental/internal).
 
 Hooks
 ~~~~~
@@ -1077,6 +1188,8 @@ command behaves by itself. There are the following cases:
 - Async libmpv command API (e.g. ``mpv_command_async()``) never blocks the
   caller, and always notify their completion with a message. The ``sync`` and
   ``async`` prefixes make no difference.
+- Lua also provides APIs for running async commands, which behave similar to the
+  C counterparts.
 - In all cases, async mode can still run commands in a synchronous manner, even
   in detached mode. This can for example happen in cases when a command does not
   have an  asynchronous implementation. The async libmpv API still never blocks
@@ -1088,7 +1201,26 @@ default now, and ``async`` changes behavior only in the ways mentioned above.
 
 Currently the following commands have different waiting characteristics with
 sync vs. async: sub-add, audio-add, sub-reload, audio-reload,
-rescan-external-files, screenshot, screenshot-to-file.
+rescan-external-files, screenshot, screenshot-to-file, dump-cache,
+ab-loop-dump-cache.
+
+Asynchronous command details
+----------------------------
+
+On the API level, every asynchronous command is bound to the context which
+started it. For example, an asynchronous command started by ``mpv_command_async``
+is bound to the ``mpv_handle`` passed to the function. Only this ``mpv_handle``
+receives the completion notification (``MPV_EVENT_COMMAND_REPLY``), and only
+this handle can abort a still running command directly. If the ``mpv_handle`` is
+destroyed, any still running async. commands started by it are terminated.
+
+The scripting APIs and JSON IPC give each script/connection its own implicit
+``mpv_handle``.
+
+If the player is closed, the core may abort all pending async. commands on its
+own (like a forced ``mpv_abort_async_command()`` call for each pending command
+on behalf of the API user). This happens at the same time ``MPV_EVENT_SHUTDOWN``
+is sent, and there is no way to prevent this.
 
 Input Sections
 --------------
@@ -1179,10 +1311,17 @@ Property list
     determine it yourself, for example by using the ``working-directory``
     property.
 
+``stream-open-filename``
+    The full path to the currently played media. This is different only from
+    ``path`` in special cases. In particular, if ``--ytdl=yes`` is used, and
+    the URL is detected by ``youtube-dl``, then the script will set this
+    property to the actual media URL. This property should be set only during
+    the ``on_load`` or ``on_load_fail`` hooks, otherwise it will have no effect
+    (or may do something implementation defined in the future). The property is
+    reset if playback of the current media ends.
+
 ``media-title``
     If the currently played file has a ``title`` tag, use that.
-
-    Otherwise, if the media type is DVD, return the volume ID of DVD.
 
     Otherwise, return the ``filename`` property.
 
@@ -1296,40 +1435,6 @@ Property list
     Current MKV edition number. Setting this property to a different value will
     restart playback. The number of the first edition is 0.
 
-``disc-titles``
-    Number of BD/DVD titles.
-
-    This has a number of sub-properties. Replace ``N`` with the 0-based edition
-    index.
-
-    ``disc-titles/count``
-        Number of titles.
-
-    ``disc-titles/id``
-        Title ID as integer. Currently, this is the same as the title index.
-
-    ``disc-titles/length``
-        Length in seconds. Can be unavailable in a number of cases (currently
-        it works for libdvdnav only).
-
-    When querying the property with the client API using ``MPV_FORMAT_NODE``,
-    or with Lua ``mp.get_property_native``, this will return a mpv_node with
-    the following contents:
-
-    ::
-
-        MPV_FORMAT_NODE_ARRAY
-            MPV_FORMAT_NODE_MAP (for each edition)
-                "id"                MPV_FORMAT_INT64
-                "length"            MPV_FORMAT_DOUBLE
-
-``disc-title-list``
-    List of BD/DVD titles.
-
-``disc-title`` (RW)
-    Current BD/DVD title number. Writing works only for ``dvdnav://`` and
-    ``bd://`` (and aliases for these).
-
 ``chapters``
     Number of chapters.
 
@@ -1368,9 +1473,6 @@ Property list
                 "id"                MPV_FORMAT_INT64
                 "title"             MPV_FORMAT_STRING
                 "default"           MPV_FORMAT_FLAG
-
-``angle`` (RW)
-    Current DVD angle.
 
 ``metadata``
     Metadata key/value pairs.
@@ -1490,8 +1592,21 @@ Property list
     buffering amount, while the seek ranges represent the buffered data that
     can actually be used for cached seeking.
 
+    ``bof-cached`` indicates whether the seek range with the lowest timestamp
+    points to the beginning of the stream (BOF). This implies you cannot seek
+    before this position at all. ``eof-cached`` indicates whether the seek range
+    with the highest timestamp points to the end of the stream (EOF). If both
+    ``bof-cached`` and ``eof-cached`` are set to ``yes``, and there's only 1
+    cache range, the entire stream is cached.
+
     ``fw-bytes`` is the number of bytes of packets buffered in the range
-    starting from the current decoding position.
+    starting from the current decoding position. This is a rough estimate
+    (may not account correctly for various overhead), and stops at the
+    demuxer position (it ignores seek ranges after it).
+
+    ``file-cache-bytes`` is the number of bytes stored in the file cache. This
+    includes all overhead, and possibly unused data (like pruned data). This
+    member is missing if the file cache is not active.
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -1504,7 +1619,10 @@ Property list
                 MPV_FORMAT_NODE_MAP
                     "start"             MPV_FORMAT_DOUBLE
                     "end"               MPV_FORMAT_DOUBLE
+            "bof-cached"        MPV_FORMAT_FLAG
+            "eof-cached"        MPV_FORMAT_FLAG
             "fw-bytes"          MPV_FORMAT_INT64
+            "file-cache-bytes"  MPV_FORMAT_INT64
 
     Other fields (might be changed or removed in the future):
 
@@ -1521,11 +1639,6 @@ Property list
     ``total-bytes``
         Sum of packet bytes (plus some overhead estimation) of the entire packet
         queue, including cached seekable ranges.
-
-    ``fw-bytes``
-        Sum of packet bytes (plus some overhead estimation) of the readahead
-        packet queue (packets between current decoder reader positions and
-        demuxer position).
 
 ``demuxer-via-network``
     Returns ``yes`` if the stream demuxed via the main demuxer is most likely
@@ -1555,7 +1668,7 @@ Property list
 ``seeking``
     Returns ``yes`` if the player is currently seeking, or otherwise trying
     to restart playback. (It's possible that it returns ``yes`` while a file
-    is loadedThis is because the same underlying code is used for seeking and
+    is loaded. This is because the same underlying code is used for seeking and
     resyncing.)
 
 ``mixer-active``
@@ -1730,7 +1843,8 @@ Property list
         Intended display rotation in degrees (clockwise).
 
     ``video-params/stereo-in``
-        Source file stereo 3D mode. (See ``--video-stereo-mode`` option.)
+        Source file stereo 3D mode. (See the ``format`` video filter's
+        ``stereo-in`` option.)
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -1838,10 +1952,11 @@ Property list
     Estimated deviation factor of the vsync duration.
 
 ``video-aspect`` (RW)
-    Video aspect, see ``--video-aspect``.
+    Deprecated. This is tied to ``--video-aspect-override``, but always
+    reports the current video aspect if video is active.
 
-    If video is active, this reports the effective aspect value, instead of
-    the value of the ``--video-aspect`` option.
+    The read and write components of this option can be split up into
+    ``video-params/aspect`` and ``video-aspect-override`` respectively.
 
 ``osd-width``, ``osd-height``
     Last known OSD width (can be 0). This is needed if you want to use the
@@ -1851,27 +1966,23 @@ Property list
 ``osd-par``
     Last known OSD display pixel aspect (can be 0).
 
-``program`` (W)
-    Switch TS program (write-only).
-
-``dvb-channel`` (W)
-    Pair of integers: card,channel of current DVB stream.
-    Can be switched to switch to another channel on the same card.
-
-``dvb-channel-name`` (RW)
-    Name of current DVB program.
-    On write, a channel-switch to the named channel on the same
-    card is performed. Can also be used for channel switching.
-
 ``sub-text``
-    Return the current subtitle text. Formatting is stripped. If a subtitle
-    is selected, but no text is currently visible, or the subtitle is not
-    text-based (i.e. DVD/BD subtitles), an empty string is returned.
+    Return the current subtitle text regardless of sub visibility.
+    Formatting is stripped. If the subtitle is not text-based
+    (i.e. DVD/BD subtitles), an empty string is returned.
 
     This property is experimental and might be removed in the future.
 
-``tv-brightness``, ``tv-contrast``, ``tv-saturation``, ``tv-hue`` (RW)
-    TV stuff.
+``sub-start``
+    Return the current subtitle start time (in seconds). If there's multiple
+    current subtitles, returns the first start time. If no current subtitle is
+    present null is returned instead.
+
+``sub-end``
+    Return the current subtitle start time (in seconds). If there's multiple
+    current subtitles, return the last end time. If no current subtitle is
+    present, or if it's present but has unknown or incorrect duration, null
+    is returned instead.
 
 ``playlist-pos`` (RW)
     Current position on playlist. The first entry is on position 0. Writing
@@ -2002,6 +2113,15 @@ Property list
     ``track-list/N/demux-fps``
         Video FPS as indicated by the container. (Not always accurate.)
 
+    ``track-list/N/demux-bitrate``
+        Audio average bitrate, in bits per second. (Not always accurate.)
+
+    ``track-list/N/demux-rotation``
+        Video clockwise rotation metadata, in degrees.
+
+    ``track-list/N/demux-par``
+        Pixel aspect ratio.
+
     ``track-list/N/audio-channels`` (deprecated)
         Deprecated alias for ``track-list/N/demux-channel-count``.
 
@@ -2043,6 +2163,9 @@ Property list
                 "demux-channels"    MPV_FORMAT_STRING
                 "demux-samplerate"  MPV_FORMAT_INT64
                 "demux-fps"         MPV_FORMAT_DOUBLE
+                "demux-bitrate"     MPV_FORMAT_INT64
+                "demux-rotation"    MPV_FORMAT_INT64
+                "demux-par"         MPV_FORMAT_DOUBLE
                 "audio-channels"    MPV_FORMAT_INT64
                 "replaygain-track-peak" MPV_FORMAT_DOUBLE
                 "replaygain-track-gain" MPV_FORMAT_DOUBLE
@@ -2429,12 +2552,6 @@ caveats with some properties (due to historical reasons):
     loading time.)
 
     Option changes at runtime are affected by this as well.
-
-``video-aspect``
-    While video is active, always returns the effective aspect ratio. Setting
-    a special value (like ``no``, values ``<= 0``) will make the property
-    set this as option, and return whatever actual aspect was derived from the
-    option setting.
 
 ``display-fps``
     If a VO is created, this will return either the actual display FPS, or

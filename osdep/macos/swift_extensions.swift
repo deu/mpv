@@ -17,11 +17,15 @@
 
 import Cocoa
 
+extension NSDeviceDescriptionKey {
+    static let screenNumber = NSDeviceDescriptionKey("NSScreenNumber")
+}
+
 extension NSScreen {
 
     public var displayID: CGDirectDisplayID {
         get {
-            return deviceDescription["NSScreenNumber"] as? CGDirectDisplayID ?? 0
+            return deviceDescription[.screenNumber] as? CGDirectDisplayID ?? 0
         }
     }
 
@@ -67,5 +71,12 @@ extension NSColor {
         let blue  = CGFloat((int)       & 0x000000FF)/255
 
         self.init(calibratedRed: red, green: green, blue: blue, alpha: alpha)
+    }
+}
+
+extension Bool {
+
+    init(_ int32: Int32) {
+        self.init(int32 != 0)
     }
 }

@@ -235,8 +235,10 @@ int ra_gl_ctx_color_depth(struct ra_swapchain *sw)
 bool ra_gl_ctx_start_frame(struct ra_swapchain *sw, struct ra_fbo *out_fbo)
 {
     struct priv *p = sw->priv;
-    out_fbo->tex = p->wrapped_fb;
-    out_fbo->flip = !p->params.flipped; // OpenGL FBs are normally flipped
+    *out_fbo = (struct ra_fbo) {
+         .tex = p->wrapped_fb,
+         .flip = !p->params.flipped, // OpenGL FBs are normally flipped
+    };
     return true;
 }
 
@@ -306,7 +308,7 @@ void ra_gl_ctx_swap_buffers(struct ra_swapchain *sw)
             check_pattern(p, step);
     }
 
-    while (p->num_vsync_fences >= sw->ctx->opts.swapchain_depth) {
+    while (p->num_vsync_fences >= sw->ctx->vo->opts->swapchain_depth) {
         gl->ClientWaitSync(p->vsync_fences[0], GL_SYNC_FLUSH_COMMANDS_BIT, 1e9);
         gl->DeleteSync(p->vsync_fences[0]);
         MP_TARRAY_REMOVE_AT(p->vsync_fences, p->num_vsync_fences, 0);

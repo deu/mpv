@@ -71,6 +71,9 @@ Available video output drivers are:
     Shared memory video output driver without hardware acceleration that works
     whenever X11 is present.
 
+    Since mpv 0.30.0, you may need to use ``--profile=sw-fast`` to get decent
+    performance.
+
     .. note:: This is a fallback only, and should not be normally used.
 
 ``vdpau`` (X11 only)
@@ -308,7 +311,7 @@ Available video output drivers are:
     For tuning, refer to your copy of the file ``SDL_hints.h``.
 
     .. note:: This driver is for compatibility with systems that don't provide
-              proper graphics drivers, or which support GLES only.
+              proper graphics drivers.
 
     The following global options are supported by this video output:
 
@@ -383,6 +386,9 @@ Available video output drivers are:
     Depends on support of true color by modern terminals to display the images
     at full color range. On Windows it requires an ansi terminal such as mintty.
 
+    Since mpv 0.30.0, you may need to use ``--profile=sw-fast`` to get decent
+    performance.
+
     ``--vo-tct-algo=<algo>``
         Select how to write the pixels to the terminal.
 
@@ -415,6 +421,8 @@ Available video output drivers are:
             JPEG files, extension .jpeg.
         png
             PNG files.
+        webp
+            WebP files.
 
     ``--vo-image-png-compression=<0-9>``
         PNG compression factor (speed vs. file size tradeoff) (default: 7)
@@ -425,6 +433,12 @@ Available video output drivers are:
         JPEG quality factor (default: 90)
     ``--vo-image-jpeg-optimize=<0-100>``
         JPEG optimization factor (default: 100)
+    ``--vo-image-webp-lossless=<yes|no>``
+        Enable writing lossless WebP files (default: no)
+    ``--vo-image-webp-quality=<0-100>``
+        WebP quality (default: 75)
+    ``--vo-image-webp-compression=<0-6>``
+        WebP compression factor (default: 4)
     ``--vo-image-outdir=<dirname>``
         Specify the directory to save the image files to (default: ``./``).
 
@@ -473,6 +487,9 @@ Available video output drivers are:
     Should be used when one doesn't want to install full-blown graphical
     environment (e.g. no X). Does not support hardware acceleration (if you
     need this, check the ``drm`` backend for ``gpu`` VO).
+
+    Since mpv 0.30.0, you may need to use ``--profile=sw-fast`` to get decent
+    performance.
 
     The following global options are supported by this video output:
 
@@ -540,11 +557,10 @@ Available video output drivers are:
         xrgb2101010 is a packed 30 bits per pixel/10 bits per channel packed RGB
         format with 2 bits of padding.
 
-        Unless you have an intel graphics card, a recent kernel and a recent
-        version of mesa (>=18) xrgb2101010 is unlikely to work for you.
-
-        This currently only has an effect when used together with the ``drm``
-        backend for the ``gpu`` VO. The ``drm`` VO always uses xrgb8888.
+        There are cases when xrgb2101010 will work with the ``drm`` VO, but not
+        with the ``drm`` backend for the ``gpu`` VO. This is because with the
+        ``gpu`` VO, in addition to requiring support in your DRM driver,
+        requires support for xrgb2101010 in your EGL driver
 
     ``--drm-draw-surface-size=<[WxH]>``
         Sets the size of the surface used on the draw plane. The surface will
@@ -569,5 +585,14 @@ Available video output drivers are:
     many of mpv's features (subtitle rendering, OSD/OSC, video filters, etc)
     are not available with this driver.
 
-    To use hardware decoding with ``--vo-gpu`` instead, use
+    To use hardware decoding with ``--vo=gpu`` instead, use
     ``--hwdec=mediacodec-copy`` along with ``--gpu-context=android``.
+
+``wlshm`` (Wayland only)
+    Shared memory video output driver without hardware acceleration that works
+    whenever Wayland is present.
+
+    Since mpv 0.30.0, you may need to use ``--profile=sw-fast`` to get decent
+    performance.
+
+    .. note:: This is a fallback only, and should not be normally used.

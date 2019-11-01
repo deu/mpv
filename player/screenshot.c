@@ -38,6 +38,7 @@
 #include "video/mp_image_pool.h"
 #include "video/out/vo.h"
 #include "video/image_writer.h"
+#include "video/sws_utils.h"
 #include "sub/osd.h"
 
 #include "video/csputils.h"
@@ -47,8 +48,6 @@
 
 typedef struct screenshot_ctx {
     struct MPContext *mpctx;
-
-    bool osd;
 
     // Command to repeat in each-frame mode.
     struct mp_cmd *each_frame;
@@ -65,26 +64,6 @@ void screenshot_init(struct MPContext *mpctx)
     };
 }
 
-static void screenshot_msg(screenshot_ctx *ctx, int status, const char *msg,
-                           ...) PRINTF_ATTRIBUTE(3,4);
-
-static void screenshot_msg(screenshot_ctx *ctx, int status, const char *msg,
-                           ...)
-{
-    va_list ap;
-    char *s;
-
-    va_start(ap, msg);
-    s = talloc_vasprintf(NULL, msg, ap);
-    va_end(ap);
-
-    MP_MSG(ctx->mpctx, status, "%s\n", s);
-    if (ctx->osd && status <= MSGL_INFO)
-        set_osd_msg(ctx->mpctx, 1, ctx->mpctx->opts->osd_duration, "%s", s);
-
-    talloc_free(s);
-}
-
 static char *stripext(void *talloc_ctx, const char *s)
 {
     const char *end = strrchr(s, '.');
@@ -93,25 +72,26 @@ static char *stripext(void *talloc_ctx, const char *s)
     return talloc_asprintf(talloc_ctx, "%.*s", (int)(end - s), s);
 }
 
-static bool write_screenshot(struct MPContext *mpctx, struct mp_image *img,
+static bool write_screenshot(struct mp_cmd_ctx *cmd, struct mp_image *img,
                              const char *filename, struct image_writer_opts *opts)
 {
-    screenshot_ctx *ctx = mpctx->screenshot_ctx;
+    struct MPContext *mpctx = cmd->mpctx;
     struct image_writer_opts *gopts = mpctx->opts->screenshot_image_opts;
     struct image_writer_opts opts_copy = opts ? *opts : *gopts;
 
-    screenshot_msg(ctx, MSGL_V, "Starting screenshot: '%s'", filename);
+    mp_cmd_msg(cmd, MSGL_V, "Starting screenshot: '%s'", filename);
 
     mp_core_unlock(mpctx);
 
-    bool ok = img && write_image(img, &opts_copy, filename, mpctx->log);
+    bool ok = img && write_image(img, &opts_copy, filename, mpctx->global,
+                                 mpctx->log);
 
     mp_core_lock(mpctx);
 
     if (ok) {
-        screenshot_msg(ctx, MSGL_INFO, "Screenshot: '%s'", filename);
+        mp_cmd_msg(cmd, MSGL_INFO, "Screenshot: '%s'", filename);
     } else {
-        screenshot_msg(ctx, MSGL_ERR, "Error writing screenshot!");
+        mp_cmd_msg(cmd, MSGL_ERR, "Error writing screenshot!");
     }
     return ok;
 }
@@ -289,8 +269,11 @@ error_exit:
     return NULL;
 }
 
-static char *gen_fname(screenshot_ctx *ctx, const char *file_ext)
+static char *gen_fname(struct mp_cmd_ctx *cmd, const char *file_ext)
 {
+    struct MPContext *mpctx = cmd->mpctx;
+    screenshot_ctx *ctx = mpctx->screenshot_ctx;
+
     int sequence = 0;
     for (;;) {
         int prev_sequence = sequence;
@@ -301,9 +284,9 @@ static char *gen_fname(screenshot_ctx *ctx, const char *file_ext)
                                    &ctx->frameno);
 
         if (!fname) {
-            screenshot_msg(ctx, MSGL_ERR, "Invalid screenshot filename "
-                           "template! Fix or remove the --screenshot-template "
-                           "option.");
+            mp_cmd_msg(cmd, MSGL_ERR, "Invalid screenshot filename "
+                       "template! Fix or remove the --screenshot-template "
+                       "option.");
             return NULL;
         }
 
@@ -327,8 +310,8 @@ static char *gen_fname(screenshot_ctx *ctx, const char *file_ext)
             return fname;
 
         if (sequence == prev_sequence) {
-            screenshot_msg(ctx, MSGL_ERR, "Can't save screenshot, file '%s' "
-                           "already exists!", fname);
+            mp_cmd_msg(cmd, MSGL_ERR, "Can't save screenshot, file '%s' "
+                       "already exists!", fname);
             talloc_free(fname);
             return NULL;
         }
@@ -387,13 +370,57 @@ static struct mp_image *screenshot_get(struct MPContext *mpctx, int mode,
     return image;
 }
 
+struct mp_image *convert_image(struct mp_image *image, int destfmt,
+                               struct mpv_global *global, struct mp_log *log)
+{
+    int d_w, d_h;
+    mp_image_params_get_dsize(&image->params, &d_w, &d_h);
+
+    struct mp_image_params p = {
+        .imgfmt = destfmt,
+        .w = d_w,
+        .h = d_h,
+        .p_w = 1,
+        .p_h = 1,
+    };
+    mp_image_params_guess_csp(&p);
+
+    if (mp_image_params_equal(&p, &image->params))
+        return mp_image_new_ref(image);
+
+    struct mp_image *dst = mp_image_alloc(p.imgfmt, p.w, p.h);
+    if (!dst) {
+        mp_err(log, "Out of memory.\n");
+        return NULL;
+    }
+    mp_image_copy_attributes(dst, image);
+
+    dst->params = p;
+
+    struct mp_sws_context *sws = mp_sws_alloc(NULL);
+    sws->log = log;
+    if (global)
+        mp_sws_enable_cmdline_opts(sws, global);
+    bool ok = mp_sws_scale(sws, dst, image) >= 0;
+    talloc_free(sws);
+
+    if (!ok) {
+        mp_err(log, "Error when converting image.\n");
+        talloc_free(dst);
+        return NULL;
+    }
+
+    return dst;
+}
+
 // mode is the same as in screenshot_get()
 static struct mp_image *screenshot_get_rgb(struct MPContext *mpctx, int mode)
 {
     struct mp_image *mpi = screenshot_get(mpctx, mode, false);
     if (!mpi)
         return NULL;
-    struct mp_image *res = convert_image(mpi, IMGFMT_BGR0, mpctx->log);
+    struct mp_image *res = convert_image(mpi, IMGFMT_BGR0, mpctx->global,
+                                         mpctx->log);
     talloc_free(mpi);
     return res;
 }
@@ -404,11 +431,7 @@ void cmd_screenshot_to_file(void *p)
     struct MPContext *mpctx = cmd->mpctx;
     const char *filename = cmd->args[0].v.s;
     int mode = cmd->args[1].v.i;
-    bool osd = cmd->msg_osd;
-    screenshot_ctx *ctx = mpctx->screenshot_ctx;
     struct image_writer_opts opts = *mpctx->opts->screenshot_image_opts;
-    bool old_osd = ctx->osd;
-    ctx->osd = osd;
 
     char *ext = mp_splitext(filename, NULL);
     int format = image_writer_format_from_ext(ext);
@@ -416,13 +439,12 @@ void cmd_screenshot_to_file(void *p)
         opts.format = format;
     bool high_depth = image_writer_high_depth(&opts);
     struct mp_image *image = screenshot_get(mpctx, mode, high_depth);
-    ctx->osd = old_osd;
     if (!image) {
-        screenshot_msg(ctx, MSGL_ERR, "Taking screenshot failed.");
+        mp_cmd_msg(cmd, MSGL_ERR, "Taking screenshot failed.");
         cmd->success = false;
         return;
     }
-    cmd->success = write_screenshot(mpctx, image, filename, &opts);
+    cmd->success = write_screenshot(cmd, image, filename, &opts);
     talloc_free(image);
 }
 
@@ -433,7 +455,6 @@ void cmd_screenshot(void *p)
     int mode = cmd->args[0].v.i & 3;
     bool each_frame_toggle = (cmd->args[0].v.i | cmd->args[1].v.i) & 8;
     bool each_frame_mode = cmd->args[0].v.i & 16;
-    bool osd = cmd->msg_osd;
 
     screenshot_ctx *ctx = mpctx->screenshot_ctx;
 
@@ -455,20 +476,18 @@ void cmd_screenshot(void *p)
 
     cmd->success = false;
 
-    ctx->osd = osd;
-
     struct image_writer_opts *opts = mpctx->opts->screenshot_image_opts;
     bool high_depth = image_writer_high_depth(opts);
 
     struct mp_image *image = screenshot_get(mpctx, mode, high_depth);
 
     if (image) {
-        char *filename = gen_fname(ctx, image_writer_file_ext(opts));
+        char *filename = gen_fname(cmd, image_writer_file_ext(opts));
         if (filename)
-            cmd->success = write_screenshot(mpctx, image, filename, NULL);
+            cmd->success = write_screenshot(cmd, image, filename, NULL);
         talloc_free(filename);
     } else {
-        screenshot_msg(ctx, MSGL_ERR, "Taking screenshot failed.");
+        mp_cmd_msg(cmd, MSGL_ERR, "Taking screenshot failed.");
     }
 
     talloc_free(image);

@@ -65,8 +65,7 @@ enum mp_voctrl {
     VOCTRL_RESUME,
 
     VOCTRL_SET_PANSCAN,
-    VOCTRL_SET_EQUALIZER,               // struct voctrl_set_equalizer_args*
-    VOCTRL_GET_EQUALIZER,               // struct voctrl_get_equalizer_args*
+    VOCTRL_SET_EQUALIZER,
 
     /* private to vo_gpu */
     VOCTRL_LOAD_HWDEC_API,
@@ -127,18 +126,6 @@ enum mp_voctrl {
 
     /* private to vo_gpu */
     VOCTRL_EXTERNAL_RESIZE,
-};
-
-// VOCTRL_SET_EQUALIZER
-struct voctrl_set_equalizer_args {
-    const char *name;
-    int value;
-};
-
-// VOCTRL_GET_EQUALIZER
-struct voctrl_get_equalizer_args {
-    const char *name;
-    int *valueptr;
 };
 
 // VOCTRL_GET_WIN_STATE
@@ -460,6 +447,7 @@ struct vo {
     struct vo_w32_state *w32;
     struct vo_cocoa_state *cocoa;
     struct vo_wayland_state *wl;
+    struct vo_android_state *android;
     struct mp_hwdec_devices *hwdec_devs;
     struct input_ctx *input_ctx;
     struct osd_state *osd;
@@ -517,9 +505,6 @@ void vo_query_formats(struct vo *vo, uint8_t *list);
 void vo_event(struct vo *vo, int event);
 int vo_query_and_reset_events(struct vo *vo, int events);
 struct mp_image *vo_get_current_frame(struct vo *vo);
-void vo_enable_external_renderloop(struct vo *vo);
-void vo_disable_external_renderloop(struct vo *vo);
-bool vo_render_frame_external(struct vo *vo);
 void vo_set_queue_params(struct vo *vo, int64_t offset_us, int num_req_frames);
 int vo_get_num_req_frames(struct vo *vo);
 int64_t vo_get_vsync_interval(struct vo *vo);

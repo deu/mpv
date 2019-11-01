@@ -111,6 +111,8 @@ extern "C" {
  * and asynchronous calls. If you want a guaranteed order, you need to wait
  * until asynchronous calls report completion before doing the next call.
  *
+ * See also the section "Asynchronous command details" in the manpage.
+ *
  * Multithreading
  * --------------
  *
@@ -165,14 +167,14 @@ extern "C" {
  * Embedding the video window
  * --------------------------
  *
- * Using the opengl-cb API (in opengl_cb.h) is recommended. This API requires
+ * Using the render API (in render_cb.h) is recommended. This API requires
  * you to create and maintain an OpenGL context, to which you can render
  * video using a specific API call. This API does not include keyboard or mouse
  * input directly.
  *
  * There is an older way to embed the native mpv window into your own. You have
  * to get the raw window handle, and set it as "wid" option. This works on X11,
- * win32, and OSX only. It's much easier to use than the opengl-cb API, but
+ * win32, and OSX only. It's much easier to use than the render API, but
  * also has various problems.
  *
  * Also see client API examples and the mpv manpage. There is an extensive
@@ -196,6 +198,8 @@ extern "C" {
  * or change the underlying datatypes. It might be a good idea to prefer
  * MPV_FORMAT_STRING over other types to decouple your code from potential
  * mpv changes.
+ *
+ * Also see: DOCS/compatibility.rst
  *
  * Future changes
  * --------------
@@ -223,7 +227,7 @@ extern "C" {
  * relational operators (<, >, <=, >=).
  */
 #define MPV_MAKE_VERSION(major, minor) (((major) << 16) | (minor) | 0UL)
-#define MPV_CLIENT_API_VERSION MPV_MAKE_VERSION(1, 103)
+#define MPV_CLIENT_API_VERSION MPV_MAKE_VERSION(1, 106)
 
 /**
  * The API user is allowed to "#define MPV_ENABLE_DEPRECATED 0" before
@@ -440,12 +444,12 @@ mpv_handle *mpv_create(void);
 
 /**
  * Initialize an uninitialized mpv instance. If the mpv instance is already
- * running, an error is retuned.
+ * running, an error is returned.
  *
  * This function needs to be called to make full use of the client API if the
  * client API handle was created with mpv_create().
  *
- * Only the following options require to be set _before_ mpv_initialize():
+ * Only the following options are required to be set _before_ mpv_initialize():
  *      - options which are only read at initialization time:
  *        - config
  *        - config-dir
@@ -970,6 +974,22 @@ int mpv_command(mpv_handle *ctx, const char **args);
 int mpv_command_node(mpv_handle *ctx, mpv_node *args, mpv_node *result);
 
 /**
+ * This is essentially identical to mpv_command() but it also returns a result.
+ *
+ * Does not use OSD and string expansion by default.
+ *
+ * @param[in] args NULL-terminated list of strings. Usually, the first item
+ *                 is the command, and the following items are arguments.
+ * @param[out] result Optional, pass NULL if unused. If not NULL, and if the
+ *                    function succeeds, this is set to command-specific return
+ *                    data. You must call mpv_free_node_contents() to free it
+ *                    (again, only if the command actually succeeds).
+ *                    Not many commands actually use this at all.
+ * @return error code (the result parameter is not set on error)
+ */
+int mpv_command_ret(mpv_handle *ctx, const char **args, mpv_node *result);
+
+/**
  * Same as mpv_command, but use input.conf parsing for splitting arguments.
  * This is slightly simpler, but also more error prone, since arguments may
  * need quoting/escaping.
@@ -1177,6 +1197,9 @@ int mpv_get_property_async(mpv_handle *ctx, uint64_t reply_userdata,
  * event queue becomes empty (e.g. mpv_wait_event() would block or return
  * MPV_EVENT_NONE), and then only one event per changed property is returned.
  *
+ * You always get an initial change notification. This is meant to initialize
+ * the user's state to the current value of the property.
+ *
  * Normally, change events are sent only if the property value changes according
  * to the requested format. mpv_event_property will contain the property value
  * as data member.
@@ -1189,7 +1212,7 @@ int mpv_get_property_async(mpv_handle *ctx, uint64_t reply_userdata,
  * If the property is observed with the format parameter set to MPV_FORMAT_NONE,
  * you get low-level notifications whether the property _may_ have changed, and
  * the data member in mpv_event_property will be unset. With this mode, you
- * will have to determine yourself whether the property really changd. On the
+ * will have to determine yourself whether the property really changed. On the
  * other hand, this mechanism can be faster and uses less resources.
  *
  * Observing a property that doesn't exist is allowed. (Although it may still

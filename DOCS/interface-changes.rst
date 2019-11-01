@@ -7,10 +7,15 @@ mpv provides access to its internals via the following means:
 - commands
 - properties
 - events
+- hooks
+
+The sum of these mechanisms is sometimes called command interface.
 
 All of these are important for interfacing both with end users and API users
 (which include Lua scripts, libmpv, and the JSON IPC). As such, they constitute
 a large part of the user interface and APIs.
+
+Also see compatibility.rst.
 
 This document lists changes to them. New changes are added to the top.
 
@@ -19,7 +24,25 @@ Interface changes
 
 ::
 
+ --- mpv 0.31.0 ---
+    - add `--d3d11-output-csp` to enable explicit selection of a D3D11
+      swap chain color space.
+    - add an builtin "sw-fast" profile, which restores performance settings
+      that were switched to higher quality since mpv 0.30.0
  --- mpv 0.30.0 ---
+    - add `--d3d11-output-format` to enable explicit selection of a D3D11
+      swap chain format.
+    - rewrite DVB channel switching to use an integer value
+      `--dvbin-channel-switch-offset` for switching instead of the old
+      stream controls which are now gone. Cycling this property up or down will
+      change the offset to the channel which was initially tuned to.
+      Example for `input.conf`: `H cycle dvbin-channel-switch-offset up`,
+      `K cycle dvbin-channel-switch-offset down`.
+    - adapt `stream_dvb` to support writing to `dvbin-prog` at runtime
+      and also to consistently use dvbin-configuration over URI parameters
+      when provided
+    - add `--d3d11-adapter` to enable explicit selection of a D3D11 rendering
+      adapter by name.
     - rename `--drm-osd-plane-id` to `--drm-draw-plane`, `--drm-video-plane-id` to
       `--drm-drmprime-video-plane` and `--drm-osd-size` to `--drm-draw-surface-size`
       to better reflect what the options actually control, that the values they
@@ -65,21 +88,28 @@ Interface changes
       dropped: `cache`, `cache-size`, `cache-free`, `cache-used`, `--cache-default`,
       `--cache-initial`, `--cache-seek-min`, `--cache-backbuffer`, `--cache-file`,
       `--cache-file-size`
-    - remove async playback abort hack. This breaks aborting playback in the
-      following cases, iff the current stream is a network stream that
-      completely stopped responding:
-        - setting "program" property
-        - setting "cache-size" property
-      In earlier versions of mpv, the player core froze as well in these cases,
-      but could still be aborted with the quit, stop, playlist-prev,
-      playlist-next commands. If these properties are not accessed, frozen
-      network streams should not freeze the player core (only playback in
-      uncached regions), and differing behavior should be reported as a bug.
-      If --demuxer-thread=no is used, there are no guarantees.
+    - the --cache option does not take a number value anymore
+    - remove async playback abort hack. This may make it impossible to abort
+      playback if --demuxer-thread=no is forced.
     - remove `--macos-title-bar-style`, replaced by `--macos-title-bar-material`
       and `--macos-title-bar-appearance`.
     - The default for `--vulkan-async-compute` has changed to `yes` from `no`
       with the move to libplacebo as the back-end for vulkan rendering.
+    - Remove "disc-titles", "disc-title", "disc-title-list", and "angle"
+      properties. dvd:// does not support title ranges anymore.
+    - Remove all "tv-..." options and properties, along with the classic Linux
+      analog TV support.
+    - remove "program" property (no replacement)
+    - always prefer EGL over GLX, which helps with AMD/vaapi, but will break
+      vdpau with --vo=gpu - use --gpu-context=x11 to be able to use vdpau. This
+      does not affect --vo=vdpau or --hwdec=vdpau-copy.
+    - remove deprecated --chapter option
+    - deprecate --record-file
+    - add `--demuxer-cue-codepage`
+    - add ``track-list/N/demux-bitrate``, ``track-list/N/demux-rotation`` and
+      ``track-list/N/demux-par`` property
+    - Deprecate ``--video-aspect`` and add ``--video-aspect-override`` to
+      replace it. (The `video-aspect` option remains unchanged.)
  --- mpv 0.29.0 ---
     - drop --opensles-sample-rate, as --audio-samplerate should be used if desired
     - drop deprecated --videotoolbox-format, --ff-aid, --ff-vid, --ff-sid,
@@ -166,6 +196,9 @@ Interface changes
       internal counter that remembered the current position.
     - remove deprecated ao/vo auto profiles. Consider using scripts like
       auto-profiles.lua instead.
+    - --[c]scale-[w]param[1|2] and --tone-mapping-param now accept "default",
+      and if set to that value, reading them as property will also return
+      "default", instead of float nan as in previous versions
  --- mpv 0.28.0 ---
     - rename --hwdec=mediacodec option to mediacodec-copy, to reflect
       conventions followed by other hardware video decoding APIs

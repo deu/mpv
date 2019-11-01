@@ -344,11 +344,15 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     exact behavior depends on timing and other things.)
 
     In some cases the function is not called even if the property changes.
-    Whether this can happen depends on the property.
+    This depends on the property, and it's a valid feature request to ask for
+    better update handling of a specific property.
 
     If the ``type`` is ``none`` or ``nil``, sporadic property change events are
     possible. This means the change function ``fn`` can be called even if the
     property doesn't actually change.
+
+    You always get an initial change notification. This is meant to initialize
+    the user's state to the current value of the property.
 
 ``mp.unobserve_property(fn)``
     Undo ``mp.observe_property(..., fn)``. This removes all property handlers
@@ -404,7 +408,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
             (``true``). This value is used when the timer expires (but before
             the timer callback function fn is run).
 
-    Note that these are method, and you have to call them using ``:`` instead
+    Note that these are methods, and you have to call them using ``:`` instead
     of ``.`` (Refer to http://www.lua.org/manual/5.2/manual.html#3.4.9 .)
 
     Example:
@@ -682,6 +686,8 @@ strictly part of the guaranteed API.
     It is recommended to use ``mp.command_native`` or ``mp.command_native_async``
     directly, instead of calling this legacy wrapper. It is for compatibility
     only.
+
+    See the ``subprocess`` documentation for semantics and further parameters.
 
 ``utils.subprocess_detached(t)``
     Runs an external process and detaches it from mpv's control.

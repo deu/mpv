@@ -183,6 +183,8 @@ struct vo_chain {
     bool is_coverart;
     // - video consists of sparse still images
     bool is_sparse;
+
+    bool underrun;
 };
 
 // Like vo_chain, for audio.
@@ -206,6 +208,8 @@ struct ao_chain {
     struct track *track;
     struct mp_pin *filter_src;
     struct mp_pin *dec_src;
+
+    bool underrun;
 };
 
 /* Note that playback can be paused, stopped, etc. at any time. While paused,
@@ -326,6 +330,7 @@ typedef struct MPContext {
 
     enum playback_status video_status, audio_status;
     bool restart_complete;
+    int play_dir;
     // Factors to multiply with opts->playback_speed to get the total audio or
     // video speed (usually 1.0, but can be set to by the sync code).
     double speed_factor_v, speed_factor_a;
@@ -333,7 +338,6 @@ typedef struct MPContext {
     // update_playback_speed() updates them from the other fields.
     double audio_speed, video_speed;
     bool display_sync_active;
-    bool display_sync_broken;
     int display_sync_drift_dir;
     // Timing error (in seconds) due to rounding on vsync boundaries
     double display_sync_error;
@@ -422,6 +426,7 @@ typedef struct MPContext {
     bool playing_msg_shown;
 
     bool paused_for_cache;
+    bool demux_underrun;
     double cache_stop_time;
     int cache_buffer;
 
@@ -456,6 +461,7 @@ typedef struct MPContext {
     char *open_url;
     char *open_format;
     int open_url_flags;
+    bool open_for_prefetch;
     // --- All fields below are owned by open_thread, unless open_done was set
     //     to true.
     struct demuxer *open_res_demuxer;
@@ -467,7 +473,8 @@ typedef struct MPContext {
 struct mp_abort_entry {
     // General conditions.
     bool coupled_to_playback;   // trigger when playback is terminated
-    // Actual trigger to abort the work.
+    // Actual trigger to abort the work. Pointer immutable, owner may access
+    // without holding the abort_lock.
     struct mp_cancel *cancel;
     // For client API.
     struct mpv_handle *client;  // non-NULL if done by a client API user
@@ -553,7 +560,7 @@ void issue_refresh_seek(struct MPContext *mpctx, enum seek_precision min_prec);
 double rel_time_to_abs(struct MPContext *mpctx, struct m_rel_time t);
 double get_play_end_pts(struct MPContext *mpctx);
 double get_play_start_pts(struct MPContext *mpctx);
-double get_ab_loop_start_time(struct MPContext *mpctx);
+bool get_ab_loop_times(struct MPContext *mpctx, double t[2]);
 void merge_playlist_files(struct playlist *pl);
 void update_vo_playback_state(struct MPContext *mpctx);
 void update_window_title(struct MPContext *mpctx, bool force);
@@ -588,6 +595,7 @@ void add_step_frame(struct MPContext *mpctx, int dir);
 void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
                 enum seek_precision exact, int flags);
 double get_time_length(struct MPContext *mpctx);
+double get_start_time(struct MPContext *mpctx, int dir);
 double get_current_time(struct MPContext *mpctx);
 double get_playback_time(struct MPContext *mpctx);
 int get_percent_pos(struct MPContext *mpctx);
@@ -605,6 +613,7 @@ void idle_loop(struct MPContext *mpctx);
 int handle_force_window(struct MPContext *mpctx, bool force);
 void seek_to_last_frame(struct MPContext *mpctx);
 void update_screensaver_state(struct MPContext *mpctx);
+void update_ab_loop_clip(struct MPContext *mpctx);
 
 // scripting.c
 struct mp_scripting {

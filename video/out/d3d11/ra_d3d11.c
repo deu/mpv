@@ -19,6 +19,7 @@
 #ifndef D3D11_1_UAV_SLOT_COUNT
 #define D3D11_1_UAV_SLOT_COUNT (64)
 #endif
+#define D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE (0x80)
 
 struct dll_version {
     uint16_t major;
@@ -210,6 +211,9 @@ static void setup_formats(struct ra *ra)
     // RA requires renderable surfaces to be blendable as well
     static const UINT sup_render = D3D11_FORMAT_SUPPORT_RENDER_TARGET |
                                    D3D11_FORMAT_SUPPORT_BLENDABLE;
+    // Typed UAVs are equivalent to images. RA only cares if they're storable.
+    static const UINT sup_store = D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
+    static const UINT sup2_store = D3D11_FORMAT_SUPPORT2_UAV_TYPED_STORE;
 
     struct ra_d3d11 *p = ra->priv;
     HRESULT hr;
@@ -223,6 +227,11 @@ static void setup_formats(struct ra *ra)
         if ((support & sup_basic) != sup_basic)
             continue;
 
+        D3D11_FEATURE_DATA_FORMAT_SUPPORT2 sup2 = { .InFormat = d3dfmt->fmt };
+        ID3D11Device_CheckFeatureSupport(p->dev, D3D11_FEATURE_FORMAT_SUPPORT2,
+                                         &sup2, sizeof(sup2));
+        UINT support2 = sup2.OutFormatSupport2;
+
         struct ra_format *fmt = talloc_zero(ra, struct ra_format);
         *fmt = (struct ra_format) {
             .name           = d3dfmt->name,
@@ -233,6 +242,9 @@ static void setup_formats(struct ra *ra)
             .pixel_size     = d3dfmt->bytes,
             .linear_filter  = (support & sup_filter) == sup_filter,
             .renderable     = (support & sup_render) == sup_render,
+            .storable       = p->fl >= D3D_FEATURE_LEVEL_11_0 &&
+                              (support & sup_store) == sup_store &&
+                              (support2 & sup2_store) == sup2_store,
         };
 
         if (support & D3D11_FORMAT_SUPPORT_TEXTURE1D)
@@ -383,14 +395,16 @@ static struct ra_tex *tex_create(struct ra *ra,
     struct d3d_tex *tex_p = tex->priv = talloc_zero(tex, struct d3d_tex);
     DXGI_FORMAT fmt = fmt_to_dxgi(params->format);
 
+    D3D11_SUBRESOURCE_DATA data;
     D3D11_SUBRESOURCE_DATA *pdata = NULL;
     if (params->initial_data) {
-        pdata = &(D3D11_SUBRESOURCE_DATA) {
+        data = (D3D11_SUBRESOURCE_DATA) {
             .pSysMem = params->initial_data,
             .SysMemPitch = params->w * params->format->pixel_size,
         };
         if (params->dimensions >= 3)
-            pdata->SysMemSlicePitch = pdata->SysMemPitch * params->h;
+            data.SysMemSlicePitch = data.SysMemPitch * params->h;
+        pdata = &data;
     }
 
     D3D11_USAGE usage = D3D11_USAGE_DEFAULT;
@@ -561,8 +575,10 @@ struct ra_tex *ra_d3d11_wrap_tex(struct ra *ra, ID3D11Resource *res)
         goto error;
     }
 
-    if (bind_flags & D3D11_BIND_SHADER_RESOURCE)
+    if (bind_flags & D3D11_BIND_SHADER_RESOURCE) {
         params->render_src = params->blit_src = true;
+        params->src_linear = params->format->linear_filter;
+    }
     if (bind_flags & D3D11_BIND_RENDER_TARGET)
         params->render_dst = params->blit_dst = true;
     if (bind_flags & D3D11_BIND_UNORDERED_ACCESS)
@@ -642,7 +658,8 @@ static bool tex_upload(struct ra *ra, const struct ra_tex_upload_params *params)
     ptrdiff_t stride = tex->params.dimensions >= 2 ? tex->params.w : 0;
     ptrdiff_t pitch = tex->params.dimensions >= 3 ? stride * tex->params.h : 0;
     bool invalidate = true;
-    D3D11_BOX *rc = NULL;
+    D3D11_BOX rc;
+    D3D11_BOX *prc = NULL;
 
     if (tex->params.dimensions == 2) {
         stride = params->stride;
@@ -650,7 +667,7 @@ static bool tex_upload(struct ra *ra, const struct ra_tex_upload_params *params)
         if (params->rc && (params->rc->x0 != 0 || params->rc->y0 != 0 ||
             params->rc->x1 != tex->params.w || params->rc->y1 != tex->params.h))
         {
-            rc = &(D3D11_BOX) {
+            rc = (D3D11_BOX) {
                 .left = params->rc->x0,
                 .top = params->rc->y0,
                 .front = 0,
@@ -658,6 +675,7 @@ static bool tex_upload(struct ra *ra, const struct ra_tex_upload_params *params)
                 .bottom = params->rc->y1,
                 .back = 1,
             };
+            prc = &rc;
             invalidate = params->invalidate;
         }
     }
@@ -665,11 +683,11 @@ static bool tex_upload(struct ra *ra, const struct ra_tex_upload_params *params)
     int subresource = tex_p->array_slice >= 0 ? tex_p->array_slice : 0;
     if (p->ctx1) {
         ID3D11DeviceContext1_UpdateSubresource1(p->ctx1, tex_p->res,
-            subresource, rc, src, stride, pitch,
+            subresource, prc, src, stride, pitch,
             invalidate ? D3D11_COPY_DISCARD : 0);
     } else {
         ID3D11DeviceContext_UpdateSubresource(p->ctx, tex_p->res, subresource,
-            rc, src, stride, pitch);
+            prc, src, stride, pitch);
     }
 
     return true;
@@ -734,9 +752,12 @@ static struct ra_buf *buf_create(struct ra *ra,
 
     struct d3d_buf *buf_p = buf->priv = talloc_zero(buf, struct d3d_buf);
 
+    D3D11_SUBRESOURCE_DATA data;
     D3D11_SUBRESOURCE_DATA *pdata = NULL;
-    if (params->initial_data)
-        pdata = &(D3D11_SUBRESOURCE_DATA) { .pSysMem = params->initial_data };
+    if (params->initial_data) {
+        data = (D3D11_SUBRESOURCE_DATA) { .pSysMem = params->initial_data };
+        pdata = &data;
+    }
 
     D3D11_BUFFER_DESC desc = { .ByteWidth = params->size };
     switch (params->type) {

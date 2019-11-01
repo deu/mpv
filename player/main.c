@@ -280,6 +280,7 @@ struct MPContext *mp_create(void)
         .playback_abort = mp_cancel_new(mpctx),
         .thread_pool = mp_thread_pool_create(mpctx, 0, 1, 30),
         .stop_play = PT_STOP,
+        .play_dir = 1,
     };
 
     pthread_mutex_init(&mpctx->abort_lock, NULL);
@@ -295,13 +296,13 @@ struct MPContext *mp_create(void)
     mpctx->mconfig = m_config_new(mpctx, mpctx->log, sizeof(struct MPOpts),
                                   &mp_default_opts, mp_opts);
     mpctx->opts = mpctx->mconfig->optstruct;
+    mpctx->global->config = mpctx->mconfig->shadow;
     mpctx->mconfig->includefunc = cfg_include;
     mpctx->mconfig->includefunc_ctx = mpctx;
     mpctx->mconfig->use_profiles = true;
     mpctx->mconfig->is_toplevel = true;
     mpctx->mconfig->global = mpctx->global;
     m_config_parse(mpctx->mconfig, "", bstr0(def_config), NULL, 0);
-    m_config_create_shadow(mpctx->mconfig);
 
     mpctx->input = mp_input_init(mpctx->global, mp_wakeup_core_cb, mpctx);
     screenshot_init(mpctx);
@@ -317,6 +318,8 @@ struct MPContext *mp_create(void)
     char *verbose_env = getenv("MPV_VERBOSE");
     if (verbose_env)
         mpctx->opts->verbose = atoi(verbose_env);
+
+    mp_cancel_trigger(mpctx->playback_abort);
 
     return mpctx;
 }
@@ -382,17 +385,11 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         return 1; // help
 
     if (!print_libav_versions(mp_null_log, 0)) {
-        // Using mismatched libraries can be legitimate, but even then it's
-        // a bad idea. We don't acknowledge its usefulness and stability.
-        // Distro maintainers who patch this out should be aware that mpv
-        // intentionally ignores ABI in some places where it's not possible to
-        // get by without violating it.
         print_libav_versions(mpctx->log, MSGL_FATAL);
-        MP_FATAL(mpctx, "\nmpv was compiled against a different version of "
+        MP_FATAL(mpctx, "\nmpv was compiled against an incompatible version of "
                  "FFmpeg/Libav than the shared\nlibrary it is linked against. "
                  "This is most likely a broken build and could\nresult in "
-                 "misbehavior and crashes.\n\nmpv does not support this "
-                 "configuration and will not run - rebuild mpv instead.\n");
+                 "misbehavior and crashes.\n\nThis is a broken build.\n");
         return -1;
     }
 

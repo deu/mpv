@@ -67,12 +67,6 @@ static int hwdec_validate_opt(struct mp_log *log, const m_option_t *opt,
 
 #define HWDEC_DELAY_QUEUE_COUNT 2
 
-// Maximum number of surfaces the player wants to buffer.
-// This number might require adjustment depending on whatever the player does;
-// for example, if vo_gpu increases the number of reference surfaces for
-// interpolation, this value has to be increased too.
-#define HWDEC_EXTRA_SURFACES 6
-
 #define OPT_BASE_STRUCT struct vd_lavc_params
 
 struct vd_lavc_params {
@@ -92,6 +86,7 @@ struct vd_lavc_params {
     char *hwdec_api;
     char *hwdec_codecs;
     int hwdec_image_format;
+    int hwdec_extra_frames;
 };
 
 static const struct m_opt_choice_alternatives discard_names[] = {
@@ -127,6 +122,7 @@ const struct m_sub_options vd_lavc_conf = {
                             hwdec_validate_opt),
         OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
         OPT_IMAGEFORMAT("hwdec-image-format", hwdec_image_format, 0, .min = -1),
+        OPT_INTRANGE("hwdec-extra-frames", hwdec_extra_frames, 0, 0, 256),
         {0}
     },
     .size = sizeof(struct vd_lavc_params),
@@ -141,6 +137,11 @@ const struct m_sub_options vd_lavc_conf = {
         .dr = 1,
         .hwdec_api = HAVE_RPI ? "mmal" : "no",
         .hwdec_codecs = "h264,vc1,hevc,vp9",
+        // Maximum number of surfaces the player wants to buffer. This number
+        // might require adjustment depending on whatever the player does;
+        // for example, if vo_gpu increases the number of reference surfaces for
+        // interpolation, this value has to be increased too.
+        .hwdec_extra_frames = 6,
     },
 };
 
@@ -171,7 +172,7 @@ typedef struct lavc_ctx {
     AVRational codec_timebase;
     enum AVDiscard skip_frame;
     bool flushing;
-    bool eof_returned;
+    struct lavc_state state;
     const char *decoder;
     bool hwdec_requested;
     bool hwdec_failed;
@@ -222,10 +223,10 @@ static const char *const hwdec_autoprobe_order[] = {
     "d3d11va-copy",
     "nvdec",
     "nvdec-copy",
-    "vdpau",
-    "vdpau-copy",
     "vaapi",
     "vaapi-copy",
+    "vdpau",
+    "vdpau-copy",
     0
 };
 
@@ -762,7 +763,7 @@ static int init_generic_hwaccel(struct mp_filter *vd, enum AVPixelFormat hw_fmt)
     // 1 surface is already included by libavcodec. The field is 0 if the
     // hwaccel supports dynamic surface allocation.
     if (new_fctx->initial_pool_size)
-        new_fctx->initial_pool_size += HWDEC_EXTRA_SURFACES - 1;
+        new_fctx->initial_pool_size += ctx->opts->hwdec_extra_frames - 1;
 
     const struct hwcontext_fns *fns =
         hwdec_get_hwcontext_fns(new_fctx->device_ctx->type);
@@ -859,7 +860,7 @@ static int get_buffer2_direct(AVCodecContext *avctx, AVFrame *pic, int flags)
 
     // We assume that different alignments are just different power-of-2s.
     // Thus, a higher alignment always satisfies a lower alignment.
-    int stride_align = 0;
+    int stride_align = MP_IMAGE_BYTE_ALIGN;
     for (int n = 0; n < AV_NUM_DATA_POINTERS; n++)
         stride_align = MPMAX(stride_align, linesize_align[n]);
 
@@ -973,17 +974,17 @@ static bool do_send_packet(struct mp_filter *vd, struct demux_packet *pkt)
     AVCodecContext *avctx = ctx->avctx;
 
     if (!prepare_decoding(vd))
-        return false;
+        return AVERROR_UNKNOWN;
 
     if (avctx->skip_frame == AVDISCARD_ALL)
-        return true;
+        return AVERROR(EAGAIN);
 
     AVPacket avpkt;
     mp_set_av_packet(&avpkt, pkt, &ctx->codec_timebase);
 
     int ret = avcodec_send_packet(avctx, pkt ? &avpkt : NULL);
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-        return false;
+        return ret;
 
     if (ctx->hw_probing && ctx->num_sent_packets < 32) {
         pkt = pkt ? demux_copy_packet(pkt) : NULL;
@@ -992,38 +993,41 @@ static bool do_send_packet(struct mp_filter *vd, struct demux_packet *pkt)
 
     if (ret < 0)
         handle_err(vd);
-    return true;
+    return ret;
 }
 
-static bool send_queued(struct mp_filter *vd)
+static int send_queued(struct mp_filter *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
 
-    while (ctx->num_requeue_packets && do_send_packet(vd, ctx->requeue_packets[0]))
-    {
+    while (ctx->num_requeue_packets) {
+        int ret = do_send_packet(vd, ctx->requeue_packets[0]);
+        if (ret < 0)
+            return ret;
         talloc_free(ctx->requeue_packets[0]);
         MP_TARRAY_REMOVE_AT(ctx->requeue_packets, ctx->num_requeue_packets, 0);
     }
 
-    return ctx->num_requeue_packets == 0;
+    return 0;
 }
 
-static bool send_packet(struct mp_filter *vd, struct demux_packet *pkt)
+static int send_packet(struct mp_filter *vd, struct demux_packet *pkt)
 {
-    if (!send_queued(vd))
+    int ret = send_queued(vd);
+    if (ret < 0)
         return false;
 
     return do_send_packet(vd, pkt);
 }
 
 // Returns whether decoder is still active (!EOF state).
-static bool decode_frame(struct mp_filter *vd)
+static int decode_frame(struct mp_filter *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
     AVCodecContext *avctx = ctx->avctx;
 
     if (!prepare_decoding(vd))
-        return true;
+        return AVERROR(EAGAIN);
 
     int ret = avcodec_receive_frame(avctx, ctx->pic);
     if (ret == AVERROR_EOF) {
@@ -1033,20 +1037,20 @@ static bool decode_frame(struct mp_filter *vd)
         // the delay queue has been drained.
         if (!ctx->num_delay_queue)
             reset_avctx(vd);
-        return false;
+        return ret;
     } else if (ret < 0 && ret != AVERROR(EAGAIN)) {
         handle_err(vd);
     }
 
     if (!ctx->pic->buf[0])
-        return true;
+        return ret;
 
     ctx->hwdec_fail_count = 0;
 
     struct mp_image *mpi = mp_image_from_av_frame(ctx->pic);
     if (!mpi) {
         av_frame_unref(ctx->pic);
-        return true;
+        return ret;
     }
     assert(mpi->planes[0] || mpi->planes[3]);
     mpi->pts = mp_pts_from_av(ctx->pic->pts, &ctx->codec_timebase);
@@ -1060,14 +1064,14 @@ static bool decode_frame(struct mp_filter *vd)
     av_frame_unref(ctx->pic);
 
     MP_TARRAY_APPEND(ctx, ctx->delay_queue, ctx->num_delay_queue, mpi);
-    return true;
+    return ret;
 }
 
-static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
+static int receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
 
-    bool progress = decode_frame(vd);
+    int ret = decode_frame(vd);
 
     if (ctx->hwdec_failed) {
         // Failed hardware decoding? Try again in software.
@@ -1082,21 +1086,21 @@ static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
         ctx->num_requeue_packets = num_pkts;
 
         send_queued(vd);
-        progress = decode_frame(vd);
+        ret = decode_frame(vd);
     }
 
     if (!ctx->num_delay_queue)
-        return progress;
+        return ret;
 
-    if (ctx->num_delay_queue <= ctx->max_delay_queue && progress)
-        return true;
+    if (ctx->num_delay_queue <= ctx->max_delay_queue && ret != AVERROR_EOF)
+        return AVERROR(EAGAIN);
 
     struct mp_image *res = ctx->delay_queue[0];
     MP_TARRAY_REMOVE_AT(ctx->delay_queue, ctx->num_delay_queue, 0);
 
     res = res ? mp_img_swap_to_native(res) : NULL;
     if (!res)
-        return progress;
+        return AVERROR_UNKNOWN;
 
     if (ctx->use_hwdec && ctx->hwdec.copying && res->hwctx) {
         struct mp_image *sw = mp_image_hw_download(res, ctx->hwdec_swpool);
@@ -1106,7 +1110,7 @@ static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
             MP_ERR(vd, "Could not copy back hardware decoded frame.\n");
             ctx->hwdec_fail_count = INT_MAX - 1; // force fallback
             handle_err(vd);
-            return true;
+            return AVERROR_UNKNOWN;
         }
     }
 
@@ -1128,7 +1132,7 @@ static bool receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
     }
 
     *out_frame = MAKE_FRAME(MP_FRAME_VIDEO, res);
-    return true;
+    return 0;
 }
 
 static int control(struct mp_filter *vd, enum dec_ctrl cmd, void *arg)
@@ -1168,7 +1172,7 @@ static void process(struct mp_filter *vd)
 {
     vd_ffmpeg_ctx *ctx = vd->priv;
 
-    lavc_process(vd, &ctx->eof_returned, send_packet, receive_frame);
+    lavc_process(vd, &ctx->state, send_packet, receive_frame);
 }
 
 static void reset(struct mp_filter *vd)
@@ -1177,7 +1181,7 @@ static void reset(struct mp_filter *vd)
 
     flush_all(vd);
 
-    ctx->eof_returned = false;
+    ctx->state = (struct lavc_state){0};
     ctx->framedrop_flags = 0;
 }
 

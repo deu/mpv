@@ -107,6 +107,7 @@ struct image {
     struct ra_tex *tex;
     int w, h; // logical size (after transformation)
     struct gl_transform transform; // rendering transformation
+    int padding; // number of leading padding components (e.g. 2 = rg is padding)
 };
 
 // A named image, for user scripting purposes
@@ -290,6 +291,8 @@ struct gl_video {
 
     bool dsi_warned;
     bool broken_frame; // temporary error state
+
+    bool colorspace_override_warned;
 };
 
 static const struct gl_video_opts gl_video_opts_def = {
@@ -342,14 +345,18 @@ static int validate_error_diffusion_opt(struct mp_log *log, const m_option_t *op
 
 #define OPT_BASE_STRUCT struct gl_video_opts
 
+// Use for options which use NAN for defaults.
+#define OPT_FLOATDEF(name, var, flags) \
+    OPT_FLOAT(name, var, (flags) | M_OPT_DEFAULT_NAN)
+
 #define SCALER_OPTS(n, i) \
     OPT_STRING_VALIDATE(n, scaler[i].kernel.name, 0, validate_scaler_opt), \
-    OPT_FLOAT(n"-param1", scaler[i].kernel.params[0], 0),                  \
-    OPT_FLOAT(n"-param2", scaler[i].kernel.params[1], 0),                  \
+    OPT_FLOATDEF(n"-param1", scaler[i].kernel.params[0], 0),               \
+    OPT_FLOATDEF(n"-param2", scaler[i].kernel.params[1], 0),               \
     OPT_FLOAT(n"-blur",   scaler[i].kernel.blur, 0),                       \
     OPT_FLOATRANGE(n"-cutoff", scaler[i].cutoff, 0, 0.0, 1.0),             \
     OPT_FLOATRANGE(n"-taper", scaler[i].kernel.taper, 0, 0.0, 1.0),        \
-    OPT_FLOAT(n"-wparam", scaler[i].window.params[0], 0),                  \
+    OPT_FLOATDEF(n"-wparam", scaler[i].window.params[0], 0),               \
     OPT_FLOAT(n"-wblur",  scaler[i].window.blur, 0),                       \
     OPT_FLOATRANGE(n"-wtaper", scaler[i].window.taper, 0, 0.0, 1.0),       \
     OPT_FLOATRANGE(n"-clamp", scaler[i].clamp, 0, 0.0, 1.0),               \
@@ -383,7 +390,7 @@ const struct m_sub_options gl_video_conf = {
                        tone_map.scene_threshold_low, 0, 0, 20.0),
         OPT_FLOATRANGE("hdr-scene-threshold-high",
                        tone_map.scene_threshold_high, 0, 0, 20.0),
-        OPT_FLOAT("tone-mapping-param", tone_map.curve_param, 0),
+        OPT_FLOATDEF("tone-mapping-param", tone_map.curve_param, 0),
         OPT_FLOATRANGE("tone-mapping-max-boost", tone_map.max_boost, 0, 1.0, 10.0),
         OPT_FLOAT("tone-mapping-desaturate", tone_map.desat, 0),
         OPT_FLOATRANGE("tone-mapping-desaturate-exponent",
@@ -428,7 +435,7 @@ const struct m_sub_options gl_video_conf = {
                    ({"no", BLEND_SUBS_NO},
                     {"yes", BLEND_SUBS_YES},
                     {"video", BLEND_SUBS_VIDEO})),
-        OPT_PATHLIST("glsl-shaders", user_shaders, 0),
+        OPT_PATHLIST("glsl-shaders", user_shaders, M_OPT_FILE),
         OPT_CLI_ALIAS("glsl-shader", "glsl-shaders-append"),
         OPT_FLAG("deband", deband, 0),
         OPT_SUBSTRUCT("deband", deband_opts, deband_conf, 0),
@@ -436,7 +443,7 @@ const struct m_sub_options gl_video_conf = {
         OPT_INTRANGE("gpu-tex-pad-x", tex_pad_x, 0, 0, 4096),
         OPT_INTRANGE("gpu-tex-pad-y", tex_pad_y, 0, 0, 4096),
         OPT_SUBSTRUCT("", icc_opts, mp_icc_conf, 0),
-        OPT_STRING("gpu-shader-cache-dir", shader_cache_dir, 0),
+        OPT_STRING("gpu-shader-cache-dir", shader_cache_dir, M_OPT_FILE),
         OPT_STRING_VALIDATE("gpu-hwdec-interop", hwdec_interop, 0,
                              ra_hwdec_validate_opt),
         OPT_REPLACED("opengl-hwdec-interop", "gpu-hwdec-interop"),
@@ -762,6 +769,7 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
         struct texplane *t = &vimg->planes[n];
 
         enum plane_type type = PLANE_NONE;
+        int padding = 0;
         for (int i = 0; i < 4; i++) {
             int c = p->ra_format.components[n][i];
             enum plane_type ctype;
@@ -777,6 +785,8 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
                 ctype = c == 1 ? PLANE_LUMA : PLANE_CHROMA;
             }
             type = merge_plane_types(type, ctype);
+            if (!c && padding == i)
+                padding = i + 1;
         }
 
         img[n] = (struct image){
@@ -785,6 +795,7 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
             .multiplier = tex_mul,
             .w = t->w,
             .h = t->h,
+            .padding = padding,
         };
 
         for (int i = 0; i < 4; i++)
@@ -1316,6 +1327,7 @@ static void copy_image(struct gl_video *p, int *offset, struct image img)
 {
     int count = img.components;
     assert(*offset + count <= 4);
+    assert(img.padding + count <= 4);
 
     int id = pass_bind(p, img);
     char src[5] = {0};
@@ -1323,7 +1335,7 @@ static void copy_image(struct gl_video *p, int *offset, struct image img)
     const char *tex_fmt = get_tex_swizzle(&img);
     const char *dst_fmt = "rgba";
     for (int i = 0; i < count; i++) {
-        src[i] = tex_fmt[i];
+        src[i] = tex_fmt[img.padding + i];
         dst[i] = dst_fmt[*offset + i];
     }
 
@@ -1364,9 +1376,22 @@ static void hook_prelude(struct gl_video *p, const char *name, int id,
     GLSLHF("#define %s_map texmap%d\n", name, id);
     GLSLHF("#define %s_mul %f\n", name, img.multiplier);
 
+    char crap[5] = "";
+    snprintf(crap, sizeof(crap), "%s", get_tex_swizzle(&img));
+
+    // Remove leading padding by rotating the swizzle mask.
+    int len = strlen(crap);
+    for (int n = 0; n < img.padding; n++) {
+        if (len) {
+            char f = crap[0];
+            memmove(crap, crap + 1, len - 1);
+            crap[len - 1] = f;
+        }
+    }
+
     // Set up the sampling functions
     GLSLHF("#define %s_tex(pos) (%s_mul * vec4(texture(%s_raw, pos)).%s)\n",
-           name, name, name, get_tex_swizzle(&img));
+           name, name, name, crap);
 
     // Since the extra matrix multiplication impacts performance,
     // skip it unless the texture was actually rotated
@@ -2473,18 +2498,43 @@ static void pass_scale_main(struct gl_video *p)
 // rendering)
 // If OSD is true, ignore any changes that may have been made to the video
 // by previous passes (i.e. linear scaling)
-static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool osd)
+static void pass_colormanage(struct gl_video *p, struct mp_colorspace src,
+                             struct mp_colorspace fbo_csp, bool osd)
 {
     struct ra *ra = p->ra;
 
-    // Figure out the target color space from the options, or auto-guess if
-    // none were set
+    // Configure the destination according to the FBO color space,
+    // unless specific transfer function, primaries or target peak
+    // is set. If values are set to _AUTO, the most likely intended
+    // values are guesstimated later in this function.
     struct mp_colorspace dst = {
-        .gamma = p->opts.target_trc,
-        .primaries = p->opts.target_prim,
+        .gamma = p->opts.target_trc == MP_CSP_TRC_AUTO ?
+                 fbo_csp.gamma : p->opts.target_trc,
+        .primaries = p->opts.target_prim == MP_CSP_PRIM_AUTO ?
+                     fbo_csp.primaries : p->opts.target_prim,
         .light = MP_CSP_LIGHT_DISPLAY,
-        .sig_peak = p->opts.target_peak / MP_REF_WHITE,
+        .sig_peak = !p->opts.target_peak ?
+                    fbo_csp.sig_peak : p->opts.target_peak / MP_REF_WHITE,
     };
+
+    if (!p->colorspace_override_warned &&
+        ((fbo_csp.gamma && dst.gamma != fbo_csp.gamma) ||
+         (fbo_csp.primaries && dst.primaries != fbo_csp.primaries)))
+    {
+        MP_WARN(p, "One or more colorspace value is being overridden "
+                   "by user while the FBO provides colorspace information: "
+                   "transfer function: (dst: %s, fbo: %s), "
+                   "primaries: (dst: %s, fbo: %s). "
+                   "Rendering can lead to incorrect results!\n",
+                m_opt_choice_str(mp_csp_trc_names,  dst.gamma),
+                m_opt_choice_str(mp_csp_trc_names,  fbo_csp.gamma),
+                m_opt_choice_str(mp_csp_prim_names, dst.primaries),
+                m_opt_choice_str(mp_csp_prim_names, fbo_csp.primaries));
+        p->colorspace_override_warned = true;
+    }
+
+    if (dst.gamma == MP_CSP_TRC_HLG)
+        dst.light = MP_CSP_LIGHT_SCENE_HLG;
 
     if (p->use_lut_3d) {
         // The 3DLUT is always generated against the video's original source
@@ -2539,9 +2589,12 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src, bool 
     }
 
     // If there's no specific signal peak known for the output display, infer
-    // it from the chosen transfer function
+    // it from the chosen transfer function. Also normalize the src peak, in
+    // case it was unknown
     if (!dst.sig_peak)
         dst.sig_peak = mp_trc_nom_peak(dst.gamma);
+    if (!src.sig_peak)
+        src.sig_peak = mp_trc_nom_peak(src.gamma);
 
     struct gl_tone_map_opts tone_map = p->opts.tone_map;
     bool detect_peak = tone_map.compute_peak >= 0 && mp_trc_is_hdr(src.gamma)
@@ -2771,7 +2824,7 @@ static void pass_draw_osd(struct gl_video *p, int draw_flags, double pts,
                 .light = MP_CSP_LIGHT_DISPLAY,
             };
 
-            pass_colormanage(p, csp_srgb, true);
+            pass_colormanage(p, csp_srgb, fbo.color_space, true);
         }
         mpgl_osd_draw_finish(p->osd, n, p->sc, fbo);
     }
@@ -2922,7 +2975,7 @@ static void pass_draw_to_screen(struct gl_video *p, struct ra_fbo fbo)
         GLSL(color.rgb = pow(color.rgb, vec3(user_gamma));)
     }
 
-    pass_colormanage(p, p->image_params.color, false);
+    pass_colormanage(p, p->image_params.color, fbo.color_space, false);
 
     // Since finish_pass_fbo doesn't work with compute shaders, and neither
     // does the checkerboard/dither code, we may need an indirection via
@@ -3320,10 +3373,14 @@ void gl_video_screenshot(struct gl_video *p, struct vo_frame *frame,
         if (w < 1 || h < 1)
             return;
 
-        if (p->image_params.rotate % 180 == 90)
+        int src_w = p->image_params.w;
+        int src_h = p->image_params.h;
+        if (p->image_params.rotate % 180 == 90) {
             MPSWAP(int, w, h);
+            MPSWAP(int, src_w, src_h);
+        }
 
-        struct mp_rect src = {0, 0, p->image_params.w, p->image_params.h};
+        struct mp_rect src = {0, 0, src_w, src_h};
         struct mp_rect dst = {0, 0, w, h};
         struct mp_osd_res osd = {.w = w, .h = h, .display_par = 1.0};
         gl_video_resize(p, &src, &dst, &osd);

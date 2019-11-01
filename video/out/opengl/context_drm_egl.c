@@ -21,7 +21,6 @@
 #include <signal.h>
 #include <string.h>
 #include <poll.h>
-#include <time.h>
 #include <unistd.h>
 
 #include <gbm.h>
@@ -37,6 +36,14 @@
 #include "common.h"
 #include "context.h"
 
+#ifndef EGL_PLATFORM_GBM_MESA
+#define EGL_PLATFORM_GBM_MESA 0x31D7
+#endif
+
+#ifndef EGL_PLATFORM_GBM_KHR
+#define EGL_PLATFORM_GBM_KHR 0x31D7
+#endif
+
 #define USE_MASTER 0
 
 struct framebuffer
@@ -46,16 +53,9 @@ struct framebuffer
     uint32_t id;
 };
 
-struct vsync_tuple
-{
-    uint64_t ust;
-    unsigned int msc;
-    unsigned int sbc;
-};
-
 struct gbm_frame {
     struct gbm_bo *bo;
-    struct vsync_tuple vsync;
+    struct drm_vsync_tuple vsync;
 };
 
 struct gbm
@@ -98,16 +98,11 @@ struct priv {
     bool still;
     bool paused;
 
-    struct vsync_tuple vsync;
+    struct drm_vsync_tuple vsync;
     struct vo_vsync_info vsync_info;
 
-    struct mpv_opengl_drm_params drm_params;
+    struct mpv_opengl_drm_params_v2 drm_params;
     struct mpv_opengl_drm_draw_surface_size draw_surface_size;
-};
-
-struct pflip_cb_closure {
-    struct priv *priv;
-    struct gbm_frame *frame;
 };
 
 // Not general. Limited to only the formats being used in this module
@@ -180,11 +175,30 @@ static int match_config_to_visual(void *user_data, EGLConfig *configs, int num_c
     return -1;
 }
 
+static EGLDisplay egl_get_display(struct gbm_device *gbm_device)
+{
+    const char *ext = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
+
+    if (ext) {
+        PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display = NULL;
+        get_platform_display = (void *) eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+        if (get_platform_display && strstr(ext, "EGL_MESA_platform_gbm"))
+            return get_platform_display(EGL_PLATFORM_GBM_MESA, gbm_device, NULL);
+
+        if (get_platform_display && strstr(ext, "EGL_KHR_platform_gbm"))
+            return get_platform_display(EGL_PLATFORM_GBM_KHR, gbm_device, NULL);
+    }
+
+    return eglGetDisplay(gbm_device);
+}
+
 static bool init_egl(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv;
     MP_VERBOSE(ctx, "Initializing EGL\n");
-    p->egl.display = eglGetDisplay(p->gbm.device);
+    p->egl.display = egl_get_display(p->gbm.device);
+
     if (p->egl.display == EGL_NO_DISPLAY) {
         MP_ERR(ctx, "Failed to get EGL display.\n");
         return false;
@@ -440,9 +454,11 @@ static void queue_flip(struct ra_ctx *ctx, struct gbm_frame *frame)
     update_framebuffer_from_bo(ctx, frame->bo);
 
     // Alloc and fill the data struct for the page flip callback
-    struct pflip_cb_closure *data = talloc(ctx, struct pflip_cb_closure);
-    data->priv = p;
-    data->frame = frame;
+    struct drm_pflip_cb_closure *data = talloc(ctx, struct drm_pflip_cb_closure);
+    data->frame_vsync = &frame->vsync;
+    data->vsync = &p->vsync;
+    data->vsync_info = &p->vsync_info;
+    data->waiting_for_flip = &p->waiting_for_flip;
 
     if (atomic_ctx) {
         drm_object_set_property(atomic_ctx->request, atomic_ctx->draw_plane, "FB_ID", p->fb->id);
@@ -482,8 +498,10 @@ static void wait_on_flip(struct ra_ctx *ctx)
         poll(fds, 1, timeout_ms);
         if (fds[0].revents & POLLIN) {
             const int ret = drmHandleEvent(p->kms->fd, &p->ev);
-            if (ret != 0)
+            if (ret != 0) {
                 MP_ERR(ctx->vo, "drmHandleEvent failed: %i\n", ret);
+                return;
+            }
         }
     }
 }
@@ -585,7 +603,8 @@ static void drm_egl_swap_buffers(struct ra_swapchain *sw)
     enqueue_bo(ctx, new_bo);
     new_fence(ctx);
 
-    while (drain || p->gbm.num_bos > ctx->opts.swapchain_depth || !gbm_surface_has_free_buffers(p->gbm.surface)) {
+    while (drain || p->gbm.num_bos > ctx->vo->opts->swapchain_depth ||
+           !gbm_surface_has_free_buffers(p->gbm.surface)) {
         if (p->waiting_for_flip) {
             wait_on_flip(ctx);
             swapchain_step(ctx);
@@ -693,50 +712,6 @@ static bool probe_gbm_format(struct ra_ctx *ctx, uint32_t argb_format, uint32_t 
     return result;
 }
 
-static void page_flipped(int fd, unsigned int msc, unsigned int sec,
-                         unsigned int usec, void *data)
-{
-    struct pflip_cb_closure *closure = data;
-    struct priv *p = closure->priv;
-
-    // frame->vsync.ust is the timestamp of the pageflip that happened just before this flip was queued
-    // frame->vsync.msc is the sequence number of the pageflip that happened just before this flip was queued
-    // frame->vsync.sbc is the sequence number for the frame that was just flipped to screen
-    struct gbm_frame *frame = closure->frame;
-
-    const bool ready =
-        (p->vsync.msc != 0) &&
-        (frame->vsync.ust != 0) && (frame->vsync.msc != 0);
-
-    const uint64_t ust = (sec * 1000000LL) + usec;
-
-    const unsigned int msc_since_last_flip = msc - p->vsync.msc;
-
-    p->vsync.ust = ust;
-    p->vsync.msc = msc;
-
-    if (ready) {
-        // Convert to mp_time
-        struct timespec ts;
-        if (clock_gettime(CLOCK_MONOTONIC, &ts))
-            goto fail;
-        const uint64_t now_monotonic = ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
-        const uint64_t ust_mp_time = mp_time_us() - (now_monotonic - p->vsync.ust);
-
-        const uint64_t     ust_since_enqueue = p->vsync.ust - frame->vsync.ust;
-        const unsigned int msc_since_enqueue = p->vsync.msc - frame->vsync.msc;
-        const unsigned int sbc_since_enqueue = p->vsync.sbc - frame->vsync.sbc;
-
-        p->vsync_info.vsync_duration = ust_since_enqueue / msc_since_enqueue;
-        p->vsync_info.skipped_vsyncs = msc_since_last_flip - 1; // Valid iff swap_buffers is called every vsync
-        p->vsync_info.last_queue_display_time = ust_mp_time + (sbc_since_enqueue * p->vsync_info.vsync_duration);
-    }
-
-fail:
-    p->waiting_for_flip = false;
-    talloc_free(closure);
-}
-
 static void drm_egl_get_vsync(struct ra_ctx *ctx, struct vo_vsync_info *info)
 {
     struct priv *p = ctx->priv;
@@ -752,7 +727,7 @@ static bool drm_egl_init(struct ra_ctx *ctx)
 
     struct priv *p = ctx->priv = talloc_zero(ctx, struct priv);
     p->ev.version = DRM_EVENT_CONTEXT_VERSION;
-    p->ev.page_flip_handler = page_flipped;
+    p->ev.page_flip_handler = &drm_pflip_cb;
 
     p->vt_switcher_active = vt_switcher_init(&p->vt_switcher, ctx->vo->log);
     if (p->vt_switcher_active) {
@@ -851,7 +826,7 @@ static bool drm_egl_init(struct ra_ctx *ctx)
     if (rendernode_path) {
         MP_VERBOSE(ctx, "Opening render node \"%s\"\n", rendernode_path);
         p->drm_params.render_fd = open(rendernode_path, O_RDWR | O_CLOEXEC);
-        if (p->drm_params.render_fd < 0) {
+        if (p->drm_params.render_fd == -1) {
             MP_WARN(ctx, "Cannot open render node \"%s\": %s. VAAPI hwdec will be disabled\n",
                     rendernode_path, mp_strerror(errno));
         }
@@ -868,7 +843,7 @@ static bool drm_egl_init(struct ra_ctx *ctx)
     if (!ra_gl_ctx_init(ctx, &p->gl, params))
         return false;
 
-    ra_add_native_resource(ctx->ra, "drm_params", &p->drm_params);
+    ra_add_native_resource(ctx->ra, "drm_params_v2", &p->drm_params);
     ra_add_native_resource(ctx->ra, "drm_draw_surface_size", &p->draw_surface_size);
 
     p->vsync_info.vsync_duration = 0;

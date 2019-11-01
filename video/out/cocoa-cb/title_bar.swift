@@ -19,8 +19,8 @@ import Cocoa
 
 class TitleBar: NSVisualEffectView {
 
-    weak var cocoaCB: CocoaCB!
-    var mpv: MPVHelper { get { return cocoaCB.mpv } }
+    unowned var cocoaCB: CocoaCB
+    var libmpv: LibmpvHelper { get { return cocoaCB.libmpv } }
 
     var systemBar: NSView? {
         get { return cocoaCB.window?.standardWindowButton(.closeButton)?.superview }
@@ -29,7 +29,7 @@ class TitleBar: NSVisualEffectView {
         get { return NSWindow.frameRect(forContentRect: CGRect.zero, styleMask: .titled).size.height }
     }
     var buttons: [NSButton] {
-        get { return ([.closeButton, .miniaturizeButton, .zoomButton] as [NSWindowButton]).flatMap { cocoaCB.window?.standardWindowButton($0) } }
+        get { return ([.closeButton, .miniaturizeButton, .zoomButton] as [NSWindow.ButtonType]).compactMap { cocoaCB.window?.standardWindowButton($0) } }
     }
 
     override var material: NSVisualEffectView.Material {
@@ -55,9 +55,11 @@ class TitleBar: NSVisualEffectView {
                            frame.size.width, TitleBar.height)
         cocoaCB = ccb
         super.init(frame: f)
+        buttons.forEach { $0.isHidden = true }
+        isHidden = true
         alphaValue = 0
         blendingMode = .withinWindow
-        autoresizingMask = [.viewWidthSizable, .viewMinYMargin]
+        autoresizingMask = [.width, .minYMargin]
         systemBar?.alphaValue = 0
         state = .followsWindowActiveState
         wantsLayer = true
@@ -65,9 +67,9 @@ class TitleBar: NSVisualEffectView {
         window.contentView?.addSubview(self, positioned: .above, relativeTo: nil)
         window.titlebarAppearsTransparent = true
         window.styleMask.insert(.fullSizeContentView)
-        set(appearance: Int(mpv.macOpts?.macos_title_bar_appearance ?? 0))
-        set(material: Int(mpv.macOpts?.macos_title_bar_material ?? 0))
-        set(color: mpv.macOpts?.macos_title_bar_color ?? "#00000000")
+        set(appearance: Int(libmpv.macOpts.macos_title_bar_appearance))
+        set(material: Int(libmpv.macOpts.macos_title_bar_material))
+        set(color: libmpv.macOpts.macos_title_bar_color)
     }
 
     required init?(coder: NSCoder) {
@@ -148,7 +150,7 @@ class TitleBar: NSVisualEffectView {
         }
     }
 
-    func hide() {
+    @objc func hide() {
         guard let window = cocoaCB.window else { return }
         if window.isInFullscreen && !window.isAnimating {
             alphaValue = 0
@@ -175,26 +177,26 @@ class TitleBar: NSVisualEffectView {
     func appearanceFrom(string: String) -> NSAppearance? {
         switch string {
         case "1", "aqua":
-            return NSAppearance(named: NSAppearanceNameAqua)
+            return NSAppearance(named: .aqua)
         case "3", "vibrantLight":
-            return NSAppearance(named: NSAppearanceNameVibrantLight)
+            return NSAppearance(named: .vibrantLight)
         case "4", "vibrantDark":
-            return NSAppearance(named: NSAppearanceNameVibrantDark)
+            return NSAppearance(named: .vibrantDark)
         default: break
         }
 
         if #available(macOS 10.14, *) {
             switch string {
             case "2", "darkAqua":
-                return NSAppearance(named: NSAppearanceNameDarkAqua)
+                return NSAppearance(named: .darkAqua)
             case "5", "aquaHighContrast":
-                return NSAppearance(named: NSAppearanceNameAccessibilityHighContrastAqua)
+                return NSAppearance(named: .accessibilityHighContrastAqua)
             case "6", "darkAquaHighContrast":
-                return NSAppearance(named: NSAppearanceNameAccessibilityHighContrastDarkAqua)
+                return NSAppearance(named: .accessibilityHighContrastDarkAqua)
             case "7", "vibrantLightHighContrast":
-                return NSAppearance(named: NSAppearanceNameAccessibilityHighContrastVibrantLight)
+                return NSAppearance(named: .accessibilityHighContrastVibrantLight)
             case "8", "vibrantDarkHighContrast":
-                return NSAppearance(named: NSAppearanceNameAccessibilityHighContrastVibrantDark)
+                return NSAppearance(named: .accessibilityHighContrastVibrantDark)
             case "0", "auto": fallthrough
             default:
                 return nil
@@ -214,6 +216,7 @@ class TitleBar: NSVisualEffectView {
         default:                break
         }
 
+#if HAVE_MACOS_10_11_FEATURES
         if #available(macOS 10.11, *) {
             switch string {
             case "2,", "menu":          return .menu
@@ -224,7 +227,8 @@ class TitleBar: NSVisualEffectView {
             default:                    break
             }
         }
-
+#endif
+#if HAVE_MACOS_10_14_FEATURES
         if #available(macOS 10.14, *) {
             switch string {
             case "5,", "headerView":            return .headerView
@@ -239,6 +243,7 @@ class TitleBar: NSVisualEffectView {
             default:                            break
             }
         }
+#endif
 
         return .titlebar
     }

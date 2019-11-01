@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video/out/vo.h"
+#include "video/csputils.h"
 
 #include "config.h"
 #include "ra.h"
@@ -10,7 +11,6 @@ struct ra_ctx_opts {
     int want_alpha;      // create an alpha framebuffer if possible
     int debug;           // enable debugging layers/callbacks etc.
     bool probing;        // the backend was auto-probed
-    int swapchain_depth; // max number of images to render ahead
 };
 
 struct ra_ctx {
@@ -63,6 +63,10 @@ struct ra_swapchain {
 struct ra_fbo {
     struct ra_tex *tex;
     bool flip; // rendering needs to be inverted
+
+    // Host system's colorspace that it will be interpreting
+    // the frame buffer as.
+    struct mp_colorspace color_space;
 };
 
 struct ra_swapchain_fns {

@@ -118,8 +118,8 @@ bool cuda_gl_init(const struct ra_hwdec *hw) {
             return false;
         }
     } else {
-        // This is not an error.
-        return true;
+        // This is not an OpenGL RA.
+        return false;
     }
 
     CUdevice display_dev;
@@ -163,6 +163,9 @@ bool cuda_gl_init(const struct ra_hwdec *hw) {
                 return false;
         }
     }
+
+    // We don't have a way to do a GPU sync after copying
+    p->do_full_sync = true;
 
     p->ext_init = cuda_ext_gl_init;
     p->ext_uninit = cuda_ext_gl_uninit;

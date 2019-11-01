@@ -364,8 +364,17 @@ void pass_linearize(struct gl_shader_cache *sc, enum mp_csp_trc trc)
     case MP_CSP_TRC_GAMMA18:
         GLSL(color.rgb = pow(color.rgb, vec3(1.8));)
         break;
+    case MP_CSP_TRC_GAMMA20:
+        GLSL(color.rgb = pow(color.rgb, vec3(2.0));)
+        break;
     case MP_CSP_TRC_GAMMA22:
         GLSL(color.rgb = pow(color.rgb, vec3(2.2));)
+        break;
+    case MP_CSP_TRC_GAMMA24:
+        GLSL(color.rgb = pow(color.rgb, vec3(2.4));)
+        break;
+    case MP_CSP_TRC_GAMMA26:
+        GLSL(color.rgb = pow(color.rgb, vec3(2.6));)
         break;
     case MP_CSP_TRC_GAMMA28:
         GLSL(color.rgb = pow(color.rgb, vec3(2.8));)
@@ -445,8 +454,17 @@ void pass_delinearize(struct gl_shader_cache *sc, enum mp_csp_trc trc)
     case MP_CSP_TRC_GAMMA18:
         GLSL(color.rgb = pow(color.rgb, vec3(1.0/1.8));)
         break;
+    case MP_CSP_TRC_GAMMA20:
+        GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.0));)
+        break;
     case MP_CSP_TRC_GAMMA22:
         GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.2));)
+        break;
+    case MP_CSP_TRC_GAMMA24:
+        GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.4));)
+        break;
+    case MP_CSP_TRC_GAMMA26:
+        GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.6));)
         break;
     case MP_CSP_TRC_GAMMA28:
         GLSL(color.rgb = pow(color.rgb, vec3(1.0/2.8));)
@@ -774,7 +792,7 @@ void pass_color_map(struct gl_shader_cache *sc, bool is_linear,
     // operations needs it
     bool need_linear = src.gamma != dst.gamma ||
                        src.primaries != dst.primaries ||
-                       src.sig_peak > dst.sig_peak ||
+                       src.sig_peak != dst.sig_peak ||
                        need_ootf;
 
     if (need_linear && !is_linear) {

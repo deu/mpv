@@ -424,6 +424,9 @@ char *format_file_size(int64_t size);
 #define UPDATE_OPTS_MASK \
     (((UPDATE_OPT_LAST << 1) - 1) & ~(unsigned)(UPDATE_OPT_FIRST - 1))
 
+// type_float/type_double: string "default" is parsed as NaN (and reverse)
+#define M_OPT_DEFAULT_NAN       (1 << 29)
+
 // Like M_OPT_TYPE_OPTIONAL_PARAM.
 #define M_OPT_OPTIONAL_PARAM    (1 << 30)
 
@@ -478,9 +481,6 @@ char *format_file_size(int64_t size);
 #define M_OPT_EXIT              -6
 
 char *m_option_strerror(int code);
-
-// Find the option matching the given name in the list.
-const m_option_t *m_option_list_find(const m_option_t *list, const char *name);
 
 // Helper to parse options, see \ref m_option_type::parse.
 static inline int m_option_parse(struct mp_log *log, const m_option_t *opt,

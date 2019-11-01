@@ -35,10 +35,6 @@ enum aocontrol {
     AOCONTROL_SET_MUTE,
     // Has char* as argument, which contains the desired stream title.
     AOCONTROL_UPDATE_STREAM_TITLE,
-    // the AO does the equivalent of af_volume (return CONTROL_TRUE if yes)
-    AOCONTROL_HAS_SOFT_VOLUME,
-    // like above, but volume persists (per app), mpv won't restore volume
-    AOCONTROL_HAS_PER_APP_VOLUME,
 };
 
 // If set, then the queued audio data is the last. Note that after a while, new
@@ -49,6 +45,7 @@ enum {
     AO_EVENT_RELOAD = 1,
     AO_EVENT_HOTPLUG = 2,
     AO_EVENT_INITIAL_UNBLOCK = 4,
+    AO_EVENT_UNDERRUN = 8,
 };
 
 enum {
@@ -100,6 +97,7 @@ void ao_get_format(struct ao *ao,
                    int *samplerate, int *format, struct mp_chmap *channels);
 const char *ao_get_name(struct ao *ao);
 const char *ao_get_description(struct ao *ao);
+bool ao_get_reports_underruns(struct ao *ao);
 bool ao_untimed(struct ao *ao);
 int ao_play(struct ao *ao, void **data, int samples, int flags);
 int ao_control(struct ao *ao, enum aocontrol cmd, void *arg);

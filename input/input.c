@@ -31,9 +31,6 @@
 #include <pthread.h>
 #include <assert.h>
 
-#include <libavutil/avstring.h>
-#include <libavutil/common.h>
-
 #include "osdep/io.h"
 #include "misc/rendezvous.h"
 
@@ -173,6 +170,7 @@ struct input_opts {
     int ar_rate;
     int use_alt_gr;
     int use_appleremote;
+    int use_gamepad;
     int use_media_keys;
     int default_bindings;
     int enable_mouse_movements;
@@ -198,6 +196,9 @@ const struct m_sub_options input_config = {
         OPT_FLAG("input-media-keys", use_media_keys, 0),
 #if HAVE_COCOA
         OPT_FLAG("input-appleremote", use_appleremote, 0),
+#endif
+#if HAVE_SDL2_GAMEPAD
+        OPT_FLAG("input-gamepad", use_gamepad, 0),
 #endif
         OPT_FLAG("window-dragging", allow_win_drag, 0),
         OPT_REPLACED("input-x11-keyboard", "input-vo-keyboard"),
@@ -619,7 +620,7 @@ static void interpret_key(struct input_ctx *ictx, int code, double scale,
         cmd->scale = 1;
         cmd->scale_units = 1;
         // Avoid spamming the player with too many commands
-        scale_units = FFMIN(scale_units, 20);
+        scale_units = MPMIN(scale_units, 20);
         for (int i = 0; i < scale_units - 1; i++)
             mp_input_queue_cmd(ictx, mp_cmd_clone(cmd));
         if (scale_units)
@@ -873,8 +874,8 @@ static void adjust_max_wait_time(struct input_ctx *ictx, double *time)
 {
     struct input_opts *opts = ictx->opts;
     if (ictx->last_key_down && opts->ar_rate > 0 && ictx->ar_state >= 0) {
-        *time = FFMIN(*time, 1.0 / opts->ar_rate);
-        *time = FFMIN(*time, opts->ar_delay / 1000.0);
+        *time = MPMIN(*time, 1.0 / opts->ar_rate);
+        *time = MPMIN(*time, opts->ar_delay / 1000.0);
     }
 }
 
@@ -1377,6 +1378,12 @@ void mp_input_load_config(struct input_ctx *ictx)
     talloc_free(ifile);
 #endif
 
+#if HAVE_SDL2_GAMEPAD
+    if (ictx->opts->use_gamepad) {
+        mp_input_sdl_gamepad_add(ictx);
+    }
+#endif
+
     input_unlock(ictx);
 }
 
@@ -1430,6 +1437,44 @@ struct mp_cmd *mp_input_parse_cmd(struct input_ctx *ictx, bstr str,
 void mp_input_run_cmd(struct input_ctx *ictx, const char **cmd)
 {
     mp_input_queue_cmd(ictx, mp_input_parse_cmd_strv(ictx->log, cmd));
+}
+
+void mp_input_bind_key(struct input_ctx *ictx, int key, bstr command)
+{
+    struct cmd_bind_section *bs = ictx->cmd_bind_sections;
+    struct cmd_bind *bind = NULL;
+
+    for (int n = 0; n < bs->num_binds; n++) {
+        struct cmd_bind *b = &bs->binds[n];
+        if (bind_matches_key(b, 1, &key) && b->is_builtin == false) {
+            bind = b;
+            break;
+        }
+    }
+
+    if (!bind) {
+        struct cmd_bind empty = {{0}};
+        MP_TARRAY_APPEND(bs, bs->binds, bs->num_binds, empty);
+        bind = &bs->binds[bs->num_binds - 1];
+    }
+
+    bind_dealloc(bind);
+
+    *bind = (struct cmd_bind) {
+        .cmd = bstrdup0(bs->binds, command),
+        .location = talloc_strdup(bs->binds, "keybind-command"),
+        .owner = bs,
+        .is_builtin = false,
+        .num_keys = 1,
+    };
+    memcpy(bind->keys, &key, 1 * sizeof(bind->keys[0]));
+    if (mp_msg_test(ictx->log, MSGL_DEBUG)) {
+        char *s = mp_input_get_key_combo_name(&key, 1);
+        MP_TRACE(ictx, "add:section='%s' key='%s'%s cmd='%s' location='%s'\n",
+                 bind->owner->section, s, bind->is_builtin ? " builtin" : "",
+                 bind->cmd, bind->location);
+        talloc_free(s);
+    }
 }
 
 struct mp_input_src_internal {

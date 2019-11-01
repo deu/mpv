@@ -20,7 +20,8 @@ import Cocoa
 class Window: NSWindow, NSWindowDelegate {
 
     weak var cocoaCB: CocoaCB! = nil
-    var mpv: MPVHelper { get { return cocoaCB.mpv } }
+    var mpv: MPVHelper? { get { return cocoaCB.mpv } }
+    var libmpv: LibmpvHelper { get { return cocoaCB.libmpv } }
 
     var targetScreen: NSScreen?
     var previousScreen: NSScreen?
@@ -54,7 +55,7 @@ class Window: NSWindow, NSWindowDelegate {
     override var canBecomeKey: Bool { return true }
     override var canBecomeMain: Bool { return true }
 
-    override var styleMask: NSWindowStyleMask {
+    override var styleMask: NSWindow.StyleMask {
         get { return super.styleMask }
         set {
             let responder = firstResponder
@@ -72,7 +73,7 @@ class Window: NSWindow, NSWindowDelegate {
 
         // workaround for an AppKit bug where the NSWindow can't be placed on a
         // none Main screen NSScreen outside the Main screen's frame bounds
-        if let wantedScreen = screen, screen != NSScreen.main() {
+        if let wantedScreen = screen, screen != NSScreen.main {
             var absoluteWantedOrigin = contentRect.origin
             absoluteWantedOrigin.x += wantedScreen.frame.origin.x
             absoluteWantedOrigin.y += wantedScreen.frame.origin.y
@@ -134,7 +135,7 @@ class Window: NSWindow, NSWindowDelegate {
             setFrame(frame, display: true)
         }
 
-        if mpv.getBoolProperty("native-fs") {
+        if Bool(mpv?.opts.native_fs ?? 1) {
             super.toggleFullScreen(sender)
         } else {
             if !isInFullscreen {
@@ -245,48 +246,35 @@ class Window: NSWindow, NSWindowDelegate {
         cocoaCB.layer?.update()
     }
 
-    func getFsAnimationDuration(_ def: Double) -> Double{
-        let duration = mpv.getStringProperty("macos-fs-animation-duration") ?? "default"
-        if duration == "default" {
+    func getFsAnimationDuration(_ def: Double) -> Double {
+        let duration = libmpv.macOpts.macos_fs_animation_duration
+        if duration < 0 {
             return def
         } else {
-            return (Double(duration) ?? 0.2)/1000
+            return Double(duration)/1000
         }
     }
 
-    func setOnTop(_ state: Bool, _ ontopLevel: Any) {
-        let stdLevel = Int(CGWindowLevelForKey(.normalWindow))
-
+    func setOnTop(_ state: Bool, _ ontopLevel: Int) {
         if state {
-            if ontopLevel is Int {
-                switch ontopLevel as? Int {
-                case -1:
-                    level = Int(CGWindowLevelForKey(.floatingWindow))
-                case -2:
-                    level = Int(CGWindowLevelForKey(.statusWindow))+1
-                default:
-                    level = ontopLevel as? Int ?? stdLevel
-                }
-            } else {
-                switch ontopLevel as? String {
-                case "window":
-                    level = Int(CGWindowLevelForKey(.floatingWindow))
-                case "system":
-                    level = Int(CGWindowLevelForKey(.statusWindow))+1
-                default:
-                    level = Int(ontopLevel as? String ?? "") ?? stdLevel
-                }
+            switch ontopLevel {
+            case -1:
+                level = .floating
+            case -2:
+                level = .statusBar + 1
+            default:
+                level = NSWindow.Level(ontopLevel)
             }
             collectionBehavior.remove(.transient)
             collectionBehavior.insert(.managed)
         } else {
-            level = stdLevel
+            level = .normal
         }
     }
 
     func updateMovableBackground(_ pos: NSPoint) {
         if !isInFullscreen {
-            isMovableByWindowBackground = mpv.canBeDraggedAt(pos)
+            isMovableByWindowBackground = mpv?.canBeDraggedAt(pos) ?? true
         } else {
             isMovableByWindowBackground = false
         }
@@ -410,7 +398,7 @@ class Window: NSWindow, NSWindowDelegate {
             return frameRect
         }
 
-        guard let ts: NSScreen = tScreen ?? screen ?? NSScreen.main() else {
+        guard let ts: NSScreen = tScreen ?? screen ?? NSScreen.main else {
             return frameRect
         }
         var nf: NSRect = frameRect
@@ -443,12 +431,12 @@ class Window: NSWindow, NSWindowDelegate {
         return nf
     }
 
-    func setNormalWindowSize() { setWindowScale(1.0) }
-    func setHalfWindowSize()   { setWindowScale(0.5) }
-    func setDoubleWindowSize() { setWindowScale(2.0) }
+    @objc func setNormalWindowSize() { setWindowScale(1.0) }
+    @objc func setHalfWindowSize()   { setWindowScale(0.5) }
+    @objc func setDoubleWindowSize() { setWindowScale(2.0) }
 
     func setWindowScale(_ scale: Double) {
-        mpv.commandAsync(["osd-auto", "set", "window-scale", "\(scale)"])
+        mpv?.command("set window-scale \(scale)")
     }
 
     func windowDidChangeScreen(_ notification: Notification) {
@@ -480,7 +468,7 @@ class Window: NSWindow, NSWindowDelegate {
         cocoaCB.layer?.inLiveResize = false
     }
 
-    func windowShouldClose(_ sender: Any) -> Bool {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
         cocoa_put_key(SWIFT_KEY_CLOSE_WIN)
         return false
     }
