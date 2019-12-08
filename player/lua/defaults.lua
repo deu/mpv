@@ -54,10 +54,10 @@ local function reserve_binding()
     return "__keybinding" .. tostring(message_id)
 end
 
-local function dispatch_key_binding(name, state)
+local function dispatch_key_binding(name, state, key_name, key_text)
     local fn = dispatch_key_bindings[name]
     if fn then
-        fn(name, state)
+        fn(name, state, key_name, key_text)
     end
 end
 
@@ -131,6 +131,7 @@ end
 -- "Newer" and more convenient API
 
 local key_bindings = {}
+local key_binding_counter = 0
 
 local function update_key_bindings()
     for i = 1, 2 do
@@ -143,11 +144,18 @@ local function update_key_bindings()
             section = "input_forced_" .. mp.script_name
             flags = "force"
         end
-        local cfg = ""
+        local bindings = {}
         for k, v in pairs(key_bindings) do
             if v.bind and v.forced ~= def then
-                cfg = cfg .. v.bind .. "\n"
+                bindings[#bindings + 1] = v
             end
+        end
+        table.sort(bindings, function(a, b)
+            return a.priority < b.priority
+        end)
+        local cfg = ""
+        for _, v in ipairs(bindings) do
+            cfg = cfg .. v.bind .. "\n"
         end
         mp.input_define_section(section, cfg, flags)
         -- TODO: remove the section if the script is stopped
@@ -156,9 +164,13 @@ local function update_key_bindings()
 end
 
 local function add_binding(attrs, key, name, fn, rp)
-    rp = rp or ""
-    if (type(name) ~= "string") and (not fn) then
+    if (type(name) ~= "string") and (name ~= nil) then
+        rp = fn
         fn = name
+        name = nil
+    end
+    rp = rp or ""
+    if name == nil then
         name = reserve_binding()
     end
     local repeatable = rp == "repeatable" or rp["repeatable"]
@@ -176,10 +188,15 @@ local function add_binding(attrs, key, name, fn, rp)
             ["r"] = "repeat",
             ["p"] = "press",
         }
-        key_cb = function(name, state)
+        key_cb = function(name, state, key_name, key_text)
+            if key_text == "" then
+                key_text = nil
+            end
             fn({
                 event = key_states[state:sub(1, 1)] or "unknown",
-                is_mouse = state:sub(2, 2) == "m"
+                is_mouse = state:sub(2, 2) == "m",
+                key_name = key_name,
+                key_text = key_text,
             })
         end
         msg_cb = function()
@@ -208,6 +225,9 @@ local function add_binding(attrs, key, name, fn, rp)
         attrs.bind = key .. " script-binding " .. mp.script_name .. "/" .. name
     end
     attrs.name = name
+    -- new bindings override old ones (but do not overwrite them)
+    key_binding_counter = key_binding_counter + 1
+    attrs.priority = key_binding_counter
     key_bindings[name] = attrs
     update_key_bindings()
     dispatch_key_bindings[name] = key_cb

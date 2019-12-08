@@ -92,13 +92,14 @@ static int read_characters(stream_t *s, uint8_t *dst, int dstsize, int utf16)
         }
         return cur - dst;
     } else {
-        bstr buf = stream_peek_buffer(s);
-        uint8_t *end = memchr(buf.start, '\n', buf.len);
-        int len = end ? end - buf.start + 1 : buf.len;
+        uint8_t buf[1024];
+        int buf_len = stream_read_peek(s, buf, sizeof(buf));
+        uint8_t *end = memchr(buf, '\n', buf_len);
+        int len = end ? end - buf + 1 : buf_len;
         if (len > dstsize)
             return -1; // line too long
-        memcpy(dst, buf.start, len);
-        stream_skip(s, len);
+        memcpy(dst, buf, len);
+        stream_seek_skip(s, stream_tell(s) + len);
         return len;
     }
 }
@@ -118,7 +119,6 @@ static char *read_line(stream_t *s, char *mem, int max, int utf16)
         int l = read_characters(s, &mem[read], max - read - 1, utf16);
         if (l < 0 || memchr(&mem[read], '\0', l)) {
             MP_WARN(s, "error reading line\n");
-            s->eof = false;
             return NULL;
         }
         read += l;
@@ -126,7 +126,7 @@ static char *read_line(stream_t *s, char *mem, int max, int utf16)
             break;
     }
     mem[read] = '\0';
-    if (s->eof && read == 0) // legitimate EOF
+    if (!stream_read_peek(s, &(char){0}, 1) && read == 0) // legitimate EOF
         return NULL;
     return mem;
 }
@@ -178,7 +178,9 @@ static int parse_m3u(struct pl_parser *p)
         // Last resort: if the file extension is m3u, it might be headerless.
         if (p->check_level == DEMUX_CHECK_UNSAFE) {
             char *ext = mp_splitext(p->real_stream->url, NULL);
-            bstr data = stream_peek(p->real_stream, PROBE_SIZE);
+            char probe[PROBE_SIZE];
+            int len = stream_read_peek(p->real_stream, probe, sizeof(probe));
+            bstr data = {probe, len};
             if (ext && data.len > 10 && maybe_text(data)) {
                 const char *exts[] = {"m3u", "m3u8", NULL};
                 for (int n = 0; exts[n]; n++) {
@@ -437,8 +439,9 @@ static int open_file(struct demuxer *demuxer, enum demux_check check)
     p->real_stream = demuxer->stream;
     p->add_base = true;
 
-    bstr probe_buf = stream_peek(demuxer->stream, PROBE_SIZE);
-    p->s = stream_memory_open(demuxer->global, probe_buf.start, probe_buf.len);
+    char probe[PROBE_SIZE];
+    int probe_len = stream_read_peek(p->real_stream, probe, sizeof(probe));
+    p->s = stream_memory_open(demuxer->global, probe, probe_len);
     p->s->mime_type = demuxer->stream->mime_type;
     p->utf16 = stream_skip_bom(p->s);
     p->force = force;

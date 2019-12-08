@@ -100,7 +100,7 @@ def build(ctx):
     )
 
     lua_files = ["defaults.lua", "assdraw.lua", "options.lua", "osc.lua",
-                 "ytdl_hook.lua", "stats.lua"]
+                 "ytdl_hook.lua", "stats.lua", "console.lua"]
 
     for fn in lua_files:
         fn = "player/lua/" + fn
@@ -242,6 +242,7 @@ def build(ctx):
         ( "audio/format.c" ),
         ( "audio/out/ao.c" ),
         ( "audio/out/ao_alsa.c",                 "alsa" ),
+        ( "audio/out/ao_audiotrack.c",           "android" ),
         ( "audio/out/ao_audiounit.m",            "audiounit" ),
         ( "audio/out/ao_coreaudio.c",            "coreaudio" ),
         ( "audio/out/ao_coreaudio_chmap.c",      "coreaudio || audiounit" ),
@@ -326,6 +327,7 @@ def build(ctx):
         ( "misc/bstr.c" ),
         ( "misc/charset_conv.c" ),
         ( "misc/dispatch.c" ),
+        ( "misc/jni.c",                          "android" ),
         ( "misc/json.c" ),
         ( "misc/natural_sort.c" ),
         ( "misc/node.c" ),
@@ -394,6 +396,17 @@ def build(ctx):
         ( "sub/sd_ass.c",                        "libass" ),
         ( "sub/sd_lavc.c" ),
 
+        ## Tests
+        ( "test/chmap.c",                        "tests" ),
+        ( "test/gl_video.c",                     "tests" ),
+        ( "test/img_format.c",                   "tests" ),
+        ( "test/json.c",                         "tests" ),
+        ( "test/linked_list.c",                  "tests" ),
+        ( "test/scale_sws.c",                    "tests" ),
+        ( "test/scale_test.c",                   "tests" ),
+        ( "test/scale_zimg.c",                   "tests && zimg" ),
+        ( "test/tests.c",                        "tests" ),
+
         ## Video
         ( "video/csputils.c" ),
         ( "video/d3d.c",                         "d3d-hwaccel" ),
@@ -402,6 +415,7 @@ def build(ctx):
         ( "video/filter/vf_d3d11vpp.c",          "d3d-hwaccel" ),
         ( "video/filter/vf_fingerprint.c",       "zimg" ),
         ( "video/filter/vf_format.c" ),
+        ( "video/filter/vf_gpu.c",               "egl-helpers && gl && egl15" ),
         ( "video/filter/vf_sub.c" ),
         ( "video/filter/vf_vapoursynth.c",       "vapoursynth" ),
         ( "video/filter/vf_vavpp.c",             "vaapi" ),
@@ -581,7 +595,7 @@ def build(ctx):
                 ctx.path.find_node('osdep/mpv.rc'),
                 version)
 
-    if ctx.dependency_satisfied('cplayer') or ctx.dependency_satisfied('test'):
+    if ctx.dependency_satisfied('cplayer'):
         ctx(
             target       = "objects",
             source       = ctx.filtered_sources(sources),
@@ -627,17 +641,6 @@ def build(ctx):
             wrapflags = ['-municode', '-mconsole']
             wrapctx.env.CFLAGS = ctx.env.CFLAGS + wrapflags
             wrapctx.env.LAST_LINKFLAGS = ctx.env.LAST_LINKFLAGS + wrapflags
-
-    if ctx.dependency_satisfied('test'):
-        for test in ctx.path.ant_glob("test/*.c"):
-            ctx(
-                target       = os.path.splitext(test.srcpath())[0],
-                source       = test.srcpath(),
-                use          = ctx.dependencies_use() + ['objects'],
-                includes     = _all_includes(ctx),
-                features     = "c cprogram",
-                install_path = None,
-            )
 
     build_shared = ctx.dependency_satisfied('libmpv-shared')
     build_static = ctx.dependency_satisfied('libmpv-static')

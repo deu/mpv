@@ -84,7 +84,7 @@ static int64_t skip_cb(struct archive *arch, void *priv, int64_t request)
     if (!volume_seek(vol))
         return -1;
     int64_t old = stream_tell(vol->src);
-    stream_skip(vol->src, request);
+    stream_seek_skip(vol->src, old + request);
     return stream_tell(vol->src) - old;
 }
 
@@ -385,7 +385,7 @@ static int reopen_archive(stream_t *s)
     return STREAM_ERROR;
 }
 
-static int archive_entry_fill_buffer(stream_t *s, char *buffer, int max_len)
+static int archive_entry_fill_buffer(stream_t *s, void *buffer, int max_len)
 {
     struct priv *p = s->priv;
     if (!p->mpa)
@@ -468,17 +468,10 @@ static void archive_entry_close(stream_t *s)
     free_stream(p->src);
 }
 
-static int archive_entry_control(stream_t *s, int cmd, void *arg)
+static int64_t archive_entry_get_size(stream_t *s)
 {
     struct priv *p = s->priv;
-    switch (cmd) {
-    case STREAM_CTRL_GET_SIZE:
-        if (p->entry_size < 0)
-            break;
-        *(int64_t *)arg = p->entry_size;
-        return STREAM_OK;
-    }
-    return STREAM_UNSUPPORTED;
+    return p->entry_size;
 }
 
 static int archive_entry_open(stream_t *stream)
@@ -514,7 +507,7 @@ static int archive_entry_open(stream_t *stream)
         stream->seekable = true;
     }
     stream->close = archive_entry_close;
-    stream->control = archive_entry_control;
+    stream->get_size = archive_entry_get_size;
     stream->streaming = true;
 
     return STREAM_OK;

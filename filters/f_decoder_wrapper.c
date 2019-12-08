@@ -661,11 +661,13 @@ static void read_frame(struct priv *p)
 
     if (p->decoded_coverart.type) {
         if (p->coverart_returned == 0) {
-            mp_pin_in_write(pin, mp_frame_ref(p->decoded_coverart));
+            frame = mp_frame_ref(p->decoded_coverart);
             p->coverart_returned = 1;
+            goto output_frame;
         } else if (p->coverart_returned == 1) {
-            mp_pin_in_write(pin, MP_EOF_FRAME);
+            frame = MP_EOF_FRAME;
             p->coverart_returned = 2;
+            goto output_frame;
         }
         return;
     }
@@ -773,7 +775,7 @@ struct mp_decoder_wrapper *mp_decoder_wrapper_create(struct mp_filter *parent,
 
     struct priv *p = f->priv;
     struct mp_decoder_wrapper *w = &p->public;
-    p->opt_cache = m_config_cache_alloc(p, f->global, GLOBAL_CONFIG);
+    p->opt_cache = m_config_cache_alloc(p, f->global, &mp_opt_root);
     p->log = f->log;
     p->f = f;
     p->header = src;
@@ -856,7 +858,7 @@ void lavc_process(struct mp_filter *f, struct lavc_state *state,
         talloc_free(pkt);
         mp_filter_internal_mark_progress(f);
     } else {
-        // Decoding error? Just try again.
+        // Decoding error, or hwdec fallback recovery. Just try again.
         mp_filter_internal_mark_progress(f);
     }
 }

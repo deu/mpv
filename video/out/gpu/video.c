@@ -756,14 +756,6 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
         chroma.t[1] = ls_h < 1 ? ls_h * -cy / 2 : 0;
     }
 
-    int msb_valid_bits =
-        p->ra_format.component_bits + MPMIN(p->ra_format.component_pad, 0);
-    // The existing code assumes we just have a single tex multiplier for
-    // all of the planes. This may change in the future
-    float tex_mul = 1.0 / mp_get_csp_mul(p->image_params.color.space,
-                                         msb_valid_bits,
-                                         p->ra_format.component_bits);
-
     memset(img, 0, 4 * sizeof(img[0]));
     for (int n = 0; n < p->plane_count; n++) {
         struct texplane *t = &vimg->planes[n];
@@ -788,6 +780,12 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
             if (!c && padding == i)
                 padding = i + 1;
         }
+
+        int msb_valid_bits =
+            p->ra_format.component_bits + MPMIN(p->ra_format.component_pad, 0);
+        int csp = type == PLANE_ALPHA ? MP_CSP_RGB : p->image_params.color.space;
+        float tex_mul =
+            1.0 / mp_get_csp_mul(csp, msb_valid_bits, p->ra_format.component_bits);
 
         img[n] = (struct image){
             .type = type,
@@ -1693,25 +1691,26 @@ static void reinit_scaler(struct gl_video *p, struct scaler *scaler,
 
     uninit_scaler(p, scaler);
 
-    scaler->conf = *conf;
+    const struct filter_kernel *t_kernel = mp_find_filter_kernel(conf->kernel.name);
+    const struct filter_window *t_window = mp_find_filter_window(conf->window.name);
     bool is_tscale = scaler->index == SCALER_TSCALE;
+
+    scaler->conf = *conf;
     scaler->conf.kernel.name = (char *)handle_scaler_opt(conf->kernel.name, is_tscale);
-    scaler->conf.window.name = (char *)handle_scaler_opt(conf->window.name, is_tscale);
+    scaler->conf.window.name = t_window ? (char *)t_window->name : NULL;
     scaler->scale_factor = scale_factor;
     scaler->insufficient = false;
     scaler->initialized = true;
-
-    const struct filter_kernel *t_kernel = mp_find_filter_kernel(conf->kernel.name);
     if (!t_kernel)
         return;
 
     scaler->kernel_storage = *t_kernel;
     scaler->kernel = &scaler->kernel_storage;
 
-    const char *win = conf->window.name;
-    if (!win || !win[0])
-        win = t_kernel->window; // fall back to the scaler's default window
-    const struct filter_window *t_window = mp_find_filter_window(win);
+    if (!t_window) {
+        // fall back to the scaler's default window if available
+        t_window = mp_find_filter_window(t_kernel->window);
+    }
     if (t_window)
         scaler->kernel->w = *t_window;
 
@@ -2631,6 +2630,8 @@ static void pass_colormanage(struct gl_video *p, struct mp_colorspace src,
             "uint frame_max;"
             "uint counter;"
         );
+    } else {
+        tone_map.compute_peak = -1;
     }
 
     // Adapt from src to dst as necessary
@@ -2802,13 +2803,17 @@ static void pass_dither(struct gl_video *p)
 
 // Draws the OSD, in scene-referred colors.. If cms is true, subtitles are
 // instead adapted to the display's gamut.
-static void pass_draw_osd(struct gl_video *p, int draw_flags, double pts,
-                          struct mp_osd_res rect, struct ra_fbo fbo, bool cms)
+static void pass_draw_osd(struct gl_video *p, int osd_flags, int frame_flags,
+                          double pts, struct mp_osd_res rect, struct ra_fbo fbo,
+                          bool cms)
 {
-    if ((draw_flags & OSD_DRAW_SUB_ONLY) && (draw_flags & OSD_DRAW_OSD_ONLY))
+    if (frame_flags & RENDER_FRAME_VF_SUBS)
+        osd_flags |= OSD_DRAW_SUB_FILTER;
+
+    if ((osd_flags & OSD_DRAW_SUB_ONLY) && (osd_flags & OSD_DRAW_OSD_ONLY))
         return;
 
-    mpgl_osd_generate(p->osd, rect, pts, p->image_params.stereo3d, draw_flags);
+    mpgl_osd_generate(p->osd, rect, pts, p->image_params.stereo3d, osd_flags);
 
     timer_pool_start(p->osd_timer);
     for (int n = 0; n < MAX_OSD_PARTS; n++) {
@@ -2921,7 +2926,7 @@ static bool pass_render_frame(struct gl_video *p, struct mp_image *mpi,
         };
         finish_pass_tex(p, &p->blend_subs_tex, rect.w, rect.h);
         struct ra_fbo fbo = { p->blend_subs_tex };
-        pass_draw_osd(p, OSD_DRAW_SUB_ONLY, vpts, rect, fbo, false);
+        pass_draw_osd(p, OSD_DRAW_SUB_ONLY, flags, vpts, rect, fbo, false);
         pass_read_tex(p, p->blend_subs_tex);
         pass_describe(p, "blend subs video");
     }
@@ -2953,7 +2958,7 @@ static bool pass_render_frame(struct gl_video *p, struct mp_image *mpi,
         }
         finish_pass_tex(p, &p->blend_subs_tex, p->texture_w, p->texture_h);
         struct ra_fbo fbo = { p->blend_subs_tex };
-        pass_draw_osd(p, OSD_DRAW_SUB_ONLY, vpts, rect, fbo, false);
+        pass_draw_osd(p, OSD_DRAW_SUB_ONLY, flags, vpts, rect, fbo, false);
         pass_read_tex(p, p->blend_subs_tex);
         pass_describe(p, "blend subs");
     }
@@ -3223,11 +3228,9 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
 
     bool has_frame = !!frame->current;
 
-    if (!has_frame || !mp_rect_equals(&p->dst_rect, &target_rc)) {
-        struct m_color c = p->clear_color;
-        float color[4] = {c.r / 255.0, c.g / 255.0, c.b / 255.0, c.a / 255.0};
-        p->ra->fns->clear(p->ra, fbo.tex, color, &target_rc);
-    }
+    struct m_color c = p->clear_color;
+    float clear_color[4] = {c.r / 255.0, c.g / 255.0, c.b / 255.0, c.a / 255.0};
+    p->ra->fns->clear(p->ra, fbo.tex, clear_color, &target_rc);
 
     if (p->hwdec_overlay) {
         if (has_frame) {
@@ -3330,7 +3333,7 @@ done:
         if (!(flags & RENDER_FRAME_OSD))
             osd_flags |= OSD_DRAW_SUB_ONLY;
 
-        pass_draw_osd(p, osd_flags, p->osd_pts, p->osd_rect, fbo, true);
+        pass_draw_osd(p, osd_flags, flags, p->osd_pts, p->osd_rect, fbo, true);
         debug_check_gl(p, "after OSD rendering");
     }
 
@@ -4195,7 +4198,7 @@ static void *gl_video_dr_alloc_buffer(struct gl_video *p, size_t size)
     p->dr_buffers[p->num_dr_buffers++] = (struct dr_buffer){ .buf = buf };
 
     return buf->data;
-};
+}
 
 static void gl_video_dr_free_buffer(void *opaque, uint8_t *data)
 {

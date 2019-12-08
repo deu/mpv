@@ -177,10 +177,10 @@ mp.abort_async_command = function abort_async_command(id) {
 // {cb: fn, forced: bool, maybe input: str, repeatable: bool, complex: bool}
 var binds = new_cache();
 
-function dispatch_key_binding(name, state) {
+function dispatch_key_binding(name, state, key_name) {
     var cb = binds[name] ? binds[name].cb : false;
     if (cb)  // "script-binding [<script_name>/]<name>" command was invoked
-        cb(state);
+        cb(state, key_name);
 }
 
 function update_input_sections() {
@@ -204,8 +204,10 @@ function add_binding(forced, key, name, fn, opts) {
     if (typeof name == "function") {  // as if "name" is not part of the args
         opts = fn;
         fn = name;
-        name = "__keybinding" + next_bid++;  // new unique binding name
+        name = false;
     }
+    if (!name)
+        name = "__keybinding" + next_bid++;  // new unique binding name
     var key_data = {forced: forced};
     switch (typeof opts) {  // merge opts into key_data
         case "string": key_data[opts] = true; break;
@@ -217,10 +219,11 @@ function add_binding(forced, key, name, fn, opts) {
             fn({event: "press", is_mouse: false});
         });
         var KEY_STATES = { u: "up", d: "down", r: "repeat", p: "press" };
-        key_data.cb = function key_cb(state) {
+        key_data.cb = function key_cb(state, key_name) {
             fn({
                 event: KEY_STATES[state[0]] || "unknown",
-                is_mouse: state[1] == "m"
+                is_mouse: state[1] == "m",
+                key_name: key_name || undefined
             });
         }
     } else {

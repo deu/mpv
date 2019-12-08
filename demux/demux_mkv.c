@@ -1286,7 +1286,6 @@ static void add_coverart(struct demuxer *demuxer)
         if (!codec)
             continue;
         struct sh_stream *sh = demux_alloc_sh_stream(STREAM_VIDEO);
-        sh->demuxer_id = -1 - sh->index; // don't clash with mkv IDs
         sh->codec->codec = codec;
         sh->attached_picture = new_demux_packet_from(att->data, att->data_size);
         if (sh->attached_picture) {
@@ -1954,7 +1953,7 @@ static int read_mkv_segment_header(demuxer_t *demuxer, int64_t *segment_end)
     if (demuxer->params)
         num_skip = demuxer->params->matroska_wanted_segment;
 
-    while (!s->eof) {
+    while (stream_read_peek(s, &(char){0}, 1)) {
         if (ebml_read_id(s) != MATROSKA_ID_SEGMENT) {
             MP_VERBOSE(demuxer, "segment not found\n");
             return 0;
@@ -1999,13 +1998,9 @@ static int demux_mkv_open(demuxer_t *demuxer, enum demux_check check)
     if (demuxer->params)
         mkv_d->probably_webm_dash_init = demuxer->params->init_fragment.len > 0;
 
-    bstr start = stream_peek(s, 4);
-    uint32_t start_id = 0;
-    for (int n = 0; n < start.len; n++)
-        start_id = (start_id << 8) | start.start[n];
-    if (start_id != EBML_ID_EBML)
+    // Make sure you can seek back after read_ebml_header() if no EBML ID.
+    if (stream_read_peek(s, &(char[4]){0}, 4) != 4)
         return -1;
-
     if (!read_ebml_header(demuxer))
         return -1;
     MP_DBG(demuxer, "Found the head...\n");
@@ -2027,7 +2022,6 @@ static int demux_mkv_open(demuxer_t *demuxer, enum demux_check check)
 
     while (1) {
         start_pos = stream_tell(s);
-        stream_peek(s, 4); // make sure we can always seek back
         uint32_t id = ebml_read_id(s);
         if (s->eof) {
             if (!mkv_d->probably_webm_dash_init)
@@ -2142,7 +2136,7 @@ static int demux_mkv_read_block_lacing(struct block_info *block, int type,
                 uint8_t t;
                 do {
                     t = stream_read_char(s);
-                    if (stream_eof(s) || stream_tell(s) >= endpos)
+                    if (s->eof || stream_tell(s) >= endpos)
                         goto error;
                     lace_size[i] += t;
                 } while (t == 0xFF);
@@ -2585,7 +2579,7 @@ static int read_block(demuxer_t *demuxer, int64_t end, struct block_info *block)
 exit:
     if (res <= 0)
         free_block(block);
-    stream_seek(s, endpos);
+    stream_seek_skip(s, endpos);
     return res;
 }
 
@@ -2836,7 +2830,6 @@ static int read_next_block_into_queue(demuxer_t *demuxer)
     find_next_cluster:
         mkv_d->cluster_end = 0;
         for (;;) {
-            stream_peek(s, 4); // guarantee we can undo ebml_read_id() below
             mkv_d->cluster_start = stream_tell(s);
             uint32_t id = ebml_read_id(s);
             if (id == MATROSKA_ID_CLUSTER)

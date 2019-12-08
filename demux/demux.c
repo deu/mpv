@@ -273,6 +273,7 @@ struct demux_internal {
     int64_t slave_unbuffered_read_bytes; // value repoted from demuxer impl.
     int64_t hack_unbuffered_read_bytes;  // for demux_get_bytes_read_hack()
     int64_t cache_unbuffered_read_bytes; // for demux_reader_state.bytes_per_second
+    int64_t byte_level_seeks;            // for demux_reader_state.byte_level_seeks
 };
 
 struct timed_metadata {
@@ -979,13 +980,6 @@ static void demux_add_sh_stream_locked(struct demux_internal *in,
 
     if (sh->ff_index < 0)
         sh->ff_index = sh->index;
-    if (sh->demuxer_id < 0) {
-        sh->demuxer_id = 0;
-        for (int n = 0; n < in->num_streams; n++) {
-            if (in->streams[n]->type == sh->type)
-                sh->demuxer_id += 1;
-        }
-    }
 
     MP_TARRAY_APPEND(in, in->streams, in->num_streams, sh);
     assert(in->streams[sh->index] == sh);
@@ -3214,6 +3208,9 @@ static struct demuxer *open_given_type(struct mpv_global *global,
     mp_dbg(log, "Trying demuxer: %s (force-level: %s)\n",
            desc->name, d_level(check));
 
+    if (stream)
+        stream_seek(stream, 0);
+
     in->d_thread->params = params; // temporary during open()
     int ret = demuxer->desc->open(in->d_thread, check);
     if (ret >= 0) {
@@ -3323,8 +3320,6 @@ static struct demuxer *demux_open(struct stream *stream,
         for (int n = 0; demuxer_list[n]; n++) {
             const struct demuxer_desc *desc = demuxer_list[n];
             if (!check_desc || desc == check_desc) {
-                if (stream->seekable && (!params || !params->timeline))
-                    stream_seek(stream, 0);
                 demuxer = open_given_type(global, log, desc, stream, &sinfo,
                                           params, level);
                 if (demuxer) {
@@ -3760,6 +3755,8 @@ static bool queue_seek(struct demux_internal *in, double seek_pts, int flags,
 struct sh_stream *demuxer_stream_by_demuxer_id(struct demuxer *d,
                                                enum stream_type t, int id)
 {
+    if (id < 0)
+        return NULL;
     int num = demux_get_num_stream(d);
     for (int n = 0; n < num; n++) {
         struct sh_stream *s = demux_get_stream(d, n);
@@ -3977,14 +3974,19 @@ static void update_bytes_read(struct demux_internal *in)
     int64_t new = in->slave_unbuffered_read_bytes;
     in->slave_unbuffered_read_bytes = 0;
 
+    int64_t new_seeks = 0;
+
     struct stream *stream = demuxer->stream;
     if (stream) {
         new += stream->total_unbuffered_read_bytes;
         stream->total_unbuffered_read_bytes = 0;
+        new_seeks += stream->total_stream_seeks;
+        stream->total_stream_seeks = 0;
     }
 
     in->cache_unbuffered_read_bytes += new;
     in->hack_unbuffered_read_bytes += new;
+    in->byte_level_seeks += new_seeks;
 }
 
 // must be called not locked
@@ -4345,6 +4347,7 @@ void demux_get_reader_state(struct demuxer *demuxer, struct demux_reader_state *
         .low_level_seeks = in->low_level_seeks,
         .ts_last = in->demux_ts,
         .bytes_per_second = in->bytes_per_second,
+        .byte_level_seeks = in->byte_level_seeks,
         .file_cache_bytes = in->cache ? demux_cache_get_size(in->cache) : -1,
     };
     bool any_packets = false;

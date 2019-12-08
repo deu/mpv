@@ -144,16 +144,12 @@ void update_core_idle_state(struct MPContext *mpctx)
 void set_pause_state(struct MPContext *mpctx, bool user_pause)
 {
     struct MPOpts *opts = mpctx->opts;
-    bool send_update = false;
 
-    if (opts->pause != user_pause)
-        send_update = true;
     opts->pause = user_pause;
 
     bool internal_paused = opts->pause || mpctx->paused_for_cache;
     if (internal_paused != mpctx->paused) {
         mpctx->paused = internal_paused;
-        send_update = true;
 
         if (mpctx->ao && mpctx->ao_chain) {
             if (internal_paused) {
@@ -177,12 +173,15 @@ void set_pause_state(struct MPContext *mpctx, bool user_pause)
         } else {
             (void)get_relative_time(mpctx); // ignore time that passed during pause
         }
+
+        // For some reason, these events are supposed to be sent even if only
+        // the internal pause state changed (and "pause" property didn't)... OK.
+        mp_notify(mpctx, opts->pause ? MPV_EVENT_PAUSE : MPV_EVENT_UNPAUSE, 0);
     }
 
     update_core_idle_state(mpctx);
 
-    if (send_update)
-        mp_notify(mpctx, opts->pause ? MPV_EVENT_PAUSE : MPV_EVENT_UNPAUSE, 0);
+    m_config_notify_change_opt_ptr(mpctx->mconfig, &opts->pause);
 }
 
 void update_internal_pause_state(struct MPContext *mpctx)
@@ -691,8 +690,7 @@ static void handle_update_cache(struct MPContext *mpctx)
     mpctx->demux_underrun |= s.underrun;
 
     int cache_buffer = 100;
-    bool use_pause_on_low_cache = demux_is_network_cached(mpctx->demuxer) &&
-                                  opts->cache_pause && mpctx->play_dir > 0;
+    bool use_pause_on_low_cache = opts->cache_pause && mpctx->play_dir > 0;
 
     if (!mpctx->restart_complete) {
         // Audio or video is restarting, and initial buffering is enabled. Make
@@ -806,7 +804,7 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
     unsigned mouse_event_ts = mp_input_get_mouse_event_counter(mpctx->input);
     if (mpctx->mouse_event_ts != mouse_event_ts) {
         mpctx->mouse_event_ts = mouse_event_ts;
-        mpctx->mouse_timer = now + opts->cursor_autohide_delay / 1000.0;
+        mpctx->mouse_timer = now + vo->opts->cursor_autohide_delay / 1000.0;
         mouse_cursor_visible = true;
     }
 
@@ -816,13 +814,13 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
         mouse_cursor_visible = false;
     }
 
-    if (opts->cursor_autohide_delay == -1)
+    if (vo->opts->cursor_autohide_delay == -1)
         mouse_cursor_visible = true;
 
-    if (opts->cursor_autohide_delay == -2)
+    if (vo->opts->cursor_autohide_delay == -2)
         mouse_cursor_visible = false;
 
-    if (opts->cursor_autohide_fs && !opts->vo->fullscreen)
+    if (vo->opts->cursor_autohide_fs && !opts->vo->fullscreen)
         mouse_cursor_visible = true;
 
     if (mouse_cursor_visible != mpctx->mouse_cursor_visible)
@@ -841,10 +839,13 @@ static void handle_vo_events(struct MPContext *mpctx)
     if (events & VO_EVENT_FULLSCREEN_STATE) {
         // The only purpose of this is to update the fullscreen flag on the
         // playloop side if it changes "from outside" on the VO.
-        int fs = mpctx->opts->vo->fullscreen;
+        int old_fs = mpctx->opts->vo->fullscreen;
+        int fs = old_fs;
         vo_control(vo, VOCTRL_GET_FULLSCREEN, &fs);
-        m_config_set_option_raw_direct(mpctx->mconfig,
-            m_config_get_co(mpctx->mconfig, bstr0("fullscreen")), &fs, 0);
+        if (old_fs != fs) {
+            m_config_set_option_raw(mpctx->mconfig,
+                m_config_get_co(mpctx->mconfig, bstr0("fullscreen")), &fs, 0);
+        }
     }
 }
 
@@ -882,8 +883,10 @@ static void handle_loop_file(struct MPContext *mpctx)
         target = ab[0];
         prec = MPSEEK_EXACT;
     } else if (opts->loop_file) {
-        if (opts->loop_file > 0)
+        if (opts->loop_file > 0) {
             opts->loop_file--;
+            m_config_notify_change_opt_ptr(mpctx->mconfig, &opts->loop_file);
+        }
         target = get_start_time(mpctx, mpctx->play_dir);
     }
 
@@ -1033,6 +1036,7 @@ int handle_force_window(struct MPContext *mpctx, bool force)
 
 err:
     mpctx->opts->force_vo = 0;
+    m_config_notify_change_opt_ptr(mpctx->mconfig, &mpctx->opts->force_vo);
     uninit_video_out(mpctx);
     MP_FATAL(mpctx, "Error opening/initializing the VO window.\n");
     return -1;
@@ -1056,7 +1060,6 @@ static void handle_dummy_ticks(struct MPContext *mpctx)
 static void handle_playback_time(struct MPContext *mpctx)
 {
     if (mpctx->vo_chain &&
-        !mpctx->vo_chain->is_coverart &&
         !mpctx->vo_chain->is_sparse &&
         mpctx->video_status >= STATUS_PLAYING &&
         mpctx->video_status < STATUS_EOF)

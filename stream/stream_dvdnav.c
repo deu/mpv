@@ -257,13 +257,16 @@ static int mp_dvdnav_number_of_subs(stream_t *stream)
     return n;
 }
 
-static int fill_buffer(stream_t *s, char *buf, int max_len)
+static int fill_buffer(stream_t *s, void *buf, int max_len)
 {
     struct priv *priv = s->priv;
     dvdnav_t *dvdnav = priv->dvdnav;
 
-    if (max_len < 2048)
+    if (max_len < 2048) {
+        MP_FATAL(s, "Short read size. Data corruption will follow. Please "
+                    "provide a patch.\n");
         return -1;
+    }
 
     while (1) {
         int len = -1;

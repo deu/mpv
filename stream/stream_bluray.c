@@ -161,7 +161,7 @@ static void handle_event(stream_t *s, const BD_EVENT *ev)
     }
 }
 
-static int bluray_stream_fill_buffer(stream_t *s, char *buf, int len)
+static int bluray_stream_fill_buffer(stream_t *s, void *buf, int len)
 {
     struct bluray_priv_s *b = s->priv;
     BD_EVENT event;
@@ -283,9 +283,6 @@ static int bluray_stream_control(stream_t *s, int cmd, void *arg)
         *(char**)arg = talloc_strdup(NULL, meta->di_name);
         return STREAM_OK;
     }
-    case STREAM_CTRL_GET_SIZE:
-        *(int64_t *)arg = bd_get_title_size(b->bd);
-        return STREAM_OK;
     default:
         break;
     }

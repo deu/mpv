@@ -171,7 +171,6 @@ struct vo_chain {
 
     struct mp_output_chain *filter;
 
-    //struct vf_chain *vf;
     struct vo *vo;
 
     struct track *track;
@@ -208,6 +207,8 @@ struct ao_chain {
     struct track *track;
     struct mp_pin *filter_src;
     struct mp_pin *dec_src;
+
+    double delay;
 
     bool underrun;
 };
@@ -342,6 +343,7 @@ typedef struct MPContext {
     // Timing error (in seconds) due to rounding on vsync boundaries
     double display_sync_error;
     double audio_drop_throttle;
+    bool audio_drop_deprecated_msg;
     // Number of mistimed frames.
     int mistimed_frames_total;
     bool hrseek_active;     // skip all data until hrseek_pts

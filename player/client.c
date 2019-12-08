@@ -66,8 +66,6 @@ struct mp_client_api {
 
     pthread_mutex_t lock;
 
-    atomic_bool uses_vo_libmpv;
-
     // -- protected by lock
 
     struct mpv_handle **clients;
@@ -95,7 +93,6 @@ struct observe_property {
     bool dead;              // property unobserved while retrieving value
     bool value_valid;
     union m_option_value value;
-    // Only if async. update is used.
     uint64_t async_change_ts;   // logical timestamp incremented on each change
     uint64_t async_value_ts;    // logical timestamp for async_value contents
     bool async_updating;        // if true, updating async_value_ts to change_ts
@@ -147,10 +144,11 @@ struct mpv_handle {
     bool fuzzy_initialized; // see scripting.c wait_loaded()
     bool is_weak;           // can not keep core alive on its own
     struct mp_log_buffer *messages;
+    int messages_level;
 };
 
 static bool gen_log_message_event(struct mpv_handle *ctx);
-static bool gen_property_change_event(struct mpv_handle *ctx, bool *unlocked);
+static bool gen_property_change_event(struct mpv_handle *ctx);
 static void notify_property_events(struct mpv_handle *ctx, uint64_t event_mask);
 
 void mp_clients_init(struct MPContext *mpctx)
@@ -845,15 +843,12 @@ mpv_event *mpv_wait_event(mpv_handle *ctx, double timeout)
             talloc_steal(event, event->data);
             break;
         }
-        bool unlocked = false;
         // If there's a changed property, generate change event (never queued).
-        if (gen_property_change_event(ctx, &unlocked))
+        if (gen_property_change_event(ctx))
             break;
         // Pop item from message queue, and return as event.
         if (gen_log_message_event(ctx))
             break;
-        if (unlocked)
-            continue;
         int r = wait_wakeup(ctx, deadline);
         if (r == ETIMEDOUT)
             break;
@@ -930,7 +925,6 @@ void mpv_free_node_contents(mpv_node *node)
 int mpv_set_option(mpv_handle *ctx, const char *name, mpv_format format,
                    void *data)
 {
-    int flags = ctx->mpctx->initialized ? M_SETOPT_RUNTIME : 0;
     const struct m_option *type = get_mp_type(format);
     if (!type)
         return MPV_ERROR_OPTION_FORMAT;
@@ -941,8 +935,7 @@ int mpv_set_option(mpv_handle *ctx, const char *name, mpv_format format,
         data = &tmp;
     }
     lock_core(ctx);
-    int err = m_config_set_option_node(ctx->mpctx->mconfig, bstr0(name),
-                                       data, flags);
+    int err = m_config_set_option_node(ctx->mpctx->mconfig, bstr0(name), data, 0);
     unlock_core(ctx);
     switch (err) {
     case M_OPT_MISSING_PARAM:
@@ -1458,6 +1451,7 @@ int mpv_observe_property(mpv_handle *ctx, uint64_t userdata,
         .format = format,
         .type = type,
         .changed = true,
+        .async_change_ts = 1,
     };
     MP_TARRAY_APPEND(ctx, ctx->properties, ctx->num_properties, prop);
     ctx->property_event_masks |= prop->event_mask;
@@ -1577,38 +1571,18 @@ static bool update_prop(struct mpv_handle *ctx, struct observe_property *prop)
     if (!prop->type)
         return true;
 
-    union m_option_value val = {0};
-    bool val_valid = false;
-
-    // With vo_libmpv, we can't lock the core for stupid reasons.
-    // Yes, that's FUCKING HORRIBLE. On the other hand, might be useful for
-    // true async. properties in the future.
-    if (atomic_load_explicit(&ctx->clients->uses_vo_libmpv, memory_order_relaxed)) {
-        if (prop->async_change_ts > prop->async_value_ts) {
-            if (!prop->async_updating) {
-                prop->async_updating = true;
-                ctx->async_counter += 1;
-                mp_dispatch_enqueue(ctx->mpctx->dispatch, update_prop_async, prop);
-            }
-            return false; // re-update later when the changed value comes in
+    if (prop->async_change_ts > prop->async_value_ts) {
+        if (!prop->async_updating) {
+            prop->async_updating = true;
+            ctx->async_counter += 1;
+            mp_dispatch_enqueue(ctx->mpctx->dispatch, update_prop_async, prop);
         }
-
-        m_option_copy(prop->type, &val, &prop->async_value);
-        val_valid = prop->async_value_valid;
-    } else {
-        pthread_mutex_unlock(&ctx->lock);
-
-        struct getproperty_request req = {
-            .mpctx = ctx->mpctx,
-            .name = prop->name,
-            .format = prop->format,
-            .data = &val,
-        };
-        run_locked(ctx, getproperty_fn, &req);
-        val_valid = req.status >= 0;
-
-        pthread_mutex_lock(&ctx->lock);
+        return false; // re-update later when the changed value comes in
     }
+
+    union m_option_value val = {0};
+    bool val_valid = prop->async_value_valid;
+    m_option_copy(prop->type, &val, &prop->async_value);
 
     bool changed = prop->value_valid != val_valid;
     if (prop->value_valid && val_valid)
@@ -1632,7 +1606,7 @@ static bool update_prop(struct mpv_handle *ctx, struct observe_property *prop)
 
 // Set ctx->cur_event to a generated property change event, if there is any
 // outstanding property.
-static bool gen_property_change_event(struct mpv_handle *ctx, bool *unlocked)
+static bool gen_property_change_event(struct mpv_handle *ctx)
 {
     if (!ctx->mpctx->initialized)
         return false;
@@ -1653,7 +1627,6 @@ static bool gen_property_change_event(struct mpv_handle *ctx, bool *unlocked)
         if (prop->changed && !prop->dead) {
             prop->changed = false;
             updated = update_prop(ctx, prop);
-            *unlocked = true; // not always; but good enough
         }
 
         if (prop->dead) {
@@ -1715,9 +1688,8 @@ int mpv_hook_continue(mpv_handle *ctx, uint64_t id)
 
 int mpv_load_config_file(mpv_handle *ctx, const char *filename)
 {
-    int flags = ctx->mpctx->initialized ? M_SETOPT_RUNTIME : 0;
     lock_core(ctx);
-    int r = m_config_parse_config_file(ctx->mpctx->mconfig, filename, NULL, flags);
+    int r = m_config_parse_config_file(ctx->mpctx->mconfig, filename, NULL, 0);
     unlock_core(ctx);
     if (r == 0)
         return MPV_ERROR_INVALID_PARAMETER;
@@ -1732,29 +1704,43 @@ static void msg_wakeup(void *p)
     wakeup_client(ctx);
 }
 
+// Undocumented: if min_level starts with "silent:", then log messages are not
+// returned to the API user, but are stored until logging is enabled normally
+// again by calling this without "silent:". (Using a different level will
+// flush it, though.)
 int mpv_request_log_messages(mpv_handle *ctx, const char *min_level)
 {
+    bstr blevel = bstr0(min_level);
+    bool silent = bstr_eatstart0(&blevel, "silent:");
+
     int level = -1;
     for (int n = 0; n < MSGL_MAX + 1; n++) {
-        if (mp_log_levels[n] && strcmp(min_level, mp_log_levels[n]) == 0) {
+        if (mp_log_levels[n] && bstr_equals0(blevel, mp_log_levels[n])) {
             level = n;
             break;
         }
     }
-    if (strcmp(min_level, "terminal-default") == 0)
+    if (bstr_equals0(blevel, "terminal-default"))
         level = MP_LOG_BUFFER_MSGL_TERM;
 
     if (level < 0 && strcmp(min_level, "no") != 0)
         return MPV_ERROR_INVALID_PARAMETER;
 
     pthread_mutex_lock(&ctx->lock);
-    mp_msg_log_buffer_destroy(ctx->messages);
-    ctx->messages = NULL;
-    if (level >= 0) {
-        int size = level >= MSGL_V ? 10000 : 1000;
-        ctx->messages = mp_msg_log_buffer_new(ctx->mpctx->global, size, level,
-                                              msg_wakeup, ctx);
+    if (level < 0 || level != ctx->messages_level) {
+        mp_msg_log_buffer_destroy(ctx->messages);
+        ctx->messages = NULL;
     }
+    if (level >= 0) {
+        if (!ctx->messages) {
+            int size = level >= MSGL_V ? 10000 : 1000;
+            ctx->messages = mp_msg_log_buffer_new(ctx->mpctx->global, size,
+                                                  level, msg_wakeup, ctx);
+            ctx->messages_level = level;
+        }
+        mp_msg_log_buffer_set_silent(ctx->messages, silent);
+    }
+    wakeup_client(ctx);
     pthread_mutex_unlock(&ctx->lock);
     return 0;
 }
@@ -1918,7 +1904,6 @@ bool mp_set_main_render_context(struct mp_client_api *client_api,
     if (res)
         client_api->render_context = active ? ctx : NULL;
     pthread_mutex_unlock(&client_api->lock);
-    atomic_store(&client_api->uses_vo_libmpv, active);
     return res;
 }
 

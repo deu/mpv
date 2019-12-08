@@ -46,6 +46,7 @@
 #include "mpv_talloc.h"
 #include "options/options.h"
 #include "misc/bstr.h"
+#include "misc/node.h"
 #include "stream/stream.h"
 #include "common/common.h"
 
@@ -63,6 +64,7 @@ struct cmd_bind {
     int num_keys;
     char *cmd;
     char *location;     // filename/line number of definition
+    char *desc;         // human readable description
     bool is_builtin;
     struct cmd_bind_section *owner;
 };
@@ -74,7 +76,6 @@ struct cmd_bind_section {
     char *section;
     struct mp_rect mouse_area;  // set at runtime, if at all
     bool mouse_area_set;        // mouse_area is valid and should be tested
-    struct cmd_bind_section *next;
 };
 
 #define MP_MAX_SOURCES 10
@@ -137,7 +138,8 @@ struct input_ctx {
     double last_wheel_time; // mp_time_sec() of the last wheel event
 
     // List of command binding sections
-    struct cmd_bind_section *cmd_bind_sections;
+    struct cmd_bind_section **sections;
+    int num_sections;
 
     // List currently active command sections
     struct active_section active_sections[MAX_ACTIVE_SECTIONS];
@@ -181,7 +183,7 @@ struct input_opts {
 
 const struct m_sub_options input_config = {
     .opts = (const m_option_t[]) {
-        OPT_STRING("input-conf", config_file, M_OPT_FIXED | M_OPT_FILE),
+        OPT_STRING("input-conf", config_file, M_OPT_FILE),
         OPT_INT("input-ar-delay", ar_delay, 0),
         OPT_INT("input-ar-rate", ar_rate, 0),
         OPT_PRINT("input-keylist", mp_print_key_list),
@@ -282,8 +284,8 @@ static void append_bind_info(struct input_ctx *ictx, char **pmsg,
     char *msg = *pmsg;
     struct mp_cmd *cmd = mp_input_parse_cmd(ictx, bstr0(bind->cmd),
                                             bind->location);
-    bstr stripped = cmd ? cmd->original : bstr0(bind->cmd);
-    msg = talloc_asprintf_append(msg, " '%.*s'", BSTR_P(stripped));
+    char *stripped = cmd ? cmd->original : bind->cmd;
+    msg = talloc_asprintf_append(msg, " '%s'", stripped);
     if (!cmd)
         msg = talloc_asprintf_append(msg, " (invalid)");
     if (strcmp(bind->owner->section, "default") != 0)
@@ -312,9 +314,9 @@ static mp_cmd_t *handle_test(struct input_ctx *ictx, int code)
     talloc_free(key_buf);
 
     int count = 0;
-    for (struct cmd_bind_section *bs = ictx->cmd_bind_sections;
-         bs; bs = bs->next)
-    {
+    for (int n = 0; n < ictx->num_sections; n++) {
+        struct cmd_bind_section *bs = ictx->sections[n];
+
         for (int i = 0; i < bs->num_binds; i++) {
             if (bs->binds[i].num_keys && bs->binds[i].keys[0] == code) {
                 count++;
@@ -336,32 +338,32 @@ static mp_cmd_t *handle_test(struct input_ctx *ictx, int code)
     return res;
 }
 
+static struct cmd_bind_section *find_section(struct input_ctx *ictx,
+                                             bstr section)
+{
+    for (int n = 0; n < ictx->num_sections; n++) {
+        struct cmd_bind_section *bs = ictx->sections[n];
+        if (bstr_equals0(section, bs->section))
+            return bs;
+    }
+    return NULL;
+}
+
 static struct cmd_bind_section *get_bind_section(struct input_ctx *ictx,
                                                  bstr section)
 {
-    struct cmd_bind_section *bind_section = ictx->cmd_bind_sections;
-
     if (section.len == 0)
         section = bstr0("default");
-    while (bind_section) {
-        if (bstrcmp0(section, bind_section->section) == 0)
-            return bind_section;
-        if (bind_section->next == NULL)
-            break;
-        bind_section = bind_section->next;
-    }
-    if (bind_section) {
-        bind_section->next = talloc_ptrtype(ictx, bind_section->next);
-        bind_section = bind_section->next;
-    } else {
-        ictx->cmd_bind_sections = talloc_ptrtype(ictx, ictx->cmd_bind_sections);
-        bind_section = ictx->cmd_bind_sections;
-    }
+    struct cmd_bind_section *bind_section = find_section(ictx, section);
+    if (bind_section)
+        return bind_section;
+    bind_section = talloc_ptrtype(ictx, bind_section);
     *bind_section = (struct cmd_bind_section) {
         .section = bstrdup0(bind_section, section),
         .mouse_area = {INT_MIN, INT_MIN, INT_MAX, INT_MAX},
         .mouse_area_set = true,
     };
+    MP_TARRAY_APPEND(ictx, ictx->sections, ictx->num_sections, bind_section);
     return bind_section;
 }
 
@@ -456,7 +458,12 @@ static mp_cmd_t *get_cmd_from_keys(struct input_ctx *ictx, char *force_section,
     if (ictx->opts->test)
         return handle_test(ictx, code);
 
-    struct cmd_bind *cmd = find_any_bind_for_key(ictx, force_section, code);
+    struct cmd_bind *cmd = NULL;
+
+    if (MP_KEY_IS_UNICODE(code))
+        cmd = find_any_bind_for_key(ictx, force_section, MP_KEY_ANY_UNICODE);
+    if (!cmd)
+        cmd = find_any_bind_for_key(ictx, force_section, code);
     if (!cmd)
         cmd = find_any_bind_for_key(ictx, force_section, MP_KEY_UNMAPPED);
     if (!cmd) {
@@ -476,6 +483,11 @@ static mp_cmd_t *get_cmd_from_keys(struct input_ctx *ictx, char *force_section,
         ret->key_name = talloc_steal(ret, mp_input_get_key_combo_name(&code, 1));
         MP_TRACE(ictx, "key '%s' -> '%s' in '%s'\n",
                  ret->key_name, cmd->cmd, ret->input_section);
+        if (MP_KEY_IS_UNICODE(code)) {
+            bstr text = {0};
+            mp_append_utf8_bstr(ret, &text, code);
+            ret->key_text = text.start;
+        }
         ret->is_mouse_button = code & MP_KEY_EMIT_ON_UP;
     } else {
         char *key_buf = mp_input_get_key_combo_name(&code, 1);
@@ -553,7 +565,7 @@ static void interpret_key(struct input_ctx *ictx, int code, double scale,
     int state = code & (MP_KEY_STATE_DOWN | MP_KEY_STATE_UP);
     code = code & ~(unsigned)state;
 
-    if (mp_msg_test(ictx->log, MSGL_DEBUG)) {
+    if (mp_msg_test(ictx->log, MSGL_TRACE)) {
         char *key = mp_input_get_key_name(code);
         MP_TRACE(ictx, "key code=%#x '%s'%s%s\n",
                  code, key, (state & MP_KEY_STATE_DOWN) ? " down" : "",
@@ -1070,6 +1082,7 @@ static void bind_dealloc(struct cmd_bind *bind)
 {
     talloc_free(bind->cmd);
     talloc_free(bind->location);
+    talloc_free(bind->desc);
 }
 
 // builtin: if true, remove all builtin binds, else remove all user binds
@@ -1113,14 +1126,13 @@ void mp_input_define_section(struct input_ctx *ictx, char *name, char *location,
 void mp_input_remove_sections_by_owner(struct input_ctx *ictx, char *owner)
 {
     input_lock(ictx);
-    struct cmd_bind_section *bs = ictx->cmd_bind_sections;
-    while (bs) {
+    for (int n = 0; n < ictx->num_sections; n++) {
+        struct cmd_bind_section *bs = ictx->sections[n];
         if (bs->owner && owner && strcmp(bs->owner, owner) == 0) {
             mp_input_disable_section(ictx, bs->section);
             remove_binds(bs, false);
             remove_binds(bs, true);
         }
-        bs = bs->next;
     }
     input_unlock(ictx);
 }
@@ -1138,7 +1150,7 @@ static bool bind_matches_key(struct cmd_bind *bind, int num_keys, const int *key
 
 static void bind_keys(struct input_ctx *ictx, bool builtin, bstr section,
                       const int *keys, int num_keys, bstr command,
-                      const char *loc)
+                      const char *loc, const char *desc)
 {
     struct cmd_bind_section *bs = get_bind_section(ictx, section);
     struct cmd_bind *bind = NULL;
@@ -1164,6 +1176,7 @@ static void bind_keys(struct input_ctx *ictx, bool builtin, bstr section,
     *bind = (struct cmd_bind) {
         .cmd = bstrdup0(bs->binds, command),
         .location = talloc_strdup(bs->binds, loc),
+        .desc = talloc_strdup(bs->binds, desc),
         .owner = bs,
         .is_builtin = builtin,
         .num_keys = num_keys,
@@ -1239,11 +1252,18 @@ static int parse_config(struct input_ctx *ictx, bool builtin, bstr data,
             }
         }
 
-        bind_keys(ictx, builtin, section, keys, num_keys, command, cur_loc);
+        // Print warnings if invalid commands are encountered.
+        struct mp_cmd *cmd = mp_input_parse_cmd(ictx, command, cur_loc);
+        const char *desc = NULL;
+        if (cmd) {
+            desc = cmd->desc;
+            command = bstr0(cmd->original);
+        }
+
+        bind_keys(ictx, builtin, section, keys, num_keys, command, cur_loc, desc);
         n_binds++;
 
-        // Print warnings if invalid commands are encountered.
-        talloc_free(mp_input_parse_cmd(ictx, command, cur_loc));
+        talloc_free(cmd);
     }
 
     talloc_free(cur_loc);
@@ -1441,7 +1461,7 @@ void mp_input_run_cmd(struct input_ctx *ictx, const char **cmd)
 
 void mp_input_bind_key(struct input_ctx *ictx, int key, bstr command)
 {
-    struct cmd_bind_section *bs = ictx->cmd_bind_sections;
+    struct cmd_bind_section *bs = get_bind_section(ictx, (bstr){0});
     struct cmd_bind *bind = NULL;
 
     for (int n = 0; n < bs->num_binds; n++) {
@@ -1475,6 +1495,56 @@ void mp_input_bind_key(struct input_ctx *ictx, int key, bstr command)
                  bind->cmd, bind->location);
         talloc_free(s);
     }
+}
+
+struct mpv_node mp_input_get_bindings(struct input_ctx *ictx)
+{
+    input_lock(ictx);
+    struct mpv_node root;
+    node_init(&root, MPV_FORMAT_NODE_ARRAY, NULL);
+
+    for (int x = 0; x < ictx->num_sections; x++) {
+        struct cmd_bind_section *s = ictx->sections[x];
+        int priority = -1;
+
+        for (int i = 0; i < ictx->num_active_sections; i++) {
+            struct active_section *as = &ictx->active_sections[i];
+            if (strcmp(as->name, s->section) == 0) {
+                priority = i;
+                break;
+            }
+        }
+
+        for (int n = 0; n < s->num_binds; n++) {
+            struct cmd_bind *b = &s->binds[n];
+            struct mpv_node *entry = node_array_add(&root, MPV_FORMAT_NODE_MAP);
+
+            int b_priority = priority;
+            if (b->is_builtin && !ictx->opts->default_bindings)
+                b_priority = -1;
+
+            // Try to fixup the weird logic so consumer of this bindings list
+            // does not get too confused.
+            if (b_priority >= 0 && !b->is_builtin)
+                b_priority += ictx->num_active_sections;
+
+            node_map_add_string(entry, "section", s->section);
+            if (s->owner)
+                node_map_add_string(entry, "owner", s->owner);
+            node_map_add_string(entry, "cmd", b->cmd);
+            node_map_add_flag(entry, "is_weak", b->is_builtin);
+            node_map_add_int64(entry, "priority", b_priority);
+            if (b->desc)
+                node_map_add_string(entry, "comment", b->desc);
+
+            char *key = mp_input_get_key_combo_name(b->keys, b->num_keys);
+            node_map_add_string(entry, "key", key);
+            talloc_free(key);
+        }
+    }
+
+    input_unlock(ictx);
+    return root;
 }
 
 struct mp_input_src_internal {

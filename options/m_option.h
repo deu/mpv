@@ -63,6 +63,7 @@ extern const m_option_type_t m_option_type_geometry;
 extern const m_option_type_t m_option_type_size_box;
 extern const m_option_type_t m_option_type_channels;
 extern const m_option_type_t m_option_type_aspect;
+extern const m_option_type_t m_option_type_obj_settings_list;
 extern const m_option_type_t m_option_type_node;
 
 // Used internally by m_config.c
@@ -149,6 +150,9 @@ struct m_obj_list {
     // Allow unknown entries, for which a dummy entry is inserted, and whose
     // options are skipped and ignored.
     bool allow_unknown_entries;
+    // Callback to test whether an unknown entry should be allowed. (This can
+    // be useful if adding them as explicit entries is too much work.)
+    bool (*check_unknown_entry)(const char *name);
     // Allow syntax for disabling entries.
     bool allow_disable_entries;
     // This helps with confusing error messages if unknown flag options are used.
@@ -176,13 +180,6 @@ typedef struct m_obj_settings {
     // NULL terminated array of parameter/value pairs.
     char **attribs;
 } m_obj_settings_t;
-
-// A parser to set up a list of objects.
-/** It creates a NULL terminated array \ref m_obj_settings. The option priv
- *  field (\ref m_option::priv) must point to a \ref m_obj_list_t describing
- *  the available object types.
- */
-extern const m_option_type_t m_option_type_obj_settings_list;
 
 struct m_opt_choice_alternatives {
     char *name;
@@ -335,6 +332,17 @@ struct m_option_type {
     int (*get)(const m_option_t *opt, void *ta_parent, struct mpv_node *dst,
                void *src);
 
+    // Return whether the values are the same. (There are no "unordered"
+    // results; for example, two floats with the value NaN compare equal. Other
+    // ambiguous floats, such as +0 and -0 compare equal. Some option types may
+    // incorrectly report unequal for values that are equal, such as sets (if
+    // the element order is different, which incorrectly matters), but values
+    // duplicated with m_option_copy() always return as equal. Empty strings
+    // and NULL strings are equal. Ambiguous unicode representations compare
+    // unequal.)
+    // If not set, values are always considered equal (=> not really optional).
+    bool (*equal)(const m_option_t *opt, void *a, void *b);
+
     // Optional: list of suffixes, terminated with a {0} entry. An empty list
     // behaves like the list being NULL.
     const struct m_option_action *actions;
@@ -386,12 +394,6 @@ char *format_file_size(int64_t size);
 // The option is forbidden in config files.
 #define M_OPT_NOCFG             (1 << 2)
 
-// Can not be freely changed at runtime (normally, all options can be changed,
-// even if the settings don't get effective immediately). Note that an option
-// might still change even if this is set, e.g. via properties or per-file
-// options.
-#define M_OPT_FIXED             (1 << 3)
-
 // The option should be set during command line pre-parsing
 #define M_OPT_PRE_PARSE         (1 << 4)
 
@@ -418,7 +420,9 @@ char *format_file_size(int64_t size);
 #define UPDATE_VOL              (1 << 17) // softvol related options
 #define UPDATE_LAVFI_COMPLEX    (1 << 18) // --lavfi-complex
 #define UPDATE_VO_RESIZE        (1 << 19) // --android-surface-size
-#define UPDATE_OPT_LAST         (1 << 19)
+#define UPDATE_HWDEC            (1 << 20) // --hwdec
+#define UPDATE_DVB_PROG         (1 << 21) // some --dvbin-...
+#define UPDATE_OPT_LAST         (1 << 21)
 
 // All bits between _FIRST and _LAST (inclusive)
 #define UPDATE_OPTS_MASK \
@@ -542,6 +546,15 @@ static inline int m_option_get_node(const m_option_t *opt, void *ta_parent,
     if (opt->type->get)
         return opt->type->get(opt, ta_parent, dst, src);
     return M_OPT_UNKNOWN;
+}
+
+static inline bool m_option_equal(const m_option_t *opt, void *a, void *b)
+{
+    // Handle trivial equivalence.
+    // If not implemented, assume this type has no actual values => always equal.
+    if (a == b || !opt->type->equal)
+        return true;
+    return opt->type->equal(opt, a, b);
 }
 
 int m_option_required_params(const m_option_t *opt);
@@ -707,7 +720,7 @@ extern const char m_option_path_separator;
 
 #define OPT_PRINT(optname, fn)                                              \
     {.name = optname,                                                       \
-     .flags = M_OPT_FIXED | M_OPT_NOCFG | M_OPT_PRE_PARSE | M_OPT_NOPROP,   \
+     .flags = M_OPT_NOCFG | M_OPT_PRE_PARSE | M_OPT_NOPROP,                 \
      .type = &m_option_type_print_fn,                                       \
      .priv = MP_EXPECT_TYPE(m_opt_print_fn, fn),                            \
      .offset = -1}

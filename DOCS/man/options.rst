@@ -726,6 +726,13 @@ Program Behavior
     subdirectory (usually ``~/.config/mpv/watch_later/``).
     See ``quit-watch-later`` input command.
 
+``--resume-playback-check-mtime``
+    Only restore the playback position from the ``watch_later`` configuration
+    subdirectory (usually ``~/.config/mpv/watch_later/``) if the file's
+    modification time is the same as at the time of saving. This may prevent
+    skipping forward in files with the same name which have different content.
+    (Default: ``no``)
+
 ``--profile=<profile1,profile2,...>``
     Use the given profile(s), ``--profile=help`` displays a list of the
     defined profiles.
@@ -852,6 +859,12 @@ Program Behavior
     binding (default: yes). By default, the ``i`` key is used (``I`` to make
     the overlay permanent).
 
+``--load-osd-console=<yes|no>``
+    Enable the builtin script that shows a console on a key binding and lets
+    you enter commands (default: yes). By default,. The ``´`` key is used to
+    show the console, and ``ESC`` to hide it again. (This is based on  a user
+    script called ``repl.lua``.)
+
 ``--player-operation-mode=<cplayer|pseudo-gui>``
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but
@@ -894,25 +907,41 @@ Video
     The argument selects the drop methods, and can be one of the following:
 
     <no>
-        Disable any framedropping.
+        Disable any frame dropping. Not recommended, for testing only.
     <vo>
         Drop late frames on video output (default). This still decodes and
-        filters all frames, but doesn't render them on the VO. It tries to query
-        the display FPS (X11 only, not correct on multi-monitor systems), or
-        assumes infinite display FPS if that fails. Drops are indicated in
-        the terminal status line as ``Dropped:`` field. If the decoder is too slow,
-        in theory all frames would have to be dropped (because all frames are
-        too late) - to avoid this, frame dropping stops if the effective
-        framerate is below 10 FPS.
+        filters all frames, but doesn't render them on the VO. Drops are
+        indicated in the terminal status line as ``Dropped:`` field.
+
+        In audio sync. mode, this drops frames that are outdated at the time of
+        display. If the decoder is too slow, in theory all frames would have to
+        be dropped (because all frames are too late) - to avoid this, frame
+        dropping stops  if the effective framerate is below 10 FPS.
+
+        In display-sync. modes (see ``--video-sync``), this affects only how
+        A/V drops or repeats frames. If this mode is disabled, A/V desync will
+        in theory not affect video scheduling anymore (much like the
+        ``display-resample-desync`` mode). However, even if disabled, frames
+        will still be skipped (i.e. dropped) according to the ratio between
+        video and display frequencies.
+
+        This is the recommended mode, and the default.
     <decoder>
         Old, decoder-based framedrop mode. (This is the same as ``--framedrop=yes``
         in mpv 0.5.x and before.) This tells the decoder to skip frames (unless
         they are needed to decode future frames). May help with slow systems,
         but can produce unwatchable choppy output, or even freeze the display
-        completely. Not recommended.
+        completely.
+
+        This uses a heuristic which may not make sense, and in  general cannot
+        achieve good results, because the decoder's frame dropping cannot be
+        controlled in a predictable manner. Not recommended.
+
+        Even if you want to use this, prefer ``decoder+vo`` for better results.
+
         The ``--vd-lavc-framedrop`` option controls what frames to drop.
     <decoder+vo>
-        Enable both modes. Not recommended.
+        Enable both modes. Not recommended. Better than just ``decoder`` mode.
 
     .. note::
 
@@ -938,8 +967,7 @@ Video
       frame, so if this is not done, there is some likeliness that the VO has
       to drop some frames if rendering the first frame takes longer than needed.
 
-
-``--display-fps=<fps>``
+``--override-display-fps=<fps>``
     Set the display FPS used with the ``--video-sync=display-*`` modes. By
     default, a detected value is used. Keep in mind that setting an incorrect
     value (even if slightly incorrect) can ruin video playback. On multi-monitor
@@ -949,10 +977,36 @@ Video
     Set this option only if you have reason to believe the automatically
     determined value is wrong.
 
+``--display-fps=<fps>``
+    Deprecated alias for ``--override-display-fps``.
+
 ``--hwdec=<api>``
     Specify the hardware video decoding API that should be used if possible.
     Whether hardware decoding is actually done depends on the video codec. If
     hardware decoding is not possible, mpv will fall back on software decoding.
+
+    Hardware decoding is not enabled by default, because it is typically an
+    additional source of errors. It is worth using only if your CPU is too
+    slow to decode a specific video.
+
+    .. note::
+
+        Use the ``Ctrl+h`` shortcut to toggle hardware decoding at runtime. It
+        toggles this option between ``auto`` and ``no``.
+
+        Always enabling HW decoding by putting it into the config file is
+        discouraged. If you use the Ubuntu package, delete ``/etc/mpv/mpv.conf``,
+        as the package tries to enable HW decoding by default.
+
+    Use one of the auto modes if you want to enable hardware decoding.
+    Explicitly selecting the mode is mostly meant for testing and debugging.
+    It's a bad idea to put explicit selection into the config file if you
+    want thing to just keep working after updates and so on.
+
+    .. note::
+
+        Even if enabled, hardware decoding is still only white-listed for some
+        codecs. See ``--hwdec-codecs`` to enable hardware decoding in more cases.
 
     ``<api>`` can be one of the following:
 
@@ -960,13 +1014,12 @@ Video
     :auto:      enable best hw decoder (see below)
     :yes:       exactly the same as ``auto``
     :auto-copy: enable best hw decoder with copy-back (see below)
-    :vdpau:     requires ``--vo=gpu`` with ``--gpu-context=x11``,
-                or ``--vo=vdpau`` (Linux only)
+    :vdpau:     requires ``--vo=gpu`` with X11, or ``--vo=vdpau`` (Linux only)
     :vdpau-copy: copies video back into system RAM (Linux with some GPUs only)
     :vaapi:     requires ``--vo=gpu`` or ``--vo=vaapi`` (Linux only)
     :vaapi-copy: copies video back into system RAM (Linux with some GPUs only)
     :videotoolbox: requires ``--vo=gpu`` (OS X 10.8 and up),
-                   or ``--vo=opengl-cb`` (iOS 9.0 and up)
+                   or ``--vo=libmpv`` (iOS 9.0 and up)
     :videotoolbox-copy: copies video back into system RAM (OS X 10.8 or iOS 9.0 and up)
     :dxva2:     requires ``--vo=gpu`` with ``--gpu-context=d3d11``,
                 ``--gpu-context=angle`` or ``--gpu-context=dxinterop``
@@ -995,12 +1048,24 @@ Video
 
     ``auto-copy`` selects only modes that copy the video data back to system
     memory after decoding. This selects modes like ``vaapi-copy`` (and so on).
-    If none of these work, hardware decoding is disabled. This mode is always
-    guaranteed to incur no additional loss compared to software decoding, and
-    will allow CPU processing with video filters.
+    If none of these work, hardware decoding is disabled. This mode is usually
+    guaranteed to incur no additional quality loss compared to software
+    decoding (assuming modern codecs and an error free video stream), and will
+    allow CPU processing with video filters. This mode works with all video
+    filters and VOs.
+
+    Because these copy the decoded video back to system RAM, they're often less
+    less efficient than the direct modes, and may not help too much over
+    software decoding.
+
+    .. note::
+
+       Most non-copy methods only work with the OpenGL GPU backend. Currently,
+       only the ``nvdec`` and ``cuda`` methods work with Vulkan.
 
     The ``vaapi`` mode, if used with ``--vo=gpu``, requires Mesa 11 and most
-    likely works with Intel GPUs only. It also requires the opengl EGL backend.
+    likely works with Intel and AMD GPUs only. It also requires the opengl EGL
+    backend.
 
     The ``cuda`` and ``cuda-copy`` modes provides deinterlacing in the decoder
     which is useful as there is no other deinterlacing mechanism in the gpu
@@ -1015,27 +1080,6 @@ Video
     check whether decoding is supported by the hardware at all. Deinterlacing
     is not supported. Since this uses FFmpeg's codec parsers, it is expected
     that this generally causes fewer issues than ``cuda``.
-
-    Most video filters will not work with hardware decoding as they are
-    primarily implemented on the CPU. Some exceptions are ``vdpaupp``,
-    ``vdpaurb`` and ``vavpp``. See `VIDEO FILTERS`_ for more details.
-
-    The ``...-copy`` modes (e.g. ``dxva2-copy``) allow you to use hardware
-    decoding with any VO, backend or filter. Because these copy the decoded
-    video back to system RAM, they're likely less efficient than the direct
-    modes (like e.g. ``dxva2``), and probably not more efficient than software
-    decoding except for some codecs (e.g. HEVC).
-
-    .. note::
-
-        When using this switch, hardware decoding is still only done for some
-        codecs. See ``--hwdec-codecs`` to enable hardware decoding for more
-        codecs.
-
-    .. note::
-
-       Most non-copy methods only work with the OpenGL GPU backend. Currently,
-       only the ``nvdec`` and ``cuda`` methods work with Vulkan.
 
     .. admonition:: Quality reduction with hardware decoding
 
@@ -1101,13 +1145,13 @@ Video
     This option is for troubleshooting hwdec interop issues. Since it's a
     debugging option, its semantics may change at any time.
 
-    This is useful for the ``gpu`` and ``opengl-cb`` VOs for selecting which
+    This is useful for the ``gpu`` and ``libmpv`` VOs for selecting which
     hwdec interop context to use exactly. Effectively it also can be used
     to block loading of certain backends.
 
     If set to ``auto`` (default), the behavior depends on the VO: for ``gpu``,
     it does nothing, and the interop context is loaded on demand (when the
-    decoder probes for ``--hwdec`` support). For ``opengl-cb``, which has
+    decoder probes for ``--hwdec`` support). For ``libmpv``, which has
     has no on-demand loading, this is equivalent to ``all``.
 
     The empty string is equivalent to ``auto``.
@@ -1383,6 +1427,11 @@ Video
     Fallback to software decoding if the hardware-accelerated decoder fails
     (default: 3). If this is a number, then fallback will be triggered if
     N frames fail to decode in a row. 1 is equivalent to ``yes``.
+
+    Setting this to a higher number might break the playback start fallback: if
+    a fallback happens, parts of the file will be skipped, approximately by to
+    the number of packets that could not be decoded. Values below an unspecified
+    count will not have this problem, because mpv retains the packets.
 
 ``--vd-lavc-dr=<yes|no>``
     Enable direct rendering (default: yes). If this is set to ``yes``, the
@@ -2776,6 +2825,23 @@ Window
     For example, ``--window-scale=0.5`` would show the window at half the
     video size.
 
+``--window-minimized=<yes|no>``
+    Whether the video window is minimized or not. Setting this will minimize,
+    or unminimze, the video window if the current VO supports it. Note that
+    some VOs may support minimization while not supporting unminimization
+    (eg: Wayland).
+
+    Whether this option and ``--window-maximized`` work on program start or
+    at runtime, and whether they're (at runtime) updated to reflect the actual
+    window state, heavily depends on the VO and the windowing system. Some VOs
+    simply do not implement them or parts of them, while other VOs may be
+    restricted by the windowing systems (especially Wayland).
+
+``--window-maximized=<yes|no>``
+    Whether the video window is maximized or not. Setting this will maximize,
+    or unmaximize, the video window if the current VO supports it. See
+    ``--window-minimized`` for further remarks.
+
 ``--cursor-autohide=<number|no|always>``
     Make mouse cursor automatically hide after given number of milliseconds.
     ``no`` will disable cursor autohide. ``always`` means the cursor will stay
@@ -2828,7 +2894,7 @@ Window
         - ``--monitoraspect=16:9`` or ``--monitoraspect=1.7777``
 
 ``--hidpi-window-scale``, ``--no-hidpi-window-scale``
-    (OS X and X11 only)
+    (OS X, X11, and Wayland only)
     Scale the window size according to the backing scale factor (default: yes).
     On regular HiDPI resolutions the window opens with double the size but appears
     as having the same size as on none-HiDPI resolutions. This is the default OS X
@@ -3104,6 +3170,18 @@ Demuxer
     breaks this even more, while if it's disabled, you can at least seek within
     the first song in the stream. Well, you won't get anything useful either
     way if the seek is outside of mpv's cache.
+
+``--demuxer-lavf-propagate-opts=<yes|no>``
+    Propagate FFmpeg-level options to recursively opened connections (default:
+    yes). This is needed because FFmpeg will apply these settings to nested
+    AVIO contexts automatically. On the other hand, this could break in certain
+    situations - it's the FFmpeg API, you just can't win.
+
+    This affects in particular the ``--timeout`` option and anything passed
+    with ``--demuxer-lavf-o``.
+
+    If this option is deemed unnecessary at some point in the future, it will
+    be removed without notice.
 
 ``--demuxer-mkv-subtitle-preroll=<yes|index|no>``, ``--mkv-subtitle-preroll``
     Try harder to show embedded soft subtitles when seeking somewhere. Normally,
@@ -3381,6 +3459,8 @@ Input
     like any other binding). See `INPUT.CONF`_.
 
 ``--input-file=<filename>``
+    Deprecated. Use ``--input-ipc-server``.
+
     Read commands from the given file. Mostly useful with a FIFO. Since
     mpv 0.7.0 also understands JSON commands (see `JSON IPC`_), but you can't
     get replies or events. Use ``--input-ipc-server`` for something
@@ -3901,7 +3981,7 @@ Software Scaler
 
 ``--zimg-fast=<yes|no>``
     Allow optimizations that help with performance, but reduce quality (default:
-    no). Currently, this may simplify gamma conversion operations.
+    yes). Currently, this may simplify gamma conversion operations.
 
 
 Audio Resampler
@@ -4173,6 +4253,32 @@ Cache
 
     Currently, this is used for ``--cache-on-disk`` only.
 
+``--stream-buffer-size=<bytesize>``
+    Size of the low level stream byte buffer (default: 128KB). This is used as
+    buffer between demuxer and low level I/O (e.g. sockets). Generally, this
+    can be very small, and the main purpose is similar to the internal buffer
+    FILE in the C standard library will have.
+
+    Half of the buffer is always used for guaranteed seek back, which is
+    important for unseekable input.
+
+    There are known cases where this can help performance to set a large buffer:
+
+        1. mp4 files. libavformat may trigger many small seeks in both
+           directions, depending on how the file was muxed.
+
+        2. Certain network filesystems, which do not have a cache, and where
+           small reads can be inefficient.
+
+    In other cases, setting this to a large value can reduce performance.
+
+    Usually, read accesses are at half the buffer size, but it may happen that
+    accesses are done alternating with smaller and larger sizes (this is due to
+    the internal ring buffer wrap-around).
+
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
+
 Network
 -------
 
@@ -4232,9 +4338,10 @@ Network
     Specify a referrer path or URL for HTTP requests.
 
 ``--network-timeout=<seconds>``
-    Specify the network timeout in seconds. This affects at least HTTP. The
-    special value 0 (default) uses the FFmpeg/Libav defaults. If a protocol
-    is used which does not support timeouts, this option is silently ignored.
+    Specify the network timeout in seconds (default: 60 seconds). This affects
+    at least HTTP. The special value 0 uses the FFmpeg/Libav defaults. If a
+    protocol is used which does not support timeouts, this option is silently
+    ignored.
 
     .. warning::
 
@@ -4243,8 +4350,10 @@ Network
         option accept different units (seconds instead of microseconds, causing
         mpv to pass it huge values), it will also overflow FFmpeg internal
         calculations. The worst is that merely setting the option will put RTSP
-        into listening mode, which breaks any client uses. Do not use this
-        option with RTSP URLs.
+        into listening mode, which breaks any client uses. At time of this
+        writing, the fix was not made effective yet. For this reason, this
+        option is ignored (or should be ignored) on RTSP URLs. You can still
+        set the timeout option directly with ``--demuxer-lavf-o``.
 
 ``--rtsp-transport=<lavf|udp|tcp|http>``
     Select RTSP transport method (default: tcp). This selects the underlying
@@ -4377,7 +4486,7 @@ GPU renderer options
 -----------------------
 
 The following video options are currently all specific to ``--vo=gpu`` and
-``--vo=opengl-cb`` only, which are the only VOs that implement them.
+``--vo=libmpv`` only, which are the only VOs that implement them.
 
 ``--scale=<filter>``
     The filter function to use when upscaling video.
@@ -4704,7 +4813,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     require driver-specific hacks if using multiple monitors, to ensure mpv
     syncs to the right one. Compositing window managers can also lead to bad
     results, as can missing or incorrect display FPS information (see
-    ``--display-fps``).
+    ``--override-display-fps``).
 
 ``--vulkan-swap-mode=<mode>``
     Controls the presentation mode of the vulkan swapchain. This is similar
@@ -4819,7 +4928,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Currently only relevant for ``--gpu-api=d3d11``.
 
-``--wayland-frame-wait-offset=<-100..3000>``
+``--wayland-frame-wait-offset=<-500..3000>``
     Control the amount of offset (in microseconds) to add to wayland's frame wait
     (default 1000). The wayland context assumes that if frame callback or presentation
     feedback isn't received within a certain amount of time then the video is being
@@ -5335,7 +5444,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
     auto
         auto-select (default)
     cocoa
-        Cocoa/OS X (deprecated, use --vo=opengl-cb instead)
+        Cocoa/OS X (deprecated, use --vo=libmpv instead)
     win
         Win32/WGL
     winvk
@@ -5364,11 +5473,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
         X11/EGL
     android
         Android/EGL. Requires ``--wid`` be set to an ``android.view.Surface``.
-    vdpauglx
-        Use vdpau presentation with GLX as backing. Experimental use only.
-        Using this will have no advantage (other than additional bugs or
-        performance problems), and is for doing experiments only. Will not
-        be used automatically.
 
 ``--gpu-api=<type>``
     Controls which type of graphics APIs will be accepted:
@@ -6141,3 +6245,20 @@ Miscellaneous
 
     See the FFmpeg libavfilter documentation for details on the available
     filters.
+
+Debugging
+---------
+
+``--unittest=<name>``
+    Run an internal unit test. There are multiple, and the name specifies which.
+
+    The special value ``all-simple`` runs all tests which do not need further
+    setup (other arguments and such). Some tests may need additional arguments
+    to do anything useful.
+
+    On success, the player binary exits with exit status 0, otherwise it returns
+    with an undefined non-0 exit status (it may crash or abort itself on test
+    failures).
+
+    This is only enabled if built with ``--enable-tests``, and should normally
+    be enabled and used by developers only.

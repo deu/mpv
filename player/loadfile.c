@@ -35,6 +35,7 @@
 
 #include "client.h"
 #include "common/msg.h"
+#include "common/msg_control.h"
 #include "common/global.h"
 #include "options/path.h"
 #include "options/m_config.h"
@@ -594,8 +595,11 @@ static void check_previous_track_selection(struct MPContext *mpctx)
         // defaults are -1 (default selection), or -2 (off) for secondary tracks.
         for (int t = 0; t < STREAM_TYPE_COUNT; t++) {
             for (int i = 0; i < NUM_PTRACKS; i++) {
-                if (opts->stream_id[i][t] >= 0)
+                if (opts->stream_id[i][t] >= 0) {
                     opts->stream_id[i][t] = i == 0 ? -1 : -2;
+                    m_config_notify_change_opt_ptr(mpctx->mconfig,
+                                                   &opts->stream_id[i][t]);
+                }
             }
         }
         talloc_free(mpctx->track_layout_hash);
@@ -612,8 +616,11 @@ void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type
 
     // Mark the current track selection as explicitly user-requested. (This is
     // different from auto-selection or disabling a track due to errors.)
-    if (flags & FLAG_MARK_SELECTION)
+    if (flags & FLAG_MARK_SELECTION) {
         mpctx->opts->stream_id[order][type] = track ? track->user_tid : -2;
+        m_config_notify_change_opt_ptr(mpctx->mconfig,
+                                       &mpctx->opts->stream_id[order][type]);
+    }
 
     // No decoder should be initialized yet.
     if (!mpctx->demuxer)
@@ -996,7 +1003,7 @@ static void load_per_file_options(m_config_t *conf,
 {
     for (int n = 0; n < params_count; n++) {
         m_config_set_option_cli(conf, params[n].name, params[n].value,
-                                M_SETOPT_RUNTIME | M_SETOPT_BACKUP);
+                                M_SETOPT_BACKUP);
     }
 }
 
@@ -1645,8 +1652,10 @@ terminate_playback:
 
     process_hooks(mpctx, "on_unload");
 
-    if (mpctx->step_frames)
+    if (mpctx->step_frames) {
         opts->pause = 1;
+        m_config_notify_change_opt_ptr(mpctx->mconfig, &opts->pause);
+    }
 
     close_recorder(mpctx);
 
@@ -1752,8 +1761,11 @@ struct playlist_entry *mp_next_file(struct MPContext *mpctx, int direction,
             if (mpctx->opts->shuffle)
                 playlist_shuffle(mpctx->playlist);
             next = mpctx->playlist->first;
-            if (next && mpctx->opts->loop_times > 1)
+            if (next && mpctx->opts->loop_times > 1) {
                 mpctx->opts->loop_times--;
+                m_config_notify_change_opt_ptr(mpctx->mconfig,
+                                               &mpctx->opts->loop_times);
+            }
         } else {
             next = mpctx->playlist->last;
             // Don't jump to files that would immediately go to next file anyway
@@ -1789,6 +1801,8 @@ void mp_play_files(struct MPContext *mpctx)
         mp_wakeup_core(mpctx); // avoid lost wakeups during waiting
         MP_VERBOSE(mpctx, "Done loading scripts.\n");
     }
+    // After above is finished; but even if it's skipped.
+    mp_msg_set_early_logging(mpctx->global, false);
 
     prepare_playlist(mpctx, mpctx->playlist);
 
@@ -1839,7 +1853,7 @@ void mp_set_playlist_entry(struct MPContext *mpctx, struct playlist_entry *e)
     mpctx->playlist->current = e;
     mpctx->playlist->current_was_replaced = false;
     // Make it pick up the new entry.
-    if (!mpctx->stop_play)
+    if (mpctx->stop_play != PT_QUIT)
         mpctx->stop_play = PT_CURRENT_ENTRY;
     mp_wakeup_core(mpctx);
 }
@@ -1872,7 +1886,7 @@ void close_recorder_and_error(struct MPContext *mpctx)
     close_recorder(mpctx);
     talloc_free(mpctx->opts->record_file);
     mpctx->opts->record_file = NULL;
-    mp_notify_property(mpctx, "record-file");
+    m_config_notify_change_opt_ptr(mpctx->mconfig, &mpctx->opts->record_file);
     MP_ERR(mpctx, "Disabling stream recording.\n");
 }
 

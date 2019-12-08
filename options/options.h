@@ -17,6 +17,8 @@ typedef struct mp_vo_opts {
     int border;
     int fit_border;
     int all_workspaces;
+    int window_minimized;
+    int window_maximized;
 
     int screen_id;
     int fsscreen_id;
@@ -38,6 +40,9 @@ typedef struct mp_vo_opts {
     struct m_geometry autofit_larger;
     struct m_geometry autofit_smaller;
     double window_scale;
+
+    int cursor_autohide_delay;
+    int cursor_autohide_fs;
 
     int keepaspect;
     int keepaspect_window;
@@ -123,6 +128,7 @@ typedef struct MPOpts {
     int msg_time;
     char *log_file;
 
+    char *test_mode;
     int operation_mode;
 
     char **reset_options;
@@ -133,6 +139,7 @@ typedef struct MPOpts {
     char *lua_ytdl_format;
     char **lua_ytdl_raw_options;
     int lua_load_stats;
+    int lua_load_console;
 
     int auto_load_scripts;
 
@@ -159,8 +166,6 @@ typedef struct MPOpts {
     struct mp_csp_equalizer_opts *video_equalizer;
 
     int stop_screensaver;
-    int cursor_autohide_delay;
-    int cursor_autohide_fs;
 
     int video_rotate;
 
@@ -231,6 +236,7 @@ typedef struct MPOpts {
     double ab_loop[2];
     double step_sec;
     int position_resume;
+    int position_check_mtime;
     int position_save_on_quit;
     int write_filename_in_watch_later_config;
     int ignore_path_in_watch_later_config;
@@ -308,6 +314,7 @@ typedef struct MPOpts {
 
     struct demux_opts *demux_opts;
     struct demux_cache_opts *demux_cache_opts;
+    struct stream_opts *stream_opts;
 
     struct vd_lavc_params *vd_lavc_params;
     struct ad_lavc_params *ad_lavc_params;
@@ -353,13 +360,13 @@ struct filter_opts {
     int deinterlace;
 };
 
-extern const m_option_t mp_opts[];
-extern const struct MPOpts mp_default_opts;
 extern const struct m_sub_options vo_sub_opts;
 extern const struct m_sub_options dvd_conf;
 extern const struct m_sub_options mp_subtitle_sub_opts;
 extern const struct m_sub_options mp_osd_render_sub_opts;
 extern const struct m_sub_options filter_conf;
 extern const struct m_sub_options resample_conf;
+extern const struct m_sub_options stream_conf;
+extern const struct m_sub_options mp_opt_root;
 
 #endif

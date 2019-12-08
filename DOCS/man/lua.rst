@@ -240,7 +240,9 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     an example). The name should be unique across other bindings in the same
     script - if not, the previous binding with the same name will be
     overwritten. You can omit the name, in which case a random name is generated
-    internally.
+    internally. (Omitting works as follows: either pass ``nil`` for ``name``,
+    or pass the ``fn`` argument in place of the name. The latter is not
+    recommended and is handled for compatibility only.)
 
     The last argument is used for optional flags. This is a table, which can
     have the following entries:
@@ -251,11 +253,24 @@ The ``mp`` module is preloaded, although it can be loaded manually with
         ``complex``
             If set to ``true``, then ``fn`` is called on both key up and down
             events (as well as key repeat, if enabled), with the first
-            argument being a table. This table has an ``event`` entry, which
-            is set to one of the strings ``down``, ``repeat``, ``up`` or
-            ``press`` (the latter if key up/down can't be tracked). It further
-            has an ``is_mouse`` entry, which tells whether the event was caused
-            by a mouse button.
+            argument being a table. This table has the following entries (and
+            may contain undocumented ones):
+
+            ``event``
+                Set to one of the strings ``down``, ``repeat``, ``up`` or
+                ``press`` (the latter if key up/down can't be tracked).
+
+            ``is_mouse``
+                Boolean Whether the event was caused by a mouse button.
+
+            ``key_name``
+                The name of they key that triggered this, or ``nil`` if invoked
+                artificially. If the key name is unknown, it's an empty string.
+
+            ``key_text``
+                Text if triggered by a text key, otherwise ``nil``. See
+                description of ``script-binding`` command for details (this
+                field is equivalent to the 5th argument).
 
     Internally, key bindings are dispatched via the ``script-message-to`` or
     ``script-binding`` input commands and ``mp.register_script_message``.

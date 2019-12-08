@@ -40,11 +40,6 @@ build_options = [
         'deps': '!lgpl',
         'func': check_true,
     }, {
-        'name': 'libaf',
-        'desc': 'internal audio filter chain',
-        'deps': 'gpl',
-        'func': check_true,
-    }, {
         'name': '--cplayer',
         'desc': 'mpv CLI player',
         'default': 'enable',
@@ -81,6 +76,18 @@ build_options = [
         'default': 'enable',
         'func': check_true
     }, {
+        'name': '--tests',
+        'desc': 'unit tests (development only)',
+        'default': 'disable',
+        'func': check_true
+    }, {
+        # Reminder: normally always built, but enabled by MPV_LEAK_REPORT.
+        # Building it can be disabled only by defining NDEBUG through CFLAGS.
+        'name': '--ta-leak-report',
+        'desc': 'enable ta leak report by default (development only)',
+        'default': 'disable',
+        'func': check_true
+    }, {
         'name': '--manpage-build',
         'desc': 'manpage generation',
         'func': check_ctx_vars('RST2MAN')
@@ -109,11 +116,6 @@ build_options = [
         'desc': 'inline assembly (currently without effect)',
         'default': 'enable',
         'func': check_true,
-    }, {
-        'name': '--test',
-        'desc': 'test suite (using cmocka)',
-        'func': check_pkg_config('cmocka', '>= 1.1.5'),
-        'default': 'disable',
     }, {
         'name': '--clang-database',
         'desc': 'generate a clang compilation database',
@@ -215,7 +217,7 @@ main_dependencies = [
                 'atomic_int_least64_t test = ATOMIC_VAR_INIT(123);'
                 'atomic_fetch_add(&test, 1)'))
     }, {
-        # C11; technically we still support C99
+        # C11; technically we require C11, but aligned_alloc() is not in MinGW
         'name': 'aligned_alloc',
         'desc': 'C11 aligned_alloc()',
         'func': check_statement('stdlib.h', 'aligned_alloc(1, 1)'),
@@ -394,12 +396,11 @@ iconv support use --disable-iconv.",
     }, {
         'name': '--rubberband',
         'desc': 'librubberband support',
-        'deps': 'libaf',
         'func': check_pkg_config('rubberband', '>= 1.8.0'),
     }, {
         'name': '--zimg',
         'deps': 'aligned_alloc',
-        'desc': 'libzimg support (for vf_fingerprint)',
+        'desc': 'libzimg support (high quality software scaler)',
         'func': check_pkg_config('zimg', '>= 2.9'),
     }, {
         'name': '--lcms2',
@@ -503,6 +504,7 @@ FFmpeg/Libav libraries. Git master is recommended."
     }, {
         'name': '--ffmpeg-strict-abi',
         'desc': 'Disable all known FFmpeg ABI violations',
+        'func': check_true,
         'default': 'disable',
     }
 ]
@@ -645,11 +647,19 @@ video_output_features = [
                    check_cc(fragment=load_fragment('gl_x11.c'),
                             use=['x11', 'libdl', 'pthreads']))
     } , {
+        'name': '--egl15',
+        'desc': 'EGL 1.5',
+        'groups': [ 'gl' ],
+        'func': compose_checks(
+            check_pkg_config('egl'),
+            check_statement(['EGL/egl.h'], 'int x[EGL_VERSION_1_5]')
+            ),
+    } , {
         'name': '--egl-x11',
         'desc': 'OpenGL X11 EGL Backend',
-        'deps': 'x11',
+        'deps': 'x11 && egl15',
         'groups': [ 'gl' ],
-        'func': check_pkg_config('egl'),
+        'func': check_true,
     } , {
         'name': '--egl-drm',
         'desc': 'OpenGL DRM EGL Backend',

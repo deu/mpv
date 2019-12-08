@@ -45,6 +45,8 @@ local user_opts = {
     visibility = "auto",        -- only used at init to set visibility_mode(...)
     boxmaxchars = 80,           -- title crop threshold for box layout
     boxvideo = false,           -- apply osc_param.video_margins to video
+    windowcontrols = "auto",    -- whether to show window controls
+    windowcontrols_alignment = "right" -- which side to show window controls on
 }
 
 -- read_options may modify hidetimeout, so save the original default value in
@@ -55,6 +57,21 @@ opt.read_options(user_opts, "osc")
 if user_opts.hidetimeout < 0 then
     user_opts.hidetimeout = hidetimeout_def
     msg.warn("hidetimeout cannot be negative. Using " .. user_opts.hidetimeout)
+end
+
+-- validate window control options
+if user_opts.windowcontrols ~= "auto" and
+   user_opts.windowcontrols ~= "yes" and
+   user_opts.windowcontrols ~= "no" then
+    msg.warn("windowcontrols cannot be \"" ..
+             user_opts.windowcontrols .. "\". Ignoring.")
+    user_opts.windowcontrols = "auto"
+end
+if user_opts.windowcontrols_alignment ~= "right" and
+   user_opts.windowcontrols_alignment ~= "left" then
+    msg.warn("windowcontrols_alignment cannot be \"" ..
+             user_opts.windowcontrols_alignment .. "\". Ignoring.")
+    user_opts.windowcontrols_alignment = "right"
 end
 
 local osc_param = { -- calculated by osc_init()
@@ -85,6 +102,9 @@ local osc_styles = {
     timecodesBar = "{\\blur0\\bord0\\1c&HFFFFFF\\3c&HFFFFFF\\fs27}",
     timePosBar = "{\\blur0\\bord".. user_opts.tooltipborder .."\\1c&HFFFFFF\\3c&H000000\\fs30}",
     vidtitleBar = "{\\blur0\\bord0\\1c&HFFFFFF\\3c&HFFFFFF\\fs18\\q2}",
+
+    wcButtons = "{\\1c&HFFFFFF\\fs24}",
+    wcBar = "{\\1c&H000000}",
 }
 
 -- internal states, do not touch
@@ -113,9 +133,10 @@ local state = {
     showhide_enabled = false,
     dmx_cache = 0,
     using_video_margins = false,
+    border = true,
 }
 
-
+local window_control_box_width = 80
 
 
 --
@@ -393,6 +414,19 @@ function get_track(type)
     return 0
 end
 
+-- WindowControl helpers
+function window_controls_enabled()
+    val = user_opts.windowcontrols
+    if val == "auto" then
+        return not state.border
+    else
+        return val ~= "no"
+    end
+end
+
+function window_controls_alignment()
+    return user_opts.windowcontrols_alignment
+end
 
 --
 -- Element Management
@@ -965,6 +999,112 @@ function add_layout(name)
     end
 end
 
+-- Window Controls
+function window_controls(topbar)
+    local wc_geo = {
+        x = 0,
+        y = 30 + user_opts.barmargin,
+        an = 1,
+        w = osc_param.playresx,
+        h = 30,
+    }
+
+    local alignment = window_controls_alignment()
+    local controlbox_w = window_control_box_width
+    local titlebox_w = wc_geo.w - controlbox_w
+
+    -- Default alignment is "right"
+    local controlbox_left = wc_geo.w - controlbox_w
+    local titlebox_left = wc_geo.x + 5
+
+    if alignment == "left" then
+        controlbox_left = wc_geo.x
+        titlebox_left = wc_geo.x + controlbox_w + 5
+    end
+
+    add_area("window-controls",
+             get_hitbox_coords(controlbox_left, wc_geo.y, wc_geo.an,
+                               controlbox_w, wc_geo.h))
+
+    local lo
+
+    -- Background Bar
+    new_element("wcbar", "box")
+    lo = add_layout("wcbar")
+    lo.geometry = wc_geo
+    lo.layer = 10
+    lo.style = osc_styles.wcBar
+    lo.alpha[1] = user_opts.boxalpha
+
+    local button_y = wc_geo.y - (wc_geo.h / 2)
+    local first_geo =
+        {x = controlbox_left + 5, y = button_y, an = 4, w = 25, h = 25}
+    local second_geo =
+        {x = controlbox_left + 30, y = button_y, an = 4, w = 25, h = 25}
+    local third_geo =
+        {x = controlbox_left + 55, y = button_y, an = 4, w = 25, h = 25}
+
+    -- Close
+    ne = new_element("close", "button")
+    ne.content = "\226\152\146"
+    ne.eventresponder["mbtn_left_up"] =
+        function () mp.commandv("quit") end
+    lo = add_layout("close")
+    lo.geometry = alignment == "left" and first_geo or third_geo
+    lo.style = osc_styles.wcButtons
+
+    -- Minimize
+    ne = new_element("minimize", "button")
+    ne.content = "\226\154\128"
+    ne.eventresponder["mbtn_left_up"] =
+        function () mp.commandv("cycle", "window-minimized") end
+    lo = add_layout("minimize")
+    lo.geometry = alignment == "left" and second_geo or first_geo
+    lo.style = osc_styles.wcButtons
+
+    -- Maximize
+    ne = new_element("maximize", "button")
+    ne.content = "\226\150\163"
+    ne.eventresponder["mbtn_left_up"] =
+        function () mp.commandv("cycle", "window-maximized") end
+    lo = add_layout("maximize")
+    lo.geometry = alignment == "left" and third_geo or second_geo
+    -- At least with default Ubuntu fonts, this symbol is differently aligned
+    lo.geometry.y = lo.geometry.y - 2
+    lo.style = osc_styles.wcButtons
+
+    -- deadzone below window controls
+    local sh_area_y0, sh_area_y1
+    sh_area_y0 = user_opts.barmargin
+    sh_area_y1 = (wc_geo.y + (wc_geo.h / 2)) +
+                 get_align(1 - (2 * user_opts.deadzonesize),
+                 osc_param.playresy - (wc_geo.y + (wc_geo.h / 2)), 0, 0)
+    add_area("showhide_wc", wc_geo.x, sh_area_y0, wc_geo.w, sh_area_y1)
+
+    if topbar then
+        -- The title is already there as part of the top bar
+        return
+    else
+        -- Apply boxvideo margins to the control bar
+        osc_param.video_margins.t = wc_geo.h / osc_param.playresy
+    end
+
+    -- Window Title
+    ne = new_element("wctitle", "button")
+    ne.content = function ()
+        local title = mp.command_native({"expand-text", user_opts.title})
+        -- escape ASS, and strip newlines and trailing slashes
+        title = title:gsub("\\n", " "):gsub("\\$", ""):gsub("{","\\{")
+        return not (title == "") and title or "mpv"
+    end
+    lo = add_layout("wctitle")
+    lo.geometry =
+        { x = titlebox_left, y = wc_geo.y - 3, an = 1, w = titlebox_w, h = wc_geo.h }
+    lo.style = string.format("%s{\\clip(%f,%f,%f,%f)}",
+        osc_styles.wcButtons,
+        titlebox_left, wc_geo.y - wc_geo.h, titlebox_w, wc_geo.y + wc_geo.h)
+end
+
 --
 -- Layouts
 --
@@ -1272,6 +1412,20 @@ function bar_layout(direction)
     local tsW = 90
     local minW = (buttonW + padX)*5 + (tcW + padX)*4 + (tsW + padX)*2
 
+    -- Special topbar handling when window controls are present
+    local padwc_l
+    local padwc_r
+    if direction < 0 or not window_controls_enabled() then
+        padwc_l = 0
+        padwc_r = 0
+    elseif window_controls_alignment() == "left" then
+        padwc_l = window_control_box_width
+        padwc_r = 0
+    else
+        padwc_l = 0
+        padwc_r = window_control_box_width
+    end
+
     if ((osc_param.display_aspect > 0) and (osc_param.playresx < minW)) then
         osc_param.playresy = minW / osc_param.display_aspect
         osc_param.playresx = osc_param.playresy * osc_param.display_aspect
@@ -1352,7 +1506,7 @@ function bar_layout(direction)
 
 
     -- Playback control buttons
-    geo = { x = osc_geo.x + padX, y = line2, an = 4,
+    geo = { x = osc_geo.x + padX + padwc_l, y = line2, an = 4,
             w = buttonW, h = 36 - padY*2}
     lo = add_layout("playpause")
     lo.geometry = geo
@@ -1378,7 +1532,7 @@ function bar_layout(direction)
     local sb_l = geo.x + padX
 
     -- Fullscreen button
-    geo = { x = osc_geo.x + osc_geo.w - buttonW - padX, y = geo.y, an = 4,
+    geo = { x = osc_geo.x + osc_geo.w - buttonW - padX - padwc_r, y = geo.y, an = 4,
             w = buttonW, h = geo.h }
     lo = add_layout("tog_fs")
     lo.geometry = geo
@@ -1708,7 +1862,6 @@ function osc_init()
     ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("cycle", "fullscreen") end
 
-
     --seekbar
     ne = new_element("seekbar", "slider")
 
@@ -1866,6 +2019,11 @@ function osc_init()
 
     -- load layout
     layouts[user_opts.layout]()
+
+    -- load window controls
+    if window_controls_enabled() then
+        window_controls(user_opts.layout == "topbar")
+    end
 
     --do something with the elements
     prepare_elements()
@@ -2084,6 +2242,13 @@ function render()
     for k,cords in pairs(osc_param.areas["showhide"]) do
         set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "showhide")
     end
+    if osc_param.areas["showhide_wc"] then
+        for k,cords in pairs(osc_param.areas["showhide_wc"]) do
+            set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "showhide_wc")
+        end
+    else
+        set_virt_mouse_area(0, 0, 0, 0, "showhide_wc")
+    end
     do_enable_keybindings()
 
     --mouse input area
@@ -2104,6 +2269,21 @@ function render()
 
         if (mouse_hit_coords(cords.x1, cords.y1, cords.x2, cords.y2)) then
             mouse_over_osc = true
+        end
+    end
+
+    if osc_param.areas["window-controls"] then
+        for _,cords in ipairs(osc_param.areas["window-controls"]) do
+            if state.osc_visible then -- activate only when OSC is actually visible
+                set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, "window-controls")
+                mp.enable_key_bindings("window-controls")
+            else
+                mp.disable_key_bindings("window-controls")
+            end
+
+            if (mouse_hit_coords(cords.x1, cords.y1, cords.x2, cords.y2)) then
+                mouse_over_osc = true
+            end
         end
     end
 
@@ -2250,6 +2430,7 @@ function tick()
 
         if state.showhide_enabled then
             mp.disable_key_bindings("showhide")
+            mp.disable_key_bindings("showhide_wc")
             state.showhide_enabled = false
         end
 
@@ -2269,6 +2450,7 @@ function do_enable_keybindings()
     if state.enabled then
         if not state.showhide_enabled then
             mp.enable_key_bindings("showhide", "allow-vo-dragging+allow-hide-cursor")
+            mp.enable_key_bindings("showhide_wc", "allow-vo-dragging+allow-hide-cursor")
         end
         state.showhide_enabled = true
     end
@@ -2282,6 +2464,7 @@ function enable_osc(enable)
         hide_osc() -- acts immediately when state.enabled == false
         if state.showhide_enabled then
             mp.disable_key_bindings("showhide")
+            mp.disable_key_bindings("showhide_wc")
         end
         state.showhide_enabled = false
     end
@@ -2315,6 +2498,11 @@ mp.observe_property("fullscreen", "bool",
         request_init()
     end
 )
+mp.observe_property("border", "bool",
+    function(name, val)
+        state.border = val
+    end
+)
 mp.observe_property("idle-active", "bool",
     function(name, val)
         state.idle = val
@@ -2336,6 +2524,10 @@ mp.set_key_bindings({
     {"mouse_move",              function(e) process_event("mouse_move", nil) end},
     {"mouse_leave",             mouse_leave},
 }, "showhide", "force")
+mp.set_key_bindings({
+    {"mouse_move",              function(e) process_event("mouse_move", nil) end},
+    {"mouse_leave",             mouse_leave},
+}, "showhide_wc", "force")
 do_enable_keybindings()
 
 --mouse input bindings
@@ -2357,6 +2549,11 @@ mp.set_key_bindings({
 }, "input", "force")
 mp.enable_key_bindings("input")
 
+mp.set_key_bindings({
+    {"mbtn_left",           function(e) process_event("mbtn_left", "up") end,
+                            function(e) process_event("mbtn_left", "down")  end},
+}, "window-controls", "force")
+mp.enable_key_bindings("window-controls")
 
 user_opts.hidetimeout_orig = user_opts.hidetimeout
 
@@ -2406,3 +2603,4 @@ mp.register_script_message("osc-visibility", visibility_mode)
 mp.add_key_binding(nil, "visibility", function() visibility_mode("cycle") end)
 
 set_virt_mouse_area(0, 0, 0, 0, "input")
+set_virt_mouse_area(0, 0, 0, 0, "window-controls")

@@ -384,10 +384,9 @@ static void handle_new_frame(struct MPContext *mpctx)
         }
     }
     mpctx->delay -= frame_time;
-    if (mpctx->video_status >= STATUS_PLAYING) {
-        mpctx->time_frame += frame_time / mpctx->video_speed;
+    mpctx->time_frame += frame_time / mpctx->video_speed;
+    if (mpctx->video_status >= STATUS_PLAYING)
         adjust_sync(mpctx, pts, frame_time);
-    }
     MP_TRACE(mpctx, "frametime=%5.3f\n", frame_time);
 }
 
@@ -456,7 +455,19 @@ static bool have_new_frame(struct MPContext *mpctx, bool eof)
 static int video_output_image(struct MPContext *mpctx)
 {
     struct vo_chain *vo_c = mpctx->vo_chain;
-    bool hrseek = mpctx->hrseek_active && mpctx->video_status == STATUS_SYNCING;
+    bool hrseek = false;
+    double hrseek_pts = mpctx->hrseek_pts;
+    double tolerance = mpctx->hrseek_backstep ? 0 : .005;
+    if (mpctx->video_status == STATUS_SYNCING) {
+        hrseek = mpctx->hrseek_active;
+        // playback_pts is normally only set when audio and video have started
+        // playing normally. If video is in syncing mode, then this must mean
+        // video was just enabled via track switching - skip to current time.
+        if (!hrseek && mpctx->playback_pts != MP_NOPTS_VALUE) {
+            hrseek = true;
+            hrseek_pts = mpctx->playback_pts;
+        }
+    }
 
     if (vo_c->is_coverart) {
         if (vo_has_frame(mpctx->video_out))
@@ -495,17 +506,11 @@ static int video_output_image(struct MPContext *mpctx)
                 mp_pin_out_unread(vo_c->filter->f->pins[1], frame);
                 img = NULL;
                 r = VD_EOF;
-            } else if (hrseek && mpctx->hrseek_lastframe) {
-                mp_image_setrefp(&mpctx->saved_frame, img);
-            } else if (hrseek && img->pts < mpctx->hrseek_pts - .005) {
-                /* just skip - but save if backstep active */
-                if (mpctx->hrseek_backstep)
-                    mp_image_setrefp(&mpctx->saved_frame, img);
-            } else if (mpctx->video_status == STATUS_SYNCING &&
-                       mpctx->playback_pts != MP_NOPTS_VALUE &&
-                       img->pts < mpctx->playback_pts && !vo_c->is_coverart)
+            } else if (hrseek && (img->pts < hrseek_pts - tolerance ||
+                                  mpctx->hrseek_lastframe))
             {
-                /* skip after stream-switching */
+                /* just skip - but save in case it was the last frame */
+                mp_image_setrefp(&mpctx->saved_frame, img);
             } else {
                 if (hrseek && mpctx->hrseek_backstep) {
                     if (mpctx->saved_frame) {
@@ -523,8 +528,8 @@ static int video_output_image(struct MPContext *mpctx)
         }
     }
 
-    // Last-frame seek
-    if (r <= 0 && hrseek && mpctx->hrseek_lastframe && mpctx->saved_frame) {
+    // If hr-seek went past EOF, use the last frame.
+    if (r <= 0 && hrseek && mpctx->saved_frame && r == VD_EOF) {
         add_new_frame(mpctx, mpctx->saved_frame);
         mpctx->saved_frame = NULL;
         r = VD_PROGRESS;
@@ -556,7 +561,7 @@ static void update_avsync_before_frame(struct MPContext *mpctx)
     struct MPOpts *opts = mpctx->opts;
     struct vo *vo = mpctx->video_out;
 
-    if (mpctx->vo_chain->is_coverart || mpctx->video_status < STATUS_READY) {
+    if (mpctx->video_status < STATUS_READY) {
         mpctx->time_frame = 0;
     } else if (mpctx->display_sync_active || opts->video_sync == VS_NONE) {
         // don't touch the timing
@@ -779,6 +784,12 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
     }
 
     mpctx->display_sync_active = false;
+
+    if (mode == VS_DISP_ADROP && !mpctx->audio_drop_deprecated_msg) {
+        MP_WARN(mpctx, "video-sync=display-adrop mode is deprecated and will "
+                       "be removed in the future.\n");
+        mpctx->audio_drop_deprecated_msg = true;
+    }
 
     if (!VS_IS_DISP(mode))
         return;
@@ -1179,8 +1190,14 @@ void write_video(struct MPContext *mpctx)
 
     mp_notify(mpctx, MPV_EVENT_TICK, NULL);
 
-    if (mpctx->vo_chain->is_coverart)
+    if (vo_c->filter->got_output_eof && !mpctx->num_next_frames &&
+        mpctx->ao_chain)
+    {
+        MP_VERBOSE(mpctx, "assuming this was the last video frame\n");
+        // The main point of doing this is to prevent use of this for the
+        // playback_pts if audio is still running (=> seek behavior).
         mpctx->video_status = STATUS_EOF;
+    }
 
     if (mpctx->video_status != STATUS_EOF) {
         if (mpctx->step_frames > 0) {

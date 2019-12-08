@@ -25,10 +25,40 @@ Interface changes
 ::
 
  --- mpv 0.31.0 ---
+    - add `--resume-playback-check-mtime` to check consistent mtime when
+      restoring playback state.
     - add `--d3d11-output-csp` to enable explicit selection of a D3D11
       swap chain color space.
-    - add an builtin "sw-fast" profile, which restores performance settings
-      that were switched to higher quality since mpv 0.30.0
+    - the --sws- options and similar now affect vo_image and screenshot
+      conversion (does not matter as much for vo_gpu, which does most of this
+      with shaders)
+    - add a builtin "sw-fast" profile, which restores performance settings
+      for software video conversion. These were switched to higher quality since
+      mpv 0.30.0 (related to the previous changelog entry). This affects video
+      outputs like vo_x11 and vo_drm, and screenshots, but not much else.
+    - deprecate --input-file (there are no plans to remove this short-term,
+      but it will probably eventually go away)
+    - deprecate --video-sync=display-adrop (might be removed if it's in the way;
+      undeprecated or readded if it's not too much of a problem)
+    - deprecate all input section commands (these will be changed/removed, as
+      soon as mpv internals do not require them anymore)
+    - remove deprecated --playlist-pos alias (use --playlist-start)
+    - deprecate --display-fps, introduce --override-display-fps. The display-fps
+      property now is unavailable if no VO exists (or the VO did not return a
+      display FPS), instead of returning the option value in this case. The
+      property will keep existing, but writing to it is deprecated.
+    - the vf/af properties now do not reject the set value anymore, even if
+      filter chain initialization fails. Instead, the vf/af options are always
+      set to the user's value, even if it does not reflect the "runtime" vf/af
+      chain.
+    - the vid/aid/sid/secondary-sid properties (and their aliases: "audio",
+      "video", "sub") will now allow setting any track ID; before this change,
+      only IDs of actually existing tracks could be set (the restriction was
+      active the MPV_EVENT_FILE_LOADED/"file-loaded" event was sent). Setting
+      an ID for which no track exists is equivalent to disabling it. Note that
+      setting the properties to non-existing tracks may report it as selected
+      track for a small time window, until it's forced back to "no". The exact
+      details how this is handled may change in the future.
  --- mpv 0.30.0 ---
     - add `--d3d11-output-format` to enable explicit selection of a D3D11
       swap chain format.
