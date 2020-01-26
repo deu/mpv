@@ -184,6 +184,7 @@ struct vo_chain {
     bool is_sparse;
 
     bool underrun;
+    bool underrun_signaled;
 };
 
 // Like vo_chain, for audio.
@@ -623,7 +624,7 @@ struct mp_scripting {
     const char *file_ext;   // e.g. "lua"
     int (*load)(struct mpv_handle *client, const char *filename);
 };
-void mp_load_scripts(struct MPContext *mpctx);
+bool mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
 int mp_load_user_script(struct MPContext *mpctx, const char *fname);
 

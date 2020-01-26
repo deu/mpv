@@ -238,7 +238,9 @@ void error_on_track(struct MPContext *mpctx, struct track *track)
 int stream_dump(struct MPContext *mpctx, const char *source_filename)
 {
     struct MPOpts *opts = mpctx->opts;
-    stream_t *stream = stream_open(source_filename, mpctx->global);
+    stream_t *stream = stream_create(source_filename,
+                                     STREAM_ORIGIN_DIRECT | STREAM_READ,
+                                     mpctx->playback_abort, mpctx->global);
     if (!stream)
         return -1;
 
@@ -276,11 +278,12 @@ int stream_dump(struct MPContext *mpctx, const char *source_filename)
 
 void merge_playlist_files(struct playlist *pl)
 {
-    if (!pl->first)
+    if (!pl->num_entries)
         return;
     char *edl = talloc_strdup(NULL, "edl://");
-    for (struct playlist_entry *e = pl->first; e; e = e->next) {
-        if (e != pl->first)
+    for (int n = 0; n < pl->num_entries; n++) {
+        struct playlist_entry *e = pl->entries[n];
+        if (n)
             edl = talloc_strdup_append_buffer(edl, ";");
         // Escape if needed
         if (e->filename[strcspn(e->filename, "=%,;\n")] ||

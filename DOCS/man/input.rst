@@ -145,9 +145,6 @@ Comments on some symbolic names:
 ``GAMEPAD_*``
     Keys emitted by the SDL gamepad backend.
 
-``AR_*``
-    Keys emitted by the OSX-only Apple Remote code.
-
 ``UNMAPPED``
     Pseudo-key that matches any unmapped key. (You should probably avoid this
     if possible, because it might change behavior or get removed in the future.)
@@ -428,6 +425,12 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 ``playlist-shuffle``
     Shuffle the playlist. This is similar to what is done on start if the
     ``--shuffle`` option is used.
+
+``playlist-unshuffle``
+    Attempt to revert the previous ``playlist-shuffle`` command. This works
+    only once (multiple successive ``playlist-unshuffle`` commands do nothing).
+    May not work correctly if new recursive playlists have been opened since
+    a ``playlist-shuffle`` command.
 
 ``run <command> [<arg1> [<arg2> [...]]]``
     Run the given command. Unlike in MPlayer/mplayer2 and earlier versions of
@@ -728,6 +731,10 @@ Input Commands that are Possibly Subject to Change
 ``vf <operation> <value>``
     Change video filter chain.
 
+    The semantics are exactly the same as with option parsing (see
+    `VIDEO FILTERS`_). As such the text below is a redundant and incomplete
+    summary.
+
     The first argument decides what happens:
 
     <set>
@@ -751,7 +758,7 @@ Input Commands that are Possibly Subject to Change
         cases, the second parameter is a comma separated list of filter names
         or integer indexes. ``0`` would denote the first filter. Negative
         indexes start from the last filter, and ``-1`` denotes the last
-        filter.
+        filter. Deprecated.
 
     <clr>
         Remove all filters. Note that like the other sub-commands, this does
@@ -935,6 +942,86 @@ Input Commands that are Possibly Subject to Change
 ``overlay-remove <id>``
     Remove an overlay added with ``overlay-add`` and the same ID. Does nothing
     if no overlay with this ID exists.
+
+``osd-overlay``
+    Add/update/remove an OSD overlay.
+
+    (Although this sounds similar to ``overlay-add``, ``osd-overlay`` is for
+    text overlays, while ``overlay-add`` is for bitmaps. Maybe ``overlay-add``
+    will be merged into ``osd-overlay`` to remove this oddity.)
+
+    You can use this to add text overlays in ASS format. ASS has advanced
+    positioning and rendering tags, which can be used to render almost any kind
+    of vector graphics.
+
+    This command accepts the following parameters:
+
+    ``id``
+        Arbitrary integer that identifies the overlay. Multiple overlays can be
+        added by calling this command with different ``id`` parameters. Calling
+        this command with the same ``id`` replaces the previously set overlay.
+
+        There is a separate namespace for each libmpv client (i.e. IPC
+        connection, script), so IDs can be made up and assigned by the API user
+        without conflicting with other API users.
+
+        If the libmpv client is destroyed, all overlays associated with it are
+        also deleted. In particular, connecting via ``--input-ipc-server``,
+        adding an overlay, and disconnecting will remove the overlay immediately
+        again.
+
+    ``format``
+        String that gives the type of the overlay. Accepts the following values:
+
+        ``ass-events``
+            The ``data`` parameter is a string. The string is split on the
+            newline character. Every line is turned into the ``Text`` part of
+            a ``Dialogue`` ASS event. Timing is unused (but behavior of timing
+            dependent ASS tags may change in future mpv versions).
+
+            Note that it's better to put multiple lines into ``data``, instead
+            of adding multiple OSD overlays.
+
+            This provides 2 ASS ``Styles``. ``OSD`` contains the text style as
+            defined by the current ``--osd-...`` options. ``Default`` is
+            similar, and contains style that ``OSD`` would have if all options
+            were set to the default.
+
+            In addition, the ``res_x`` and ``res_y`` options specify the value
+            of the ASS ``PlayResX`` and ``PlayResY`` header fields. If ``res_y``
+            is set to 0, ``PlayResY`` is initialized to an arbitrary default
+            value (but note that the default for this command is 720, not 0).
+            If ``res_x`` is set to 0, ``PlayResX`` is set based on ``res_y``
+            such that a virtual ASS pixel has a square pixel aspect ratio.
+
+        ``none``
+            Special value that causes the overlay to be removed. Most parameters
+            other than ``id`` and ``format`` are mostly ignored.
+
+    ``data``
+        String defining the overlay contents according to the ``format``
+        parameter.
+
+    ``res_x``, ``res_y``
+        Used if ``format`` is set to ``ass-events`` (see description there).
+        Optional, defaults to 0/720.
+
+    ``z``
+        The Z order of the overlay. Optional, defaults to 0.
+
+        Note that Z order between different overlays of different formats is
+        static, and cannot be changed (currently, this means that bitmap
+        overlays added by ``overlay-add`` are always on top of the ASS overlays
+        added by ``osd-overlay``). In addition, the builtin OSD components are
+        always below any of the custom OSD. (This includes subtitles of any kind
+        as well as text rendered by ``show-text``.)
+
+        It's possible that future mpv versions will randomly change how Z order
+        between different OSD formats and builtin OSD is handled.
+
+    Note: always use named arguments (``mpv_command_node()``). Scripts should
+    use the ``mp.create_osd_overlay()`` helper instead of invoking this command
+    directly.
 
 ``script-message [<arg1> [<arg2> [...]]]``
     Send a message to all clients, and pass it the following list of arguments.
@@ -1528,6 +1615,18 @@ Property list
     Current MKV edition number. Setting this property to a different value will
     restart playback. The number of the first edition is 0.
 
+    Before mpv 0.31.0, this showed the actual edition selected at runtime, if
+    you didn't set the option or property manually. With mpv 0.31.0 and later,
+    this strictly returns the user-set option or property value, and the
+    ``current-edition`` property was added to return the runtime selected
+    edition (this matters with ``--edition=auto``, the default).
+
+``current-edition``
+    Currently selected edition. This property is unavailable if no file is
+    loaded, or the file has no editions. (Matroska files make a difference
+    between having no editions and a single edition, which will be reflected by
+    the property, although in practice it does not matter.)
+
 ``chapters``
     Number of chapters.
 
@@ -2017,6 +2116,20 @@ Property list
     (or to be exact, the size the video filters output). ``2`` will set the
     double size, ``0.5`` halves the size.
 
+    See ``current-window-scale`` for the value derived from the actual window
+    size.
+
+    Since mpv 0.31.0, this always returns the previously set value (or the
+    default value), instead of the value implied by the actual window size.
+    Before mpv 0.31.0, this returned what ``current-window-scale`` returns now,
+    after the window was created.
+
+``current-window-scale``
+    The ``window-scale`` value calculated from the current window size. This
+    has the same value as ``window-scale`` if the window size was not changed
+    since setting the option, and the window size was not restricted in other
+    ways. The property is unavailable if no video is active.
+
 ``display-names``
     Names of the displays that the mpv window covers. On X11, these
     are the xrandr names (LVDS1, HDMI1, DP1, VGA1, etc.). On Windows, these
@@ -2046,6 +2159,12 @@ Property list
 ``vsync-jitter``
     Estimated deviation factor of the vsync duration.
 
+``display-hidpi-scale``
+    The HiDPI scale factor as reported by the windowing backend. If no VO is
+    active, or if the VO does not report a value, this property is unavailable.
+    It may be saner to report an absolute DPI, however, this is the way HiDPI
+    support is implemented on most OS APIs. See also ``--hidpi-window-scale``.
+
 ``video-aspect`` (RW)
     Deprecated. This is tied to ``--video-aspect-override``, but always
     reports the current video aspect if video is active.
@@ -2058,8 +2177,39 @@ Property list
     ``overlay-add`` command. It gives you the actual OSD size, which can be
     different from the window size in some cases.
 
+    Alias to ``osd-dimensions/w`` and ``osd-dimensions/h``.
+
 ``osd-par``
     Last known OSD display pixel aspect (can be 0).
+
+    Alias to ``osd-dimensions/osd-par``.
+
+``osd-dimensions``
+    Last known OSD dimensions.
+
+    Has the following sub-properties (which can be read as ``MPV_FORMAT_NODE``
+    or Lua table with ``mp.get_property_native``):
+
+    ``w``
+        Size of the VO window in OSD render units (usually pixels, but may be
+        scaled pixels with VOs like ``xv``).
+
+    ``h``
+        Size of the VO window in OSD render units,
+
+    ``par``
+        Pixel aspect ratio of the OSD (usually 1).
+
+    ``aspect``
+        Display aspect ratio of the VO window. (Computing from the properties
+        above.)
+
+    ``mt``, ``mb``, ``ml``, ``mr``
+        OSD to video margins (top, bottom, left, right). This describes the
+        area into which the video is rendered.
+
+    Any of these properties may be unavailable or set to dummy values if the
+    VO window is not created or visible.
 
 ``sub-text``
     Return the current subtitle text regardless of sub visibility.
@@ -2506,6 +2656,28 @@ Property list
 ``current-ao``
     Current audio output driver (name as used with ``--ao``).
 
+``shared-script-properties`` (RW)
+    This is a key/value map of arbitrary strings shared between scripts for
+    general use. The player itself does not use any data in it (although some
+    builtin scripts may). The property is not preserved across player restarts.
+
+    This is very primitive, inefficient, and annoying to use. It's a makeshift
+    solution which could go away any time (for example, when a better solution
+    becomes available). This is also why this property has an annoying name. You
+    should avoid using it, unless you absolutely have to.
+
+    Lua scripting has helpers starting with ``utils.shared_script_property_``.
+    They are undocumented because you should not use this property. If you still
+    think you must, you should use the helpers instead of the property directly.
+
+    You are supposed to use the ``change-list`` command to modify the contents.
+    Reading, modifying, and writing the property manually could data loss if two
+    scripts update different keys at the same time due to lack of
+    synchronization. The Lua helpers take care of this.
+
+    (There is no way to ensure synchronization if two scripts try to update the
+    same key at the same time.)
+
 ``working-directory``
     Return the working directory of the mpv process. Can be useful for JSON IPC
     users, because the command line player usually works with relative paths.
@@ -2717,19 +2889,10 @@ caveats with some properties (due to historical reasons):
     *iff* video (for ``vf``) or audio (for ``af``) was active. If playback was
     not active, the behavior was the same as the current behavior.
 
-``edition``
-    While a file is loaded, the property will always return the effective
-    edition, and setting the ``auto`` value will show somewhat strange behavior
-    (the property eventually switching to whatever is the default edition).
-
 ``playlist``
     The property is read-only and returns the current internal playlist. The
     option is for loading playlist during command line parsing. For client API
     uses, you should use the ``loadlist`` command instead.
-
-``window-scale``
-    Returns the current window values if a window exists, and the option value
-    otherwise.
 
 ``profile``, ``include``
     These are write-only, and will perform actions as they are written to,

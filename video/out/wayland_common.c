@@ -105,8 +105,6 @@ static int spawn_cursor(struct vo_wayland_state *wl)
 
 static int set_cursor_visibility(struct vo_wayland_state *wl, bool on)
 {
-    if (!wl->pointer)
-        return VO_NOTAVAIL;
     wl->cursor_visible = on;
     if (on) {
         if (spawn_cursor(wl))
@@ -136,8 +134,6 @@ static void pointer_handle_enter(void *data, struct wl_pointer *pointer,
     wl->pointer    = pointer;
     wl->pointer_id = serial;
 
-    if (wl->vo_opts->fullscreen && wl->vo_opts->cursor_autohide_delay != -1)
-        wl->cursor_visible = false;
     set_cursor_visibility(wl, wl->cursor_visible);
     mp_input_put_key(wl->vo->input_ctx, MP_KEY_MOUSE_ENTER);
 }
@@ -947,9 +943,8 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
     struct mp_vo_opts *vo_opts = wl->vo_opts;
     struct mp_rect old_geometry = wl->geometry;
 
-    int prev_fs_state = wl->vo_opts->fullscreen;
-    bool is_maximized = false;
-    bool is_fullscreen = false;
+    bool is_maximized = vo_opts->window_maximized;
+    bool is_fullscreen = vo_opts->fullscreen;
     enum xdg_toplevel_state *state;
     wl_array_for_each(state, states) {
         switch (*state) {
@@ -984,8 +979,6 @@ static void handle_toplevel_config(void *data, struct xdg_toplevel *toplevel,
     vo_opts->window_maximized = is_maximized;
     m_config_cache_write_opt(wl->vo_opts_cache, &vo_opts->window_maximized);
 
-    if (prev_fs_state != is_fullscreen)
-        wl->pending_vo_events |= VO_EVENT_FULLSCREEN_STATE;
     if (!(wl->pending_vo_events & VO_EVENT_LIVE_RESIZING))
         vo_query_and_reset_events(wl->vo, VO_EVENT_LIVE_RESIZING);
 
@@ -1045,13 +1038,13 @@ static int create_xdg_surface(struct vo_wayland_state *wl)
     return 0;
 }
 
-static int set_border_decorations(struct vo_wayland_state *wl, int state)
+static void set_border_decorations(struct vo_wayland_state *wl, int state)
 {
     if (!wl->xdg_toplevel_decoration) {
         wl->vo_opts->border = false;
         m_config_cache_write_opt(wl->vo_opts_cache,
                                  &wl->vo_opts->border);
-        return VO_NOTIMPL;
+        return;
     }
 
     enum zxdg_toplevel_decoration_v1_mode mode;
@@ -1063,7 +1056,6 @@ static int set_border_decorations(struct vo_wayland_state *wl, int state)
         mode = ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
     }
     zxdg_toplevel_decoration_v1_set_mode(wl->xdg_toplevel_decoration, mode);
-    return VO_TRUE;
 }
 
 int vo_wayland_init(struct vo *vo)
@@ -1112,6 +1104,10 @@ int vo_wayland_init(struct vo *vo)
     /* Can't be initialized during registry due to multi-protocol dependence */
     if (create_xdg_surface(wl))
         return false;
+
+    const char *xdg_current_desktop = getenv("XDG_CURRENT_DESKTOP");
+    if (xdg_current_desktop != NULL && strstr(xdg_current_desktop, "GNOME"))
+        MP_WARN(wl, "GNOME's wayland compositor is known to have many serious issues with mpv. Switch to GNOME's xorg session for the best experience.\n");
 
     if (wl->dnd_devman && wl->seat) {
         wl->dnd_ddev = wl_data_device_manager_get_data_device(wl->dnd_devman, wl->seat);
@@ -1318,6 +1314,12 @@ int vo_wayland_reconfig(struct vo *vo)
         }
     }
 
+    if (wl->vo_opts->window_maximized)
+        xdg_toplevel_set_maximized(wl->xdg_toplevel);
+
+    if (wl->vo_opts->window_minimized)
+        xdg_toplevel_set_minimized(wl->xdg_toplevel);
+
     wl_surface_set_buffer_scale(wl->surface, wl->scaling);
     wl_surface_commit(wl->surface);
     wl->pending_vo_events |= VO_EVENT_RESIZE;
@@ -1349,35 +1351,32 @@ static int set_screensaver_inhibitor(struct vo_wayland_state *wl, int state)
     return VO_TRUE;
 }
 
-static int toggle_fullscreen(struct vo_wayland_state *wl)
+static void toggle_fullscreen(struct vo_wayland_state *wl)
 {
     if (!wl->xdg_toplevel)
-        return VO_NOTAVAIL;
+        return;
     if (wl->vo_opts->fullscreen)
         xdg_toplevel_set_fullscreen(wl->xdg_toplevel, NULL);
     else
         xdg_toplevel_unset_fullscreen(wl->xdg_toplevel);
-    return VO_TRUE;
 }
 
-static int toggle_maximized(struct vo_wayland_state *wl)
+static void toggle_maximized(struct vo_wayland_state *wl)
 {
     if (!wl->xdg_toplevel)
-        return VO_NOTAVAIL;
+        return;
     if (wl->vo_opts->window_maximized)
         xdg_toplevel_set_maximized(wl->xdg_toplevel);
     else
         xdg_toplevel_unset_maximized(wl->xdg_toplevel);
-    return VO_TRUE;
 }
 
-static int do_minimize(struct vo_wayland_state *wl)
+static void do_minimize(struct vo_wayland_state *wl)
 {
     if (!wl->xdg_toplevel)
-        return VO_NOTAVAIL;
+        return;
     if (wl->vo_opts->window_minimized)
         xdg_toplevel_set_minimized(wl->xdg_toplevel);
-    return VO_TRUE;
 }
 
 static int update_window_title(struct vo_wayland_state *wl, char *title)
@@ -1463,13 +1462,13 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
         void *opt;
         while (m_config_cache_get_next_changed(wl->vo_opts_cache, &opt)) {
             if (opt == &opts->fullscreen)
-                return toggle_fullscreen(wl);
+                toggle_fullscreen(wl);
             if (opt == &opts->window_minimized)
-                return do_minimize(wl);
+                do_minimize(wl);
             if (opt == &opts->window_maximized)
-                return toggle_maximized(wl);
+                toggle_maximized(wl);
             if (opt == &opts->border)
-                return set_border_decorations(wl, opts->border);
+                set_border_decorations(wl, opts->border);
         }
         return VO_TRUE;
     }
@@ -1503,6 +1502,8 @@ int vo_wayland_control(struct vo *vo, int *events, int request, void *arg)
     case VOCTRL_UPDATE_WINDOW_TITLE:
         return update_window_title(wl, (char *)arg);
     case VOCTRL_SET_CURSOR_VISIBILITY:
+        if (!wl->pointer)
+            return VO_NOTAVAIL;
         return set_cursor_visibility(wl, *(bool *)arg);
     case VOCTRL_KILL_SCREENSAVER:
         return set_screensaver_inhibitor(wl, true);
@@ -1613,14 +1614,24 @@ void vo_wayland_wait_frame(struct vo_wayland_state *wl, int frame_offset)
     }
 
     if (wl->frame_wait) {
-        wl->timeout_count += 1;
+        if (!wl->hidden) {
+            wl->timeout_count += 1;
+        } else {
+            wl->timeout_count = 0;
+        }
     } else {
-        wl->timeout_count = 0;
-        wl->hidden = false;
+        if (wl->hidden) {
+            wl->timeout_count -= 1;
+        } else {
+            wl->timeout_count = 0;
+        }
     }
     
-    if (wl->timeout_count > wl->current_output->refresh_rate)
+    if (wl->timeout_count > wl->current_output->refresh_rate) {
         wl->hidden = true;
+    } else if (wl->timeout_count < -1*wl->current_output->refresh_rate) {
+        wl->hidden = false;
+    }
 }
 
 void vo_wayland_wait_events(struct vo *vo, int64_t until_time_us)

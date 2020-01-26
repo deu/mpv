@@ -174,6 +174,7 @@ def build(ctx):
             ( "osdep/macos/mpv_helper.swift" ),
             ( "osdep/macos/swift_extensions.swift" ),
             ( "osdep/macos/swift_compat.swift" ),
+            ( "osdep/macos/remote_command_center.swift", "macos-media-player" ),
             ( "video/out/cocoa-cb/events_view.swift" ),
             ( "video/out/cocoa-cb/video_layer.swift" ),
             ( "video/out/cocoa-cb/window.swift" ),
@@ -409,13 +410,14 @@ def build(ctx):
 
         ## Video
         ( "video/csputils.c" ),
+        ( "video/cuda.c",                        "cuda-hwaccel" ),
         ( "video/d3d.c",                         "d3d-hwaccel" ),
         ( "video/decode/vd_lavc.c" ),
         ( "video/filter/refqueue.c" ),
         ( "video/filter/vf_d3d11vpp.c",          "d3d-hwaccel" ),
         ( "video/filter/vf_fingerprint.c",       "zimg" ),
         ( "video/filter/vf_format.c" ),
-        ( "video/filter/vf_gpu.c",               "egl-helpers && gl && egl15" ),
+        ( "video/filter/vf_gpu.c",               "egl-helpers && gl && egl" ),
         ( "video/filter/vf_sub.c" ),
         ( "video/filter/vf_vapoursynth.c",       "vapoursynth" ),
         ( "video/filter/vf_vavpp.c",             "vaapi" ),
@@ -459,9 +461,9 @@ def build(ctx):
         ( "video/out/gpu/utils.c" ),
         ( "video/out/gpu/video.c" ),
         ( "video/out/gpu/video_shaders.c" ),
-        ( "video/out/hwdec/hwdec_cuda.c",        "cuda-hwaccel" ),
-        ( "video/out/hwdec/hwdec_cuda_gl.c",     "cuda-hwaccel && gl" ),
-        ( "video/out/hwdec/hwdec_cuda_vk.c",     "cuda-hwaccel && vulkan" ),
+        ( "video/out/hwdec/hwdec_cuda.c",        "cuda-interop" ),
+        ( "video/out/hwdec/hwdec_cuda_gl.c",     "cuda-interop && gl" ),
+        ( "video/out/hwdec/hwdec_cuda_vk.c",     "cuda-interop && vulkan" ),
         ( "video/out/hwdec/hwdec_vaapi.c",       "vaapi-egl || vaapi-vulkan" ),
         ( "video/out/hwdec/hwdec_vaapi_gl.c",    "vaapi-egl" ),
         ( "video/out/hwdec/hwdec_vaapi_vk.c",    "vaapi-vulkan" ),
@@ -544,7 +546,6 @@ def build(ctx):
 
         ( "osdep/android/posix-spawn.c",         "android"),
         ( "osdep/android/strnlen.c",             "android"),
-        ( "osdep/ar/HIDRemote.m",                "apple-remote" ),
         ( "osdep/glob-win.c",                    "glob-win32" ),
         ( "osdep/macosx_application.m",          "cocoa" ),
         ( "osdep/macosx_events.m",               "cocoa" ),
@@ -735,6 +736,9 @@ def build(ctx):
 
         if ctx.env.ZSHDIR:
             ctx.install_as(ctx.env.ZSHDIR + '/_mpv', 'etc/_mpv.zsh')
+
+        if ctx.env.BASHDIR:
+            ctx.install_as(ctx.env.BASHDIR + '/mpv', 'etc/mpv.bash-completion')
 
         ctx.install_files(
             ctx.env.DATADIR + '/applications',

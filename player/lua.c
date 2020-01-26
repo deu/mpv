@@ -998,42 +998,6 @@ static int script_raw_abort_async_command(lua_State *L)
     return 0;
 }
 
-static int script_set_osd_ass(lua_State *L)
-{
-    struct script_ctx *ctx = get_ctx(L);
-    int res_x = luaL_checkinteger(L, 1);
-    int res_y = luaL_checkinteger(L, 2);
-    const char *text = luaL_checkstring(L, 3);
-    if (!text[0])
-        text = " "; // force external OSD initialization
-    osd_set_external(ctx->mpctx->osd, ctx->client, res_x, res_y, (char *)text);
-    mp_wakeup_core(ctx->mpctx);
-    return 0;
-}
-
-static int script_get_osd_size(lua_State *L)
-{
-    struct MPContext *mpctx = get_mpctx(L);
-    struct mp_osd_res vo_res = osd_get_vo_res(mpctx->osd);
-    double aspect = 1.0 * vo_res.w / MPMAX(vo_res.h, 1) /
-                    (vo_res.display_par ? vo_res.display_par : 1);
-    lua_pushnumber(L, vo_res.w);
-    lua_pushnumber(L, vo_res.h);
-    lua_pushnumber(L, aspect);
-    return 3;
-}
-
-static int script_get_osd_margins(lua_State *L)
-{
-    struct MPContext *mpctx = get_mpctx(L);
-    struct mp_osd_res vo_res = osd_get_vo_res(mpctx->osd);
-    lua_pushnumber(L, vo_res.ml);
-    lua_pushnumber(L, vo_res.mt);
-    lua_pushnumber(L, vo_res.mr);
-    lua_pushnumber(L, vo_res.mb);
-    return 4;
-}
-
 static int script_get_mouse_pos(lua_State *L)
 {
     struct MPContext *mpctx = get_mpctx(L);
@@ -1156,7 +1120,7 @@ static int script_file_info(lua_State *L)
         "mode", "size",
         "atime", "mtime", "ctime", NULL
     };
-    const unsigned int stat_values[] = {
+    const lua_Number stat_values[] = {
         statbuf.st_mode,
         statbuf.st_size,
         statbuf.st_atime,
@@ -1166,7 +1130,7 @@ static int script_file_info(lua_State *L)
 
     // Add all fields
     for (int i = 0; stat_names[i]; i++) {
-        lua_pushinteger(L, stat_values[i]);
+        lua_pushnumber(L, stat_values[i]);
         lua_setfield(L, -2, stat_names[i]);
     }
 
@@ -1275,9 +1239,6 @@ static const struct fn_entry main_fns[] = {
     FN_ENTRY(set_property_native),
     FN_ENTRY(raw_observe_property),
     FN_ENTRY(raw_unobserve_property),
-    FN_ENTRY(set_osd_ass),
-    FN_ENTRY(get_osd_size),
-    FN_ENTRY(get_osd_margins),
     FN_ENTRY(get_mouse_pos),
     FN_ENTRY(get_time),
     FN_ENTRY(input_set_section_mouse_area),

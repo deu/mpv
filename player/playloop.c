@@ -54,6 +54,8 @@
 // mp_wait_events() was called.
 void mp_wait_events(struct MPContext *mpctx)
 {
+    mp_client_send_property_changes(mpctx);
+
     bool sleeping = mpctx->sleeptime > 0;
     if (sleeping)
         MP_STATS(mpctx, "start sleep");
@@ -103,8 +105,7 @@ void mp_core_unlock(struct MPContext *mpctx)
     mp_dispatch_unlock(mpctx->dispatch);
 }
 
-// Process any queued input, whether it's user input, or requests from client
-// API threads. This also resets the "wakeup" flag used with mp_wait_events().
+// Process any queued user input.
 void mp_process_input(struct MPContext *mpctx)
 {
     for (;;) {
@@ -464,16 +465,26 @@ void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
 void execute_queued_seek(struct MPContext *mpctx)
 {
     if (mpctx->seek.type) {
+        bool queued_hr_seek = mpctx->seek.exact != MPSEEK_KEYFRAME;
         // Let explicitly imprecise seeks cancel precise seeks:
-        if (mpctx->hrseek_active && mpctx->seek.exact == MPSEEK_KEYFRAME)
+        if (mpctx->hrseek_active && !queued_hr_seek)
             mpctx->start_timestamp = -1e9;
-        /* If the user seeks continuously (keeps arrow key down)
-         * try to finish showing a frame from one location before doing
-         * another seek (which could lead to unchanging display). */
-        bool delay = mpctx->seek.flags & MPSEEK_FLAG_DELAY;
-        if (delay && mpctx->video_status < STATUS_PLAYING &&
+        // If the user seeks continuously (keeps arrow key down) try to finish
+        // showing a frame from one location before doing another seek (instead
+        // of never updating the screen).
+        if ((mpctx->seek.flags & MPSEEK_FLAG_DELAY) &&
             mp_time_sec() - mpctx->start_timestamp < 0.3)
-            return;
+        {
+            // Wait until a video frame is available and has been shown.
+            if (mpctx->video_status < STATUS_PLAYING)
+                return;
+            // On A/V hr-seeks, always wait for the full result, to avoid corner
+            // cases when seeking past EOF (we want it to determine that EOF
+            // actually happened, instead of overwriting it with the new seek).
+            if (mpctx->hrseek_active && queued_hr_seek && mpctx->vo_chain &&
+                mpctx->ao_chain && !mpctx->restart_complete)
+                return;
+        }
         mp_seek(mpctx, mpctx->seek);
         mpctx->seek = (struct seek_params){0};
     }
@@ -804,7 +815,7 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
     unsigned mouse_event_ts = mp_input_get_mouse_event_counter(mpctx->input);
     if (mpctx->mouse_event_ts != mouse_event_ts) {
         mpctx->mouse_event_ts = mouse_event_ts;
-        mpctx->mouse_timer = now + vo->opts->cursor_autohide_delay / 1000.0;
+        mpctx->mouse_timer = now + opts->cursor_autohide_delay / 1000.0;
         mouse_cursor_visible = true;
     }
 
@@ -814,13 +825,13 @@ static void handle_cursor_autohide(struct MPContext *mpctx)
         mouse_cursor_visible = false;
     }
 
-    if (vo->opts->cursor_autohide_delay == -1)
+    if (opts->cursor_autohide_delay == -1)
         mouse_cursor_visible = true;
 
-    if (vo->opts->cursor_autohide_delay == -2)
+    if (opts->cursor_autohide_delay == -2)
         mouse_cursor_visible = false;
 
-    if (vo->opts->cursor_autohide_fs && !opts->vo->fullscreen)
+    if (opts->cursor_autohide_fs && !opts->vo->fullscreen)
         mouse_cursor_visible = true;
 
     if (mouse_cursor_visible != mpctx->mouse_cursor_visible)
@@ -836,17 +847,8 @@ static void handle_vo_events(struct MPContext *mpctx)
         mp_notify(mpctx, MP_EVENT_WIN_RESIZE, NULL);
     if (events & VO_EVENT_WIN_STATE)
         mp_notify(mpctx, MP_EVENT_WIN_STATE, NULL);
-    if (events & VO_EVENT_FULLSCREEN_STATE) {
-        // The only purpose of this is to update the fullscreen flag on the
-        // playloop side if it changes "from outside" on the VO.
-        int old_fs = mpctx->opts->vo->fullscreen;
-        int fs = old_fs;
-        vo_control(vo, VOCTRL_GET_FULLSCREEN, &fs);
-        if (old_fs != fs) {
-            m_config_set_option_raw(mpctx->mconfig,
-                m_config_get_co(mpctx->mconfig, bstr0("fullscreen")), &fs, 0);
-        }
-    }
+    if (events & VO_EVENT_DPI)
+        mp_notify(mpctx, MP_EVENT_WIN_STATE2, NULL);
 }
 
 static void handle_sstep(struct MPContext *mpctx)
@@ -1120,6 +1122,7 @@ static void handle_playback_restart(struct MPContext *mpctx)
         // actually play the audio, but resume seeking immediately.
         if (mpctx->seek.type && mpctx->video_status == STATUS_PLAYING) {
             handle_playback_time(mpctx);
+            mpctx->seek.flags &= ~MPSEEK_FLAG_DELAY; // immediately
             execute_queued_seek(mpctx);
             return;
         }
@@ -1169,6 +1172,9 @@ static void handle_playback_restart(struct MPContext *mpctx)
 
 static void handle_eof(struct MPContext *mpctx)
 {
+    if (mpctx->seek.type)
+        return;
+
     /* Don't quit while paused and we're displaying the last video frame. On the
      * other hand, if we don't have a video frame, then the user probably seeked
      * outside of the video, and we do want to quit. */
@@ -1228,6 +1234,8 @@ void run_playloop(struct MPContext *mpctx)
 
     update_core_idle_state(mpctx);
 
+    execute_queued_seek(mpctx);
+
     if (mpctx->stop_play)
         return;
 
@@ -1235,6 +1243,7 @@ void run_playloop(struct MPContext *mpctx)
 
     if (mp_filter_run(mpctx->filter_root))
         mp_wakeup_core(mpctx);
+
     mp_wait_events(mpctx);
 
     handle_update_cache(mpctx);
@@ -1244,8 +1253,6 @@ void run_playloop(struct MPContext *mpctx)
     handle_chapter_change(mpctx);
 
     handle_force_window(mpctx, false);
-
-    execute_queued_seek(mpctx);
 }
 
 void mp_idle(struct MPContext *mpctx)

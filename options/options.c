@@ -145,9 +145,6 @@ static const m_option_t mp_vo_opt_list[] = {
                       ({"default", -1})),
     OPT_CHOICE_OR_INT("fs-screen", fsscreen_id, 0, 0, 32,
                       ({"all", -2}, {"current", -1})),
-    OPT_CHOICE_OR_INT("cursor-autohide", cursor_autohide_delay, 0,
-                      0, 30000, ({"no", -1}, {"always", -2})),
-    OPT_FLAG("cursor-autohide-fs-only", cursor_autohide_fs, 0),
     OPT_FLAG("keepaspect", keepaspect, 0),
     OPT_FLAG("keepaspect-window", keepaspect_window, 0),
     OPT_FLAG("hidpi-window-scale", hidpi_window_scale, 0),
@@ -179,7 +176,6 @@ const struct m_sub_options vo_sub_opts = {
         .screen_id = -1,
         .fsscreen_id = -1,
         .panscan = 0.0f,
-        .cursor_autohide_delay = 1000,
         .keepaspect = 1,
         .keepaspect_window = 1,
         .hidpi_window_scale = 1,
@@ -595,6 +591,9 @@ static const m_option_t mp_opts[] = {
     OPT_CHOICE_OR_INT("video-rotate", video_rotate, UPDATE_IMGPAR, 0, 359,
                       ({"no", -1})),
 
+    OPT_CHOICE_OR_INT("cursor-autohide", cursor_autohide_delay, 0,
+                      0, 30000, ({"no", -1}, {"always", -2})),
+    OPT_FLAG("cursor-autohide-fs-only", cursor_autohide_fs, 0),
     OPT_FLAG("stop-screensaver", stop_screensaver, UPDATE_SCREENSAVER),
 
     OPT_SUBSTRUCT("", video_equalizer, mp_csp_equalizer_conf, 0),
@@ -650,7 +649,6 @@ static const m_option_t mp_opts[] = {
 
     OPT_STRING("chapters-file", chapter_file, M_OPT_FILE),
 
-    OPT_FLAG("load-unsafe-playlists", load_unsafe_playlists, 0),
     OPT_FLAG("merge-files", merge_files, 0),
 
     // a-v sync stuff:
@@ -703,9 +701,9 @@ static const m_option_t mp_opts[] = {
 
     OPT_FLAG("input-terminal", consolecontrols, UPDATE_TERM),
 
-    OPT_STRING("input-file", input_file, M_OPT_FILE | UPDATE_INPUT,
+    OPT_STRING("input-file", input_file, M_OPT_FILE,
                .deprecation_message = "use --input-ipc-server"),
-    OPT_STRING("input-ipc-server", ipc_path, M_OPT_FILE | UPDATE_INPUT),
+    OPT_STRING("input-ipc-server", ipc_path, M_OPT_FILE),
 
     OPT_SUBSTRUCT("screenshot", screenshot_image_opts, screenshot_conf, 0),
     OPT_STRING("screenshot-template", screenshot_template, 0),
@@ -912,6 +910,7 @@ static const struct MPOpts mp_default_opts = {
     .gapless_audio = -1,
     .wintitle = "${?media-title:${media-title}}${!media-title:No file} - mpv",
     .stop_screensaver = 1,
+    .cursor_autohide_delay = 1000,
     .video_osd = 1,
     .osd_level = 1,
     .osd_on_seek = 1,

@@ -24,6 +24,14 @@ Interface changes
 
 ::
 
+ --- mpv 0.31.1 ---
+    - change behavior when using legacy option syntax with options that start
+      with two dashes (``--`` instead of a ``-``). Now, using the recommended
+      syntax is required for options starting with ``--``, which means an option
+      value must be strictly passed after a ``=``, instead of as separate
+      argument. For example, ``--log-file f.txt`` was previously accepted and
+      behaved like ``--log-file=f.txt``, but now causes an error. Use of legacy
+      syntax that is still supported now prints a deprecation warning.
  --- mpv 0.31.0 ---
     - add `--resume-playback-check-mtime` to check consistent mtime when
       restoring playback state.
@@ -59,6 +67,29 @@ Interface changes
       setting the properties to non-existing tracks may report it as selected
       track for a small time window, until it's forced back to "no". The exact
       details how this is handled may change in the future.
+    - remove old Apple Remote support, including --input-appleremote
+    - add MediaPlayer support and remove the old Media Key event tap on macOS.
+      this possibly also re-adds the Apple Remote support
+    - the "edition" property now strictly returns the value of the option,
+      instead of the runtime value. The new "current-edition" property needs to
+      be queried to read the runtime-chosen edition. This is a breaking change
+      for any users which expected "edition" to return the runtime-chosen
+      edition at default settings (--edition=auto).
+    - the "window-scale" property now strictly returns the value of the option,
+      instead of the actual size of the window. The new "current-window-scale"
+      property needs to be queried to read the value as indicated by the current
+      window size. This is a breaking change.
+    - explicitly deprecate passing more than 1 item to "-add" suffix in key/value
+      options (for example --script-opts-add). This was actually always
+      deprecated, like with other list options, but the option parser did not
+      print a warning in this particular case.
+    - deprecate -del for list options (use -remove instead, which is by content
+      instead of by integer index)
+    - if `--fs` is used but `--fs-screen` is not set, mpv will now use `--screen`
+      instead.
+    - change the default of --hwdec to "no" on RPI. The default used to be "mmal"
+      specifically if 'Raspberry Pi support' was enabled at configure time
+      (equivalent to --enable-rpi). Use --hwdec=mmal to get the old behavior.
  --- mpv 0.30.0 ---
     - add `--d3d11-output-format` to enable explicit selection of a D3D11
       swap chain format.

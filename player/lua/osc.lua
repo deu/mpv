@@ -46,33 +46,12 @@ local user_opts = {
     boxmaxchars = 80,           -- title crop threshold for box layout
     boxvideo = false,           -- apply osc_param.video_margins to video
     windowcontrols = "auto",    -- whether to show window controls
-    windowcontrols_alignment = "right" -- which side to show window controls on
+    windowcontrols_alignment = "right", -- which side to show window controls on
+    greenandgrumpy = false,     -- disable santa hat
 }
 
--- read_options may modify hidetimeout, so save the original default value in
--- case the user set hidetimeout < 0 and we need the default instead.
-local hidetimeout_def = user_opts.hidetimeout
 -- read options from config and command-line
-opt.read_options(user_opts, "osc")
-if user_opts.hidetimeout < 0 then
-    user_opts.hidetimeout = hidetimeout_def
-    msg.warn("hidetimeout cannot be negative. Using " .. user_opts.hidetimeout)
-end
-
--- validate window control options
-if user_opts.windowcontrols ~= "auto" and
-   user_opts.windowcontrols ~= "yes" and
-   user_opts.windowcontrols ~= "no" then
-    msg.warn("windowcontrols cannot be \"" ..
-             user_opts.windowcontrols .. "\". Ignoring.")
-    user_opts.windowcontrols = "auto"
-end
-if user_opts.windowcontrols_alignment ~= "right" and
-   user_opts.windowcontrols_alignment ~= "left" then
-    msg.warn("windowcontrols_alignment cannot be \"" ..
-             user_opts.windowcontrols_alignment .. "\". Ignoring.")
-    user_opts.windowcontrols_alignment = "right"
-end
+opt.read_options(user_opts, "osc", function(list) update_options(list) end)
 
 local osc_param = { -- calculated by osc_init()
     playresy = 0,                           -- canvas size Y
@@ -103,7 +82,8 @@ local osc_styles = {
     timePosBar = "{\\blur0\\bord".. user_opts.tooltipborder .."\\1c&HFFFFFF\\3c&H000000\\fs30}",
     vidtitleBar = "{\\blur0\\bord0\\1c&HFFFFFF\\3c&HFFFFFF\\fs18\\q2}",
 
-    wcButtons = "{\\1c&HFFFFFF\\fs24}",
+    wcButtons = "{\\1c&HFFFFFF\\fs24\\fnmpv-osd-symbols}",
+    wcTitle = "{\\1c&HFFFFFF\\fs24\\q2}",
     wcBar = "{\\1c&H000000}",
 }
 
@@ -125,8 +105,10 @@ local state = {
     message_text,
     message_timeout,
     fullscreen = false,
-    timer = nil,
-    cache_idle = false,
+    tick_timer = nil,
+    tick_last_time = 0,                     -- when the last tick() was run
+    hide_timer = nil,
+    cache_state = nil,
     idle = false,
     enabled = true,
     input_enabled = true,
@@ -134,14 +116,31 @@ local state = {
     dmx_cache = 0,
     using_video_margins = false,
     border = true,
+    maximized = false,
+    osd = mp.create_osd_overlay("ass-events"),
 }
 
 local window_control_box_width = 80
+local tick_delay = 0.03
 
+local is_december = os.date("*t").month == 12
 
 --
 -- Helperfunctions
 --
+
+function set_osd(res_x, res_y, text)
+    if state.osd.res_x == res_x and
+       state.osd.res_y == res_y and
+       state.osd.data == text then
+        return
+    end
+    state.osd.res_x = res_x
+    state.osd.res_y = res_y
+    state.osd.data = text
+    state.osd.z = 1000
+    state.osd:update()
+end
 
 local margins_opts = {
     {"l", "video-margin-ratio-left"},
@@ -1015,11 +1014,13 @@ function window_controls(topbar)
 
     -- Default alignment is "right"
     local controlbox_left = wc_geo.w - controlbox_w
-    local titlebox_left = wc_geo.x + 5
+    local titlebox_left = wc_geo.x
+    local titlebox_right = wc_geo.w - controlbox_w
 
     if alignment == "left" then
         controlbox_left = wc_geo.x
-        titlebox_left = wc_geo.x + controlbox_w + 5
+        titlebox_left = wc_geo.x + controlbox_w
+        titlebox_right = wc_geo.w
     end
 
     add_area("window-controls",
@@ -1044,33 +1045,47 @@ function window_controls(topbar)
     local third_geo =
         {x = controlbox_left + 55, y = button_y, an = 4, w = 25, h = 25}
 
-    -- Close
+    -- Window control buttons use symbols in the custom mpv osd font
+    -- because the official unicode codepoints are sufficiently
+    -- exotic that a system might lack an installed font with them,
+    -- and libass will complain that they are not present in the
+    -- default font, even if another font with them is available.
+
+    -- Close: 🗙
     ne = new_element("close", "button")
-    ne.content = "\226\152\146"
+    ne.content = "\238\132\149"
     ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("quit") end
     lo = add_layout("close")
     lo.geometry = alignment == "left" and first_geo or third_geo
     lo.style = osc_styles.wcButtons
 
-    -- Minimize
+    -- Minimize: 🗕
     ne = new_element("minimize", "button")
-    ne.content = "\226\154\128"
+    ne.content = "\238\132\146"
     ne.eventresponder["mbtn_left_up"] =
         function () mp.commandv("cycle", "window-minimized") end
     lo = add_layout("minimize")
     lo.geometry = alignment == "left" and second_geo or first_geo
     lo.style = osc_styles.wcButtons
 
-    -- Maximize
+    -- Maximize: 🗖 /🗗
     ne = new_element("maximize", "button")
-    ne.content = "\226\150\163"
+    if state.maximized or state.fullscreen then
+        ne.content = "\238\132\148"
+    else
+        ne.content = "\238\132\147"
+    end
     ne.eventresponder["mbtn_left_up"] =
-        function () mp.commandv("cycle", "window-maximized") end
+        function ()
+            if state.fullscreen then
+                mp.commandv("cycle", "fullscreen")
+            else
+                mp.commandv("cycle", "window-maximized")
+            end
+        end
     lo = add_layout("maximize")
     lo.geometry = alignment == "left" and third_geo or second_geo
-    -- At least with default Ubuntu fonts, this symbol is differently aligned
-    lo.geometry.y = lo.geometry.y - 2
     lo.style = osc_styles.wcButtons
 
     -- deadzone below window controls
@@ -1097,12 +1112,19 @@ function window_controls(topbar)
         title = title:gsub("\\n", " "):gsub("\\$", ""):gsub("{","\\{")
         return not (title == "") and title or "mpv"
     end
+    local left_pad = 5
+    local right_pad = 10
     lo = add_layout("wctitle")
     lo.geometry =
-        { x = titlebox_left, y = wc_geo.y - 3, an = 1, w = titlebox_w, h = wc_geo.h }
+        { x = titlebox_left + left_pad, y = wc_geo.y - 3, an = 1,
+          w = titlebox_w, h = wc_geo.h }
     lo.style = string.format("%s{\\clip(%f,%f,%f,%f)}",
-        osc_styles.wcButtons,
-        titlebox_left, wc_geo.y - wc_geo.h, titlebox_w, wc_geo.y + wc_geo.h)
+        osc_styles.wcTitle,
+        titlebox_left + left_pad, wc_geo.y - wc_geo.h,
+        titlebox_right - right_pad , wc_geo.y + wc_geo.h)
+
+    add_area("window-controls-title",
+             titlebox_left, 0, titlebox_right, wc_geo.h)
 end
 
 --
@@ -1637,8 +1659,28 @@ function validate_user_opts()
         msg.warn("Using \"slider\" seekrangestyle together with \"bar\" seekbarstyle is not supported")
         user_opts.seekrangestyle = "inverted"
     end
+
+    if user_opts.windowcontrols ~= "auto" and
+       user_opts.windowcontrols ~= "yes" and
+       user_opts.windowcontrols ~= "no" then
+        msg.warn("windowcontrols cannot be \"" ..
+                user_opts.windowcontrols .. "\". Ignoring.")
+        user_opts.windowcontrols = "auto"
+    end
+    if user_opts.windowcontrols_alignment ~= "right" and
+       user_opts.windowcontrols_alignment ~= "left" then
+        msg.warn("windowcontrols_alignment cannot be \"" ..
+                user_opts.windowcontrols_alignment .. "\". Ignoring.")
+        user_opts.windowcontrols_alignment = "right"
+    end
 end
 
+function update_options(list)
+    validate_user_opts()
+    request_tick()
+    visibility_mode(user_opts.visibility, true)
+    request_init()
+end
 
 -- OSC INIT
 function osc_init()
@@ -1671,8 +1713,7 @@ function osc_init()
     -- stop seeking with the slider to prevent skipping files
     state.active_element = nil
 
-
-
+    osc_param.video_margins = {l = 0, r = 0, t = 0, b = 0}
 
     elements = {}
 
@@ -1894,7 +1935,7 @@ function osc_init()
         if user_opts.seekrangestyle == "none" then
             return nil
         end
-        local cache_state = mp.get_property_native("demuxer-cache-state", nil)
+        local cache_state = state.cache_state
         if not cache_state then
             return nil
         end
@@ -1903,14 +1944,17 @@ function osc_init()
             return nil
         end
         local ranges = cache_state["seekable-ranges"]
-        for _, range in pairs(ranges) do
-            range["start"] = 100 * range["start"] / duration
-            range["end"] = 100 * range["end"] / duration
-        end
         if #ranges == 0 then
             return nil
         end
-        return ranges
+        local nranges = {}
+        for _, range in pairs(ranges) do
+            nranges[#nranges + 1] = {
+                ["start"] = 100 * range["start"] / duration,
+                ["end"] = 100 * range["end"] / duration,
+            }
+        end
+        return nranges
     end
     ne.eventresponder["mouse_move"] = --keyframe seeking when mouse is dragged
         function (element)
@@ -1974,15 +2018,15 @@ function osc_init()
     ne = new_element("cache", "button")
 
     ne.content = function ()
-        local cache_state = mp.get_property_native("demuxer-cache-state", {})
-        if not (cache_state["seekable-ranges"] and
+        local cache_state = state.cache_state
+        if not (cache_state and cache_state["seekable-ranges"] and
             #cache_state["seekable-ranges"] > 0) then
             -- probably not a network stream
             return ""
         end
         local dmx_cache = mp.get_property_number("demuxer-cache-duration")
-        if dmx_cache and (dmx_cache > state.dmx_cache * 1.1 or
-                dmx_cache < state.dmx_cache * 0.9) then
+        local thresh = math.min(state.dmx_cache * 0.05, 5)  -- 5% or 5s
+        if dmx_cache and math.abs(dmx_cache - state.dmx_cache) >= thresh then
             state.dmx_cache = dmx_cache
         else
             dmx_cache = state.dmx_cache
@@ -2028,30 +2072,7 @@ function osc_init()
     --do something with the elements
     prepare_elements()
 
-    if user_opts.boxvideo then
-        -- check whether any margin option has a non-default value
-        local margins_used = false
-
-        for _, opt in ipairs(margins_opts) do
-            if mp.get_property_number(opt[2], 0.0) ~= 0.0 then
-                margins_used = true
-            end
-        end
-
-        if not margins_used then
-            local margins = osc_param.video_margins
-            for _, opt in ipairs(margins_opts) do
-                local v = margins[opt[1]]
-                if v ~= 0 then
-                    mp.set_property_number(opt[2], v)
-                    state.using_video_margins = true
-                end
-            end
-        end
-    else
-        reset_margins()
-    end
-
+    update_margins()
 end
 
 function reset_margins()
@@ -2061,6 +2082,48 @@ function reset_margins()
         end
         state.using_video_margins = false
     end
+end
+
+function update_margins()
+    local margins = osc_param.video_margins
+
+    -- Don't use margins if it's visible only temporarily.
+    if (not state.osc_visible) or (get_hidetimeout() >= 0) then
+        margins = {l = 0, r = 0, t = 0, b = 0}
+    end
+
+    if user_opts.boxvideo then
+        -- check whether any margin option has a non-default value
+        local margins_used = false
+
+        if not state.using_video_margins then
+            for _, opt in ipairs(margins_opts) do
+                if mp.get_property_number(opt[2], 0.0) ~= 0.0 then
+                    margins_used = true
+                end
+            end
+        end
+
+        if not margins_used then
+            for _, opt in ipairs(margins_opts) do
+                local v = margins[opt[1]]
+                if (v ~= 0) or state.using_video_margins then
+                    mp.set_property_number(opt[2], v)
+                    state.using_video_margins = true
+                end
+            end
+        end
+    else
+        reset_margins()
+    end
+
+    utils.shared_script_property_set("osc-margins",
+        string.format("%f,%f,%f,%f", margins.l, margins.r, margins.t, margins.b))
+end
+
+function shutdown()
+    reset_margins()
+    utils.shared_script_property_set("osc-margins", nil)
 end
 
 --
@@ -2089,12 +2152,11 @@ function hide_osc()
         -- typically hide happens at render() from tick(), but now tick() is
         -- no-op and won't render again to remove the osc, so do that manually.
         state.osc_visible = false
-        timer_stop()
         render_wipe()
     elseif (user_opts.fadeduration > 0) then
         if not(state.osc_visible == false) then
             state.anitype = "out"
-            control_timer()
+            request_tick()
         end
     else
         osc_visible(false)
@@ -2102,63 +2164,44 @@ function hide_osc()
 end
 
 function osc_visible(visible)
-    state.osc_visible = visible
-    control_timer()
+    if state.osc_visible ~= visible then
+        state.osc_visible = visible
+        update_margins()
+    end
+    request_tick()
 end
 
 function pause_state(name, enabled)
     state.paused = enabled
-    control_timer()
+    request_tick()
 end
 
-function cache_state(name, idle)
-    state.cache_idle = idle
-    control_timer()
+function cache_state(name, st)
+    state.cache_state = st
+    request_tick()
 end
 
-function control_timer()
-    if (state.paused) and (state.osc_visible) and
-        ( not(state.cache_idle) or not (state.anitype == nil) ) then
-
-        timer_start()
-    else
-        timer_stop()
+-- Request that tick() is called (which typically re-renders the OSC).
+-- The tick is then either executed immediately, or rate-limited if it was
+-- called a small time ago.
+function request_tick()
+    if state.tick_timer == nil then
+        state.tick_timer = mp.add_timeout(0, tick)
     end
-end
 
-function timer_start()
-    if not (state.timer_active) then
-        msg.trace("timer start")
-
-        if (state.timer == nil) then
-            -- create new timer
-            state.timer = mp.add_periodic_timer(0.03, tick)
-        else
-            -- resume existing one
-            state.timer:resume()
+    if not state.tick_timer:is_enabled() then
+        local now = mp.get_time()
+        local timeout = tick_delay - (now - state.tick_last_time)
+        if timeout < 0 then
+            timeout = 0
         end
-
-        state.timer_active = true
+        state.tick_timer.timeout = timeout
+        state.tick_timer:resume()
     end
 end
-
-function timer_stop()
-    if (state.timer_active) then
-        msg.trace("timer stop")
-
-        if not (state.timer == nil) then
-            -- kill timer
-            state.timer:kill()
-        end
-
-        state.timer_active = false
-    end
-end
-
-
 
 function mouse_leave()
-    if user_opts.hidetimeout >= 0 then
+    if get_hidetimeout() >= 0 then
         hide_osc()
     end
     -- reset mouse position
@@ -2167,11 +2210,21 @@ end
 
 function request_init()
     state.initREQ = true
+    request_tick()
+end
+
+-- Like request_init(), but also request an immediate update
+function request_init_resize()
+    request_init()
+    -- ensure immediate update
+    state.tick_timer:kill()
+    state.tick_timer.timeout = 0
+    state.tick_timer:resume()
 end
 
 function render_wipe()
     msg.trace("render_wipe()")
-    mp.set_osd_ass(0, 0, "{}")
+    state.osd:remove()
 end
 
 function render()
@@ -2184,7 +2237,7 @@ function render()
     if not (state.mp_screen_sizeX == current_screen_sizeX
         and state.mp_screen_sizeY == current_screen_sizeY) then
 
-        request_init()
+        request_init_resize()
 
         state.mp_screen_sizeX = current_screen_sizeX
         state.mp_screen_sizeY = current_screen_sizeY
@@ -2287,12 +2340,32 @@ function render()
         end
     end
 
-    -- autohide
-    if not (state.showtime == nil) and (user_opts.hidetimeout >= 0)
-        and (state.showtime + (user_opts.hidetimeout/1000) < now)
-        and (state.active_element == nil) and not (mouse_over_osc) then
+    if osc_param.areas["window-controls-title"] then
+        for _,cords in ipairs(osc_param.areas["window-controls-title"]) do
+            if (mouse_hit_coords(cords.x1, cords.y1, cords.x2, cords.y2)) then
+                mouse_over_osc = true
+            end
+        end
+    end
 
-        hide_osc()
+    -- autohide
+    if not (state.showtime == nil) and (get_hidetimeout() >= 0) then
+        local timeout = state.showtime + (get_hidetimeout()/1000) - now
+        if timeout <= 0 then
+            if (state.active_element == nil) and not (mouse_over_osc) then
+                hide_osc()
+            end
+        else
+            -- the timer is only used to recheck the state and to possibly run
+            -- the code above again
+            if not state.hide_timer then
+                state.hide_timer = mp.add_timeout(0, tick)
+            end
+            state.hide_timer.timeout = timeout
+            -- re-arm
+            state.hide_timer:kill()
+            state.hide_timer:resume()
+        end
     end
 
 
@@ -2308,12 +2381,8 @@ function render()
     end
 
     -- submit
-    mp.set_osd_ass(osc_param.playresy * osc_param.display_aspect,
-                   osc_param.playresy, ass.text)
-
-
-
-
+    set_osd(osc_param.playresy * osc_param.display_aspect,
+            osc_param.playresy, ass.text)
 end
 
 --
@@ -2389,9 +2458,35 @@ function process_event(source, what)
         if element_has_action(elements[n], action) then
             elements[n].eventresponder[action](elements[n])
         end
-        tick()
+        request_tick()
     end
 end
+
+
+local logo_lines = {
+    -- White border
+    "{\\c&HE5E5E5&\\p6}m 895 10 b 401 10 0 410 0 905 0 1399 401 1800 895 1800 1390 1800 1790 1399 1790 905 1790 410 1390 10 895 10 {\\p0}",
+    -- Purple fill
+    "{\\c&H682167&\\p6}m 925 42 b 463 42 87 418 87 880 87 1343 463 1718 925 1718 1388 1718 1763 1343 1763 880 1763 418 1388 42 925 42{\\p0}",
+    -- Darker fill
+    "{\\c&H430142&\\p6}m 1605 828 b 1605 1175 1324 1456 977 1456 631 1456 349 1175 349 828 349 482 631 200 977 200 1324 200 1605 482 1605 828{\\p0}",
+    -- White fill
+    "{\\c&HDDDBDD&\\p6}m 1296 910 b 1296 1131 1117 1310 897 1310 676 1310 497 1131 497 910 497 689 676 511 897 511 1117 511 1296 689 1296 910{\\p0}",
+    -- Triangle
+    "{\\c&H691F69&\\p6}m 762 1113 l 762 708 b 881 776 1000 843 1119 911 1000 978 881 1046 762 1113{\\p0}",
+}
+
+local santa_hat_lines = {
+    -- Pompoms
+    "{\\c&HC0C0C0&\\p6}m 500 -323 b 491 -322 481 -318 475 -311 465 -312 456 -319 446 -318 434 -314 427 -304 417 -297 410 -290 404 -282 395 -278 390 -274 387 -267 381 -265 377 -261 379 -254 384 -253 397 -244 409 -232 425 -228 437 -228 446 -218 457 -217 462 -216 466 -213 468 -209 471 -205 477 -203 482 -206 491 -211 499 -217 508 -222 532 -235 556 -249 576 -267 584 -272 584 -284 578 -290 569 -305 550 -312 533 -309 523 -310 515 -316 507 -321 505 -323 503 -323 500 -323{\\p0}",
+    "{\\c&HE0E0E0&\\p6}m 315 -260 b 286 -258 259 -240 246 -215 235 -210 222 -215 211 -211 204 -188 177 -176 172 -151 170 -139 163 -128 154 -121 143 -103 141 -81 143 -60 139 -46 125 -34 129 -17 132 -1 134 16 142 30 145 56 161 80 181 96 196 114 210 133 231 144 266 153 303 138 328 115 373 79 401 28 423 -24 446 -73 465 -123 483 -174 487 -199 467 -225 442 -227 421 -232 402 -242 384 -254 364 -259 342 -250 322 -260 320 -260 317 -261 315 -260{\\p0}",
+    -- Main cap
+    "{\\c&H0000F0&\\p6}m 1151 -523 b 1016 -516 891 -458 769 -406 693 -369 624 -319 561 -262 526 -252 465 -235 479 -187 502 -147 551 -135 588 -111 1115 165 1379 232 1909 761 1926 800 1952 834 1987 858 2020 883 2053 912 2065 952 2088 1000 2146 962 2139 919 2162 836 2156 747 2143 662 2131 615 2116 567 2122 517 2120 410 2090 306 2089 199 2092 147 2071 99 2034 64 1987 5 1928 -41 1869 -86 1777 -157 1712 -256 1629 -337 1578 -389 1521 -436 1461 -476 1407 -509 1343 -507 1284 -515 1240 -519 1195 -521 1151 -523{\\p0}",
+    -- Cap shadow
+    "{\\c&H0000AA&\\p6}m 1657 248 b 1658 254 1659 261 1660 267 1669 276 1680 284 1689 293 1695 302 1700 311 1707 320 1716 325 1726 330 1735 335 1744 347 1752 360 1761 371 1753 352 1754 331 1753 311 1751 237 1751 163 1751 90 1752 64 1752 37 1767 14 1778 -3 1785 -24 1786 -45 1786 -60 1786 -77 1774 -87 1760 -96 1750 -78 1751 -65 1748 -37 1750 -8 1750 20 1734 78 1715 134 1699 192 1694 211 1689 231 1676 246 1671 251 1661 255 1657 248 m 1909 541 b 1914 542 1922 549 1917 539 1919 520 1921 502 1919 483 1918 458 1917 433 1915 407 1930 373 1942 338 1947 301 1952 270 1954 238 1951 207 1946 214 1947 229 1945 239 1939 278 1936 318 1924 356 1923 362 1913 382 1912 364 1906 301 1904 237 1891 175 1887 150 1892 126 1892 101 1892 68 1893 35 1888 2 1884 -9 1871 -20 1859 -14 1851 -6 1854 9 1854 20 1855 58 1864 95 1873 132 1883 179 1894 225 1899 273 1908 362 1910 451 1909 541{\\p0}",
+    -- Brim and tip pompom
+    "{\\c&HF8F8F8&\\p6}m 626 -191 b 565 -155 486 -196 428 -151 387 -115 327 -101 304 -47 273 2 267 59 249 113 219 157 217 213 215 265 217 309 260 302 285 283 373 264 465 264 555 257 608 252 655 292 709 287 759 294 816 276 863 298 903 340 972 324 1012 367 1061 394 1125 382 1167 424 1213 462 1268 482 1322 506 1385 546 1427 610 1479 662 1510 690 1534 725 1566 752 1611 796 1664 830 1703 880 1740 918 1747 986 1805 1005 1863 991 1897 932 1916 880 1914 823 1945 777 1961 725 1979 673 1957 622 1938 575 1912 534 1862 515 1836 473 1790 417 1755 351 1697 305 1658 266 1633 216 1593 176 1574 138 1539 116 1497 110 1448 101 1402 77 1371 37 1346 -16 1295 15 1254 6 1211 -27 1170 -62 1121 -86 1072 -104 1027 -128 976 -133 914 -130 851 -137 794 -162 740 -181 679 -168 626 -191 m 2051 917 b 1971 932 1929 1017 1919 1091 1912 1149 1923 1214 1970 1254 2000 1279 2027 1314 2066 1325 2139 1338 2212 1295 2254 1238 2281 1203 2287 1158 2282 1116 2292 1061 2273 1006 2229 970 2206 941 2167 938 2138 918{\\p0}",
+}
 
 -- called by mpv on every frame
 function tick()
@@ -2402,31 +2497,28 @@ function tick()
         -- render idle message
         msg.trace("idle message")
         local icon_x, icon_y = 320 - 26, 140
+        local line_prefix = ("{\\rDefault\\an7\\1a&H00&\\bord0\\shad0\\pos(%f,%f)}"):format(icon_x, icon_y)
 
         local ass = assdraw.ass_new()
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&H430142&\\1a&H00&\\bord0\\shad0\\p6}m 1605 828 b 1605 1175 1324 1456 977 1456 631 1456 349 1175 349 828 349 482 631 200 977 200 1324 200 1605 482 1605 828{\\p0}")
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&HDDDBDD&\\1a&H00&\\bord0\\shad0\\p6}m 1296 910 b 1296 1131 1117 1310 897 1310 676 1310 497 1131 497 910 497 689 676 511 897 511 1117 511 1296 689 1296 910{\\p0}")
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&H691F69&\\1a&H00&\\bord0\\shad0\\p6}m 762 1113 l 762 708 b 881 776 1000 843 1119 911 1000 978 881 1046 762 1113{\\p0}")
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&H682167&\\1a&H00&\\bord0\\shad0\\p6}m 925 42 b 463 42 87 418 87 880 87 1343 463 1718 925 1718 1388 1718 1763 1343 1763 880 1763 418 1388 42 925 42 m 925 42 m 977 200 b 1324 200 1605 482 1605 828 1605 1175 1324 1456 977 1456 631 1456 349 1175 349 828 349 482 631 200 977 200{\\p0}")
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&H753074&\\1a&H00&\\bord0\\shad0\\p6}m 977 198 b 630 198 348 480 348 828 348 1176 630 1458 977 1458 1325 1458 1607 1176 1607 828 1607 480 1325 198 977 198 m 977 198 m 977 202 b 1323 202 1604 483 1604 828 1604 1174 1323 1454 977 1454 632 1454 351 1174 351 828 351 483 632 202 977 202{\\p0}")
-        ass:new_event()
-        ass:pos(icon_x, icon_y)
-        ass:append("{\\rDefault\\an7\\c&HE5E5E5&\\1a&H00&\\bord0\\shad0\\p6}m 895 10 b 401 10 0 410 0 905 0 1399 401 1800 895 1800 1390 1800 1790 1399 1790 905 1790 410 1390 10 895 10 m 895 10 m 925 42 b 1388 42 1763 418 1763 880 1763 1343 1388 1718 925 1718 463 1718 87 1343 87 880 87 418 463 42 925 42{\\p0}")
+        -- mpv logo
+        for i, line in ipairs(logo_lines) do
+            ass:new_event()
+            ass:append(line_prefix .. line)
+        end
+
+        -- Santa hat
+        if is_december and not user_opts.greenandgrumpy then
+            for i, line in ipairs(santa_hat_lines) do
+                ass:new_event()
+                ass:append(line_prefix .. line)
+            end
+        end
+
         ass:new_event()
         ass:pos(320, icon_y+65)
         ass:an(8)
         ass:append("Drop files or URLs to play here.")
-        mp.set_osd_ass(640, 360, ass.text)
+        set_osd(640, 360, ass.text)
 
         if state.showhide_enabled then
             mp.disable_key_bindings("showhide")
@@ -2442,7 +2534,13 @@ function tick()
         render()
     else
         -- Flush OSD
-        mp.set_osd_ass(osc_param.playresy, osc_param.playresy, "")
+        set_osd(osc_param.playresy, osc_param.playresy, "")
+    end
+
+    state.tick_last_time = mp.get_time()
+
+    if state.anitype ~= nil then
+        request_tick()
     end
 end
 
@@ -2472,7 +2570,7 @@ end
 
 validate_user_opts()
 
-mp.register_event("shutdown", reset_margins)
+mp.register_event("shutdown", shutdown)
 mp.register_event("start-file", request_init)
 mp.register_event("tracks-changed", request_init)
 mp.observe_property("playlist", nil, request_init)
@@ -2495,28 +2593,39 @@ end)
 mp.observe_property("fullscreen", "bool",
     function(name, val)
         state.fullscreen = val
-        request_init()
+        request_init_resize()
     end
 )
 mp.observe_property("border", "bool",
     function(name, val)
         state.border = val
+        request_init_resize()
+    end
+)
+mp.observe_property("window-maximized", "bool",
+    function(name, val)
+        state.maximized = val
+        request_init_resize()
     end
 )
 mp.observe_property("idle-active", "bool",
     function(name, val)
         state.idle = val
-        tick()
+        request_tick()
     end
 )
 mp.observe_property("pause", "bool", pause_state)
-mp.observe_property("cache-idle", "bool", cache_state)
+mp.observe_property("demuxer-cache-state", "native", cache_state)
 mp.observe_property("vo-configured", "bool", function(name, val)
-    if val then
-        mp.register_event("tick", tick)
-    else
-        mp.unregister_event(tick)
-    end
+    request_tick()
+end)
+mp.observe_property("playback-time", "number", function(name, val)
+    request_tick()
+end)
+mp.observe_property("osd-dimensions", "native", function(name, val)
+    -- (we could use the value instead of re-querying it all the time, but then
+    --  we might have to worry about property update ordering)
+    request_init_resize()
 end)
 
 -- mouse show/hide bindings
@@ -2555,15 +2664,20 @@ mp.set_key_bindings({
 }, "window-controls", "force")
 mp.enable_key_bindings("window-controls")
 
-user_opts.hidetimeout_orig = user_opts.hidetimeout
+function get_hidetimeout()
+    if user_opts.visibility == "always" then
+        return -1 -- disable autohide
+    end
+    return user_opts.hidetimeout
+end
 
 function always_on(val)
-    if val then
-        user_opts.hidetimeout = -1 -- disable autohide
-        if state.enabled then show_osc() end
-    else
-        user_opts.hidetimeout = user_opts.hidetimeout_orig
-        if state.enabled then hide_osc() end
+    if state.enabled then
+        if val then
+            show_osc()
+        else
+            hide_osc()
+        end
     end
 end
 
@@ -2573,7 +2687,7 @@ function visibility_mode(mode, no_osd)
     if mode == "cycle" then
         if not state.enabled then
             mode = "auto"
-        elseif user_opts.hidetimeout >= 0 then
+        elseif user_opts.visibility ~= "always" then
             mode = "always"
         else
             mode = "never"
@@ -2593,9 +2707,21 @@ function visibility_mode(mode, no_osd)
         return
     end
 
+    user_opts.visibility = mode
+
     if not no_osd and tonumber(mp.get_property("osd-level")) >= 1 then
         mp.osd_message("OSC visibility: " .. mode)
     end
+
+    -- Reset the input state on a mode change. The input state will be
+    -- recalcuated on the next render cycle, except in 'never' mode where it
+    -- will just stay disabled.
+    mp.disable_key_bindings("input")
+    mp.disable_key_bindings("window-controls")
+    state.input_enabled = false
+
+    update_margins()
+    request_tick()
 end
 
 visibility_mode(user_opts.visibility, true)

@@ -88,9 +88,6 @@ static void update_output_caps(struct chain *p)
             if (allowed_output_formats[n])
                 mp_autoconvert_add_imgfmt(p->convert, IMGFMT_START + n, 0);
         }
-
-        if (p->vo->hwdec_devs)
-            mp_autoconvert_add_vo_hwdec_subfmts(p->convert, p->vo->hwdec_devs);
     }
 }
 
@@ -524,8 +521,7 @@ bool mp_output_chain_update_filters(struct mp_output_chain *c,
         struct mp_user_filter *u = NULL;
 
         for (int i = 0; i < p->num_user_filters; i++) {
-            struct m_option t = {.type = &m_option_type_obj_settings_list};
-            if (!used[i] && m_option_equal(&t, &entry, &p->user_filters[i]->args))
+            if (!used[i] && m_obj_settings_equal(entry, p->user_filters[i]->args))
             {
                 u = p->user_filters[i];
                 used[i] = true;

@@ -79,6 +79,8 @@ const stream_info_t stream_info_memory = {
     .protocols = (const char*const[]){ "memory", "hex", NULL },
 };
 
+// The data is copied.
+// Caller may need to set stream.stream_origin correctly.
 struct stream *stream_memory_open(struct mpv_global *global, void *data, int len)
 {
     assert(len >= 0);
@@ -86,7 +88,7 @@ struct stream *stream_memory_open(struct mpv_global *global, void *data, int len
     struct stream_open_args sargs = {
         .global = global,
         .url = "memory://",
-        .flags = STREAM_READ | STREAM_SILENT,
+        .flags = STREAM_READ | STREAM_SILENT | STREAM_ORIGIN_DIRECT,
         .sinfo = &stream_info_memory,
         .special_arg = &(bstr){data, len},
     };

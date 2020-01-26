@@ -358,6 +358,10 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     of times in a row, only the last change triggers the change function. (The
     exact behavior depends on timing and other things.)
 
+    If a property is unavailable, or on error, the value argument to ``fn`` is
+    ``nil``. (The ``observe_property()`` call always succeeds, even if a
+    property does not exist.)
+
     In some cases the function is not called even if the property changes.
     This depends on the property, and it's a valid feature request to ask for
     better update handling of a specific property.
@@ -532,6 +536,41 @@ are useful only in special situations.
     Undo a previous registration with ``mp.register_script_message``. Does
     nothing if the ``name`` wasn't registered.
 
+``mp.create_osd_overlay(format)``
+    Create an OSD overlay. This is a very thin wrapper around the ``osd-overlay``
+    command. The function returns a table, which mostly contains fields that
+    will be passed to ``osd-overlay``. The ``format`` parameter is used to
+    initialize the ``format`` field. The ``data`` field contains the text to
+    be used as overlay. For details, see the ``osd-overlay`` command.
+
+    In addition, it provides the following methods:
+
+    ``update()``
+        Commit the OSD overlay to the screen, or in other words, run the
+        ``osd-overlay`` command with the current fields of the overlay table.
+
+    ``remove()``
+        Remove the overlay from the screen. A ``update()`` call will add it
+        again.
+
+    Example:
+
+    ::
+
+        ov = mp.create_osd_overlay("ass-events")
+        ov.data = "{\\an5}{\\b1}hello world!"
+        ov:update()
+
+    The advantage of using this wrapper (as opposed to running ``osd-overlay``
+    directly) is that the ``id`` field is allocated automatically.
+
+``mp.get_osd_size()``
+    Returns a tuple of ``osd_width, osd_height, osd_par``. The first two give
+    the size of the OSD in pixels (for video ouputs like ``--vo=xv``, this may
+    be "scaled" pixels). The third is the display pixel aspect ratio.
+
+    May return invalid/nonsense values if OSD is not initialized yet.
+
 mp.msg functions
 ----------------
 
@@ -562,14 +601,27 @@ command-line. All you have to do is to supply a table with default options to
 the read_options function. The function will overwrite the default values
 with values found in the config-file and the command-line (in that order).
 
-``options.read_options(table [, identifier])``
+``options.read_options(table [, identifier [, on_update]])``
     A ``table`` with key-value pairs. The type of the default values is
     important for converting the values read from the config file or
     command-line back. Do not use ``nil`` as a default value!
 
     The ``identifier`` is used to identify the config-file and the command-line
     options. These needs to unique to avoid collisions with other scripts.
-    Defaults to ``mp.get_script_name()``.
+    Defaults to ``mp.get_script_name()`` if the parameter is ``nil`` or missing.
+
+    The ``on_update`` parameter enables run-time updates of all matching option
+    values via the ``script-opts`` option/property. If any of the matching
+    options changes, the values in the ``table`` (which was originally passed to
+    the function) are changed, and ``on_update(list)`` is called. ``list`` is
+    a table where each updated option has a ``list[option_name] = true`` entry.
+    There is no initial ``on_update()`` call. This never re-reads the config file.
+    ``script-opts`` is always applied on the original config file, ignoring
+    previous ``script-opts`` values (for example, if an option is removed from
+    ``script-opts`` at runtime, the option will have the value in the config
+    file). ``table`` entries are only written for option values whose values
+    effectively change (this is important if the script changes ``table``
+    entries independently).
 
 
 Example implementation::

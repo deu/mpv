@@ -41,9 +41,6 @@ typedef struct mp_vo_opts {
     struct m_geometry autofit_smaller;
     double window_scale;
 
-    int cursor_autohide_delay;
-    int cursor_autohide_fs;
-
     int keepaspect;
     int keepaspect_window;
     int hidpi_window_scale;
@@ -166,6 +163,8 @@ typedef struct MPOpts {
     struct mp_csp_equalizer_opts *video_equalizer;
 
     int stop_screensaver;
+    int cursor_autohide_delay;
+    int cursor_autohide_fs;
 
     int video_rotate;
 
@@ -194,7 +193,6 @@ typedef struct MPOpts {
     int chapter_merge_threshold;
     double chapter_seek_threshold;
     char *chapter_file;
-    int load_unsafe_playlists;
     int merge_files;
     int quiet;
     int load_config;

@@ -207,7 +207,7 @@ static bool x11_get_property_copy(struct vo_x11_state *x11, Window w,
     void *ptr = x11_get_property(x11, w, property, type, format, &len);
     if (ptr) {
         size_t ib = format == 32 ? sizeof(long) : format / 8;
-        if (dst_size / ib >= len) {
+        if (dst_size <= len * ib) {
             memcpy(dst, ptr, dst_size);
             ret = true;
         }
@@ -473,6 +473,9 @@ static void vo_x11_update_screeninfo(struct vo *vo)
         XineramaScreenInfo *screens;
         int num_screens;
 
+        if (opts->fullscreen && opts->fsscreen_id == -1)
+            screen = opts->screen_id;
+
         screens = XineramaQueryScreens(x11->display, &num_screens);
         if (screen >= num_screens)
             screen = num_screens - 1;
@@ -623,7 +626,7 @@ int vo_x11_init(struct vo *vo)
     double dpi_x = x11->ws_width * 25.4 / w_mm;
     double dpi_y = x11->ws_height * 25.4 / h_mm;
     double base_dpi = 96;
-    if (isfinite(dpi_x) && isfinite(dpi_y)) {
+    if (isfinite(dpi_x) && isfinite(dpi_y) && x11->opts->hidpi_window_scale) {
         int s_x = lrint(MPCLAMP(dpi_x / base_dpi, 0, 10));
         int s_y = lrint(MPCLAMP(dpi_y / base_dpi, 0, 10));
         if (s_x == s_y && s_x > 1 && s_x < 10) {
@@ -1079,7 +1082,7 @@ static void vo_x11_check_net_wm_desktop_change(struct vo *vo)
     if (x11->parent)
         return;
 
-    long params[5] = {0};
+    long params[1] = {0};
     if (x11_get_property_copy(x11, x11->window, XA(x11, _NET_WM_DESKTOP),
                               XA_CARDINAL, 32, params, sizeof(params)))
     {
@@ -1884,21 +1887,23 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
         int *s = arg;
         if (!x11->window || x11->parent)
             return VO_FALSE;
-        s[0] = x11->fs ? RC_W(x11->nofsrc) : RC_W(x11->winrc);
-        s[1] = x11->fs ? RC_H(x11->nofsrc) : RC_H(x11->winrc);
+        s[0] = (x11->fs ? RC_W(x11->nofsrc) : RC_W(x11->winrc)) / x11->dpi_scale;
+        s[1] = (x11->fs ? RC_H(x11->nofsrc) : RC_H(x11->winrc)) / x11->dpi_scale;
         return VO_TRUE;
     }
     case VOCTRL_SET_UNFS_WINDOW_SIZE: {
         int *s = arg;
         if (!x11->window || x11->parent)
             return VO_FALSE;
+        int w = s[0] * x11->dpi_scale;
+        int h = s[1] * x11->dpi_scale;
         struct mp_rect rc = x11->winrc;
-        rc.x1 = rc.x0 + s[0];
-        rc.y1 = rc.y0 + s[1];
+        rc.x1 = rc.x0 + w;
+        rc.y1 = rc.y0 + h;
         vo_x11_highlevel_resize(vo, rc);
         if (!x11->fs) { // guess new window size, instead of waiting for X
-            x11->winrc.x1 = x11->winrc.x0 + s[0];
-            x11->winrc.y1 = x11->winrc.y0 + s[1];
+            x11->winrc.x1 = x11->winrc.x0 + w;
+            x11->winrc.y1 = x11->winrc.y0 + h;
         }
         return VO_TRUE;
     }
@@ -1961,6 +1966,9 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
         *(double *)arg = fps;
         return VO_TRUE;
     }
+    case VOCTRL_GET_HIDPI_SCALE:
+        *(double *)arg = x11->dpi_scale;
+        return VO_TRUE;
     }
     return VO_NOTIMPL;
 }

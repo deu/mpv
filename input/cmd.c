@@ -25,6 +25,7 @@
 
 #include "cmd.h"
 #include "input.h"
+#include "misc/json.h"
 
 #include "libmpv/client.h"
 
@@ -558,7 +559,14 @@ void mp_cmd_dump(struct mp_log *log, int msgl, char *header, struct mp_cmd *cmd)
         char *s = m_option_print(cmd->args[n].type, &cmd->args[n].v);
         if (n)
             mp_msg(log, msgl, ", ");
-        mp_msg(log, msgl, "%s", s ? s : "(NULL)");
+        struct mpv_node node = {
+            .format = MPV_FORMAT_STRING,
+            .u.string = s ? s : "(NULL)",
+        };
+        char *esc = NULL;
+        json_write(&esc, &node);
+        mp_msg(log, msgl, "%s", esc ? esc : "<error>");
+        talloc_free(esc);
         talloc_free(s);
     }
     mp_msg(log, msgl, "]\n");
@@ -607,6 +615,11 @@ static int parse_cycle_dir(struct mp_log *log, const struct m_option *opt,
     return 1;
 }
 
+static char *print_cycle_dir(const m_option_t *opt, const void *val)
+{
+    return talloc_asprintf(NULL, "%f", *(double *)val);
+}
+
 static void copy_opt(const m_option_t *opt, void *dst, const void *src)
 {
     if (dst && src)
@@ -616,6 +629,7 @@ static void copy_opt(const m_option_t *opt, void *dst, const void *src)
 const struct m_option_type m_option_type_cycle_dir = {
     .name = "up|down",
     .parse = parse_cycle_dir,
+    .print = print_cycle_dir,
     .copy = copy_opt,
     .size = sizeof(double),
 };

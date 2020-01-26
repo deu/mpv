@@ -177,7 +177,7 @@ static bool copy_mtime(const char *f1, const char *f2)
         .modtime = st1.st_mtime,
     };
 
-    if (!utime(f2, &ut))
+    if (utime(f2, &ut) != 0)
         return false;
 
     return true;
@@ -319,7 +319,8 @@ static void write_redirect(struct MPContext *mpctx, char *path)
             fclose(file);
         }
 
-        if (mpctx->opts->position_check_mtime && !copy_mtime(path, conffile))
+        if (mpctx->opts->position_check_mtime &&
+            !mp_is_url(bstr0(path)) && !copy_mtime(path, conffile))
             MP_WARN(mpctx, "Can't copy mtime from %s to %s\n", path, conffile);
 
         talloc_free(conffile);
@@ -334,10 +335,6 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
         goto exit;
 
     struct demuxer *demux = mpctx->demuxer;
-    if (demux && (!demux->seekable || demux->partially_seekable)) {
-        MP_INFO(mpctx, "Not seekable - not saving state.\n");
-        goto exit;
-    }
 
     conffile = mp_get_playback_resume_config_filename(mpctx, cur->filename);
     if (!conffile)
@@ -354,8 +351,14 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     write_filename(mpctx, file, cur->filename);
 
     double pos = get_current_time(mpctx);
-    if (pos != MP_NOPTS_VALUE)
+
+    if ((demux && (!demux->seekable || demux->partially_seekable)) ||
+        pos == MP_NOPTS_VALUE)
+    {
+        MP_INFO(mpctx, "Not seekable, or time unknown - not saving position.\n");
+    } else {
         fprintf(file, "start=%f\n", pos);
+    }
     for (int i = 0; backup_properties[i]; i++) {
         const char *pname = backup_properties[i];
         char *val = NULL;
@@ -379,6 +382,7 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     fclose(file);
 
     if (mpctx->opts->position_check_mtime &&
+        !mp_is_url(bstr0(cur->filename)) &&
         !copy_mtime(cur->filename, conffile))
     {
         MP_WARN(mpctx, "Can't copy mtime from %s to %s\n", cur->filename,
@@ -426,7 +430,9 @@ void mp_load_playback_resume(struct MPContext *mpctx, const char *file)
         return;
     char *fname = mp_get_playback_resume_config_filename(mpctx, file);
     if (fname && mp_path_exists(fname)) {
-        if (mpctx->opts->position_check_mtime && !check_mtime(file, fname)) {
+        if (mpctx->opts->position_check_mtime &&
+            !mp_is_url(bstr0(file)) && !check_mtime(file, fname))
+        {
             talloc_free(fname);
             return;
         }
@@ -451,7 +457,8 @@ struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
 {
     if (!mpctx->opts->position_resume)
         return NULL;
-    for (struct playlist_entry *e = playlist->first; e; e = e->next) {
+    for (int n = 0; n < playlist->num_entries; n++) {
+        struct playlist_entry *e = playlist->entries[n];
         char *conf = mp_get_playback_resume_config_filename(mpctx, e->filename);
         bool exists = conf && mp_path_exists(conf);
         talloc_free(conf);

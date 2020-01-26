@@ -414,7 +414,7 @@ iconv support use --disable-iconv.",
     }, {
         'name': '--libarchive',
         'desc': 'libarchive wrapper for reading zip files and more',
-        'func': check_pkg_config('libarchive >= 3.0.0'),
+        'func': check_pkg_config('libarchive >= 3.4.0'),
     }, {
         'name': '--dvbin',
         'desc': 'DVB input module',
@@ -647,17 +647,17 @@ video_output_features = [
                    check_cc(fragment=load_fragment('gl_x11.c'),
                             use=['x11', 'libdl', 'pthreads']))
     } , {
-        'name': '--egl15',
-        'desc': 'EGL 1.5',
+        'name': '--egl',
+        'desc': 'EGL 1.4',
         'groups': [ 'gl' ],
         'func': compose_checks(
             check_pkg_config('egl'),
-            check_statement(['EGL/egl.h'], 'int x[EGL_VERSION_1_5]')
+            check_statement(['EGL/egl.h'], 'int x[EGL_VERSION_1_4]')
             ),
     } , {
         'name': '--egl-x11',
         'desc': 'OpenGL X11 EGL Backend',
-        'deps': 'x11 && egl15',
+        'deps': 'x11 && egl',
         'groups': [ 'gl' ],
         'func': check_true,
     } , {
@@ -726,22 +726,22 @@ video_output_features = [
         'name': '--vaapi',
         'desc': 'VAAPI acceleration',
         'deps': 'libdl && (x11 || wayland || egl-drm)',
-        'func': check_pkg_config('libva', '>= 0.36.0'),
+        'func': check_pkg_config('libva', '>= 1.1.0'),
     }, {
         'name': '--vaapi-x11',
         'desc': 'VAAPI (X11 support)',
         'deps': 'vaapi && x11',
-        'func': check_pkg_config('libva-x11', '>= 0.36.0'),
+        'func': check_pkg_config('libva-x11', '>= 1.1.0'),
     }, {
         'name': '--vaapi-wayland',
         'desc': 'VAAPI (Wayland support)',
         'deps': 'vaapi && gl-wayland',
-        'func': check_pkg_config('libva-wayland', '>= 0.36.0'),
+        'func': check_pkg_config('libva-wayland', '>= 1.1.0'),
     }, {
         'name': '--vaapi-drm',
         'desc': 'VAAPI (DRM/EGL support)',
         'deps': 'vaapi && egl-drm',
-        'func': check_pkg_config('libva-drm', '>= 0.36.0'),
+        'func': check_pkg_config('libva-drm', '>= 1.1.0'),
     }, {
         'name': '--vaapi-x-egl',
         'desc': 'VAAPI EGL on X11',
@@ -887,8 +887,13 @@ hwaccel_features = [
         'func': check_pkg_config('ffnvcodec >= 8.2.15.7'),
     }, {
         'name': '--cuda-hwaccel',
-        'desc': 'CUDA hwaccel',
-        'deps': '(gl || vulkan) && ffnvcodec',
+        'desc': 'CUDA acceleration',
+        'deps': 'ffnvcodec',
+        'func': check_true,
+    }, {
+        'name': '--cuda-interop',
+        'desc': 'CUDA with graphics interop',
+        'deps': '(gl || vulkan) && cuda-hwaccel',
         'func': check_true,
     }, {
         'name': '--rpi-mmal',
@@ -905,11 +910,6 @@ standalone_features = [
         'deps': 'os-win32 || !(!(os-cygwin))',
         'func': check_ctx_vars('WINDRES')
     }, {
-        'name': '--apple-remote',
-        'desc': 'Apple Remote support',
-        'deps': 'cocoa',
-        'func': check_true
-    }, {
         'name': '--macos-touchbar',
         'desc': 'macOS Touch Bar support',
         'deps': 'cocoa',
@@ -924,10 +924,20 @@ standalone_features = [
         'deps': 'cocoa',
         'func': check_macos_sdk('10.11')
     }, {
+        'name': '--macos-10-12-2-features',
+        'desc': 'macOS 10.12.2 SDK Features',
+        'deps': 'cocoa',
+        'func': check_macos_sdk('10.12.2')
+    }, {
         'name': '--macos-10-14-features',
         'desc': 'macOS 10.14 SDK Features',
         'deps': 'cocoa',
         'func': check_macos_sdk('10.14')
+    },{
+        'name': '--macos-media-player',
+        'desc': 'macOS Media Player support',
+        'deps': 'macos-10-12-2-features && swift',
+        'func': check_true
     }, {
         'name': '--macos-cocoa-cb',
         'desc': 'macOS libmpv backend',
@@ -940,6 +950,7 @@ _INSTALL_DIRS_LIST = [
     ('confdir', '${SYSCONFDIR}/mpv',  'configuration files'),
     ('zshdir',  '${DATADIR}/zsh/site-functions', 'zsh completion functions'),
     ('confloaddir', '${CONFDIR}', 'configuration files load directory'),
+    ('bashdir', '${DATADIR}/bash-completion/completions', 'bash completion functions'),
 ]
 
 def options(opt):

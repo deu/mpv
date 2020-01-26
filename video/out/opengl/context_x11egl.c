@@ -28,6 +28,8 @@
 #include "oml_sync.h"
 #include "utils.h"
 
+#define EGL_PLATFORM_X11_EXT 0x31D5
+
 struct priv {
     GL gl;
     EGLDisplay egl_display;
@@ -44,12 +46,9 @@ static void mpegl_uninit(struct ra_ctx *ctx)
     struct priv *p = ctx->priv;
     ra_gl_ctx_uninit(ctx);
 
-    if (p->egl_context) {
-        eglMakeCurrent(p->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                       EGL_NO_CONTEXT);
-        eglDestroyContext(p->egl_display, p->egl_context);
-    }
-    p->egl_context = EGL_NO_CONTEXT;
+    eglMakeCurrent(p->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
+                   EGL_NO_CONTEXT);
+    eglTerminate(p->egl_display);
     vo_x11_uninit(ctx->vo);
 }
 
@@ -104,8 +103,9 @@ static bool mpegl_init(struct ra_ctx *ctx)
     if (!vo_x11_init(vo))
         goto uninit;
 
-    p->egl_display = eglGetPlatformDisplay(EGL_PLATFORM_X11_KHR,
-                                           vo->x11->display, NULL);
+    p->egl_display = mpegl_get_display(EGL_PLATFORM_X11_EXT,
+                                       "EGL_EXT_platform_x11",
+                                        vo->x11->display);
     if (!eglInitialize(p->egl_display, NULL, NULL)) {
         MP_MSG(ctx, msgl, "Could not initialize EGL.\n");
         goto uninit;
@@ -120,12 +120,16 @@ static bool mpegl_init(struct ra_ctx *ctx)
     if (!mpegl_create_context_cb(ctx, p->egl_display, cb, &p->egl_context, &config))
         goto uninit;
 
-    int vID, n;
+    int cid, vID, n;
+    if (!eglGetConfigAttrib(p->egl_display, config, EGL_CONFIG_ID, &cid)) {
+        MP_FATAL(ctx, "Getting EGL_CONFIG_ID failed!\n");
+        goto uninit;
+    }
     if (!eglGetConfigAttrib(p->egl_display, config, EGL_NATIVE_VISUAL_ID, &vID)) {
         MP_FATAL(ctx, "Getting X visual ID failed!\n");
         goto uninit;
     }
-    MP_VERBOSE(ctx, "chose visual 0x%x\n", vID);
+    MP_VERBOSE(ctx, "Choosing visual EGL config 0x%x, visual ID 0x%x\n", cid, vID);
     XVisualInfo template = {.visualid = vID};
     XVisualInfo *vi = XGetVisualInfo(vo->x11->display, VisualIDMask, &template, &n);
 
