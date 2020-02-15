@@ -17,14 +17,23 @@ a large part of the user interface and APIs.
 
 Also see compatibility.rst.
 
-This document lists changes to them. New changes are added to the top.
+This document lists changes to them. New changes are added to the top. Usually,
+only incompatible or important changes are mentioned. New options/commands/etc.
+are not always listed.
 
 Interface changes
 =================
 
 ::
 
- --- mpv 0.31.1 ---
+ --- mpv 0.33.0 ---
+    - directories in ~/.mpv/scripts/ (or equivalent) now have special semantics
+      (see mpv Lua scripting docs)
+    - names starting with "." in ~/.mpv/scripts/ (or equivalent) are now ignored
+    - js modules: ~~/scripts/modules.js/ is no longer used, global paths can be
+      set with custom init (see docs), dir-scripts first look at <dir>/modules/
+    - the OSX bundle now logs to "~/Library/Logs/mpv.log" by default
+ --- mpv 0.32.0 ---
     - change behavior when using legacy option syntax with options that start
       with two dashes (``--`` instead of a ``-``). Now, using the recommended
       syntax is required for options starting with ``--``, which means an option

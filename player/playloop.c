@@ -49,6 +49,7 @@
 #include "core.h"
 #include "client.h"
 #include "command.h"
+#include "screenshot.h"
 
 // Wait until mp_wakeup_core() is called, since the last time
 // mp_wait_events() was called.
@@ -229,6 +230,8 @@ void reset_playback_state(struct MPContext *mpctx)
         // (Often, but not always, this is redundant and also done elsewhere.)
         if (t->dec)
             t->dec->play_dir = mpctx->play_dir;
+        if (t->d_sub)
+            sub_set_play_dir(t->d_sub, mpctx->play_dir);
     }
 
     mpctx->hrseek_active = false;
@@ -688,7 +691,7 @@ static void handle_update_cache(struct MPContext *mpctx)
     bool force_update = false;
     struct MPOpts *opts = mpctx->opts;
 
-    if (!mpctx->demuxer) {
+    if (!mpctx->demuxer || mpctx->encode_lavc_ctx) {
         clear_underruns(mpctx);
         return;
     }
@@ -723,11 +726,8 @@ static void handle_update_cache(struct MPContext *mpctx)
         // underrun detection.)
         bool output_underrun = false;
 
-        if (mpctx->ao_chain) {
-            output_underrun |=
-                !(mpctx->ao && ao_get_reports_underruns(mpctx->ao)) ||
-                mpctx->ao_chain->underrun;
-        }
+        if (mpctx->ao_chain)
+            output_underrun |= mpctx->ao_chain->underrun;
         if (mpctx->vo_chain)
             output_underrun |= mpctx->vo_chain->underrun;
 
@@ -882,6 +882,10 @@ static void handle_loop_file(struct MPContext *mpctx)
 
     double ab[2];
     if (get_ab_loop_times(mpctx, ab) && mpctx->ab_loop_clip) {
+        if (opts->ab_loop_count > 0) {
+            opts->ab_loop_count--;
+            m_config_notify_change_opt_ptr(mpctx->mconfig, &opts->ab_loop_count);
+        }
         target = ab[0];
         prec = MPSEEK_EXACT;
     } else if (opts->loop_file) {
@@ -1223,6 +1227,8 @@ void run_playloop(struct MPContext *mpctx)
     update_osd_msg(mpctx);
     if (mpctx->video_status == STATUS_EOF)
         update_subtitles(mpctx, mpctx->playback_pts);
+
+    handle_each_frame_screenshot(mpctx);
 
     handle_eof(mpctx);
 

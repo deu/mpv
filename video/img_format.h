@@ -151,6 +151,10 @@ enum mp_imgfmt {
     IMGFMT_Y8,
     IMGFMT_Y16,
 
+    // Planar gray/alpha.
+    IMGFMT_YAP8,
+    IMGFMT_YAP16,
+
     // Packed YUV formats (components are byte-accessed)
     IMGFMT_UYVY,                // U  Y0 V  Y1
 
@@ -187,6 +191,9 @@ enum mp_imgfmt {
 
     // Accessed with bit-shifts, uint32_t units.
     IMGFMT_RGB30,               // 2pad 10r 10g 10b (MSG to LSB)
+
+    // AV_PIX_FMT_PAL8
+    IMGFMT_PAL8,
 
     // Hardware accelerated formats. Plane data points to special data
     // structures, instead of pixel data.

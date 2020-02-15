@@ -444,10 +444,14 @@ int ao_query_and_reset_events(struct ao *ao, int events)
     return atomic_fetch_and(&ao->events_, ~(unsigned)events) & events;
 }
 
-void ao_add_events(struct ao *ao, int events)
+// Returns events that were set by this calls.
+int ao_add_events(struct ao *ao, int events)
 {
-    atomic_fetch_or(&ao->events_, events);
-    ao->wakeup_cb(ao->wakeup_ctx);
+    unsigned prev_events = atomic_fetch_or(&ao->events_, events);
+    unsigned new = events & ~prev_events;
+    if (new)
+        ao->wakeup_cb(ao->wakeup_ctx);
+    return new;
 }
 
 // Request that the player core destroys and recreates the AO. Fully thread-safe.
@@ -462,12 +466,10 @@ void ao_hotplug_event(struct ao *ao)
     ao_add_events(ao, AO_EVENT_HOTPLUG);
 }
 
-void ao_underrun_event(struct ao *ao)
+// Returns whether this call actually set a new underrun flag.
+bool ao_underrun_event(struct ao *ao)
 {
-    // Racy check, but it's just for the message.
-    if (!(atomic_load(&ao->events_) & AO_EVENT_UNDERRUN))
-        MP_WARN(ao, "Device underrun detected.\n");
-    ao_add_events(ao, AO_EVENT_UNDERRUN);
+    return ao_add_events(ao, AO_EVENT_UNDERRUN);
 }
 
 bool ao_chmap_sel_adjust(struct ao *ao, const struct mp_chmap_sel *s,
@@ -528,11 +530,6 @@ const char *ao_get_name(struct ao *ao)
 const char *ao_get_description(struct ao *ao)
 {
     return ao->driver->description;
-}
-
-bool ao_get_reports_underruns(struct ao *ao)
-{
-    return ao->driver->reports_underruns;
 }
 
 bool ao_untimed(struct ao *ao)

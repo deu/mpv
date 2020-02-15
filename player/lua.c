@@ -83,6 +83,7 @@ static const char * const builtin_lua_scripts[][2] = {
 struct script_ctx {
     const char *name;
     const char *filename;
+    const char *path; // NULL if single file
     lua_State *state;
     struct mp_log *log;
     struct mpv_handle *client;
@@ -127,7 +128,7 @@ static int destroy_crap(lua_State *L)
 // This can be used to free temporary C data structures correctly if Lua errors
 // happen.
 // You can't free the talloc context directly; the Lua __gc handler does this.
-// In my cases, talloc_free_children(returnval) will be used to free attached
+// In many cases, talloc_free_children(returnval) will be used to free attached
 // memory in advance when it's known not to be needed anymore (a minor
 // optimization). Freeing it completely must be left to the Lua GC.
 static void *mp_lua_PITA(lua_State *L)
@@ -273,23 +274,38 @@ static int load_scripts(lua_State *L)
     return 0;
 }
 
-static void set_path(lua_State *L)
+static void fuck_lua(lua_State *L, const char *search_path, const char *extra)
 {
     void *tmp = talloc_new(NULL);
 
     lua_getglobal(L, "package"); // package
-    lua_getfield(L, -1, "path"); // package path
-    const char *path = lua_tostring(L, -1);
+    lua_getfield(L, -1, search_path); // package search_path
+    bstr path = bstr0(lua_tostring(L, -1));
+    char *newpath = talloc_strdup(tmp, "");
 
-    char *newpath = talloc_strdup(tmp, path ? path : "");
-    char **luadir = mp_find_all_config_files(tmp, get_mpctx(L)->global, "scripts");
-    for (int i = 0; luadir && luadir[i]; i++) {
-        newpath = talloc_asprintf_append(newpath, ";%s",
-                        mp_path_join(tmp, luadir[i], "?.lua"));
+    // Script-directory paths take priority.
+    if (extra) {
+        newpath = talloc_asprintf_append(newpath, "%s%s",
+                                         newpath[0] ? ";" : "",
+                                         mp_path_join(tmp, extra, "?.lua"));
     }
 
-    lua_pushstring(L, newpath);  // package path newpath
-    lua_setfield(L, -3, "path"); // package path
+    // Unbelievable but true: Lua loads .lua files AND dynamic libraries from
+    // the working directory. This is highly security relevant.
+    // Lua scripts are still supposed to load globally installed libraries, so
+    // try to get by by filtering out any relative paths.
+    while (path.len) {
+        bstr item;
+        bstr_split_tok(path, ";", &item, &path);
+        if (mp_path_is_absolute(item)) {
+            newpath = talloc_asprintf_append(newpath, "%s%.*s",
+                                             newpath[0] ? ";" : "",
+                                             BSTR_P(item));
+        }
+    }
+
+    lua_pushstring(L, newpath);  // package search_path newpath
+    lua_setfield(L, -3, search_path); // package search_path
     lua_pop(L, 2);  // -
 
     talloc_free(tmp);
@@ -348,7 +364,8 @@ static int run_lua(lua_State *L)
 
     assert(lua_gettop(L) == 0);
 
-    set_path(L);
+    fuck_lua(L, "path", ctx->path);
+    fuck_lua(L, "cpath", NULL);
     assert(lua_gettop(L) == 0);
 
     // run this under an error handler that can do backtraces
@@ -362,18 +379,18 @@ static int run_lua(lua_State *L)
     return 0;
 }
 
-static int load_lua(struct mpv_handle *client, const char *fname)
+static int load_lua(struct mp_script_args *args)
 {
-    struct MPContext *mpctx = mp_client_get_core(client);
     int r = -1;
 
     struct script_ctx *ctx = talloc_ptrtype(NULL, ctx);
     *ctx = (struct script_ctx) {
-        .mpctx = mpctx,
-        .client = client,
-        .name = mpv_client_name(client),
-        .log = mp_client_get_log(client),
-        .filename = fname,
+        .mpctx = args->mpctx,
+        .client = args->client,
+        .name = mpv_client_name(args->client),
+        .log = args->log,
+        .filename = args->filename,
+        .path = args->path,
     };
 
     if (LUA_VERSION_NUM != 501 && LUA_VERSION_NUM != 502) {
@@ -450,6 +467,16 @@ static int script_find_config_file(lua_State *L)
     }
     talloc_free(path);
     return 1;
+}
+
+static int script_get_script_directory(lua_State *L)
+{
+    struct script_ctx *ctx = get_ctx(L);
+    if (ctx->path) {
+        lua_pushstring(L, ctx->path);
+        return 1;
+    }
+    return 0;
 }
 
 static int script_suspend(lua_State *L)
@@ -1225,6 +1252,7 @@ static const struct fn_entry main_fns[] = {
     FN_ENTRY(wait_event),
     FN_ENTRY(request_event),
     FN_ENTRY(find_config_file),
+    FN_ENTRY(get_script_directory),
     FN_ENTRY(command),
     FN_ENTRY(commandv),
     FN_ENTRY(command_native),

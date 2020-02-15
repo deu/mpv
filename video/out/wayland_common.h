@@ -26,7 +26,6 @@
 #include "input/event.h"
 
 struct wayland_opts {
-    int frame_offset;
     int disable_vsync;
     int edge_pixels_pointer;
     int edge_pixels_touch;
@@ -71,7 +70,9 @@ struct vo_wayland_state {
     /* State */
     struct mp_rect geometry;
     struct mp_rect window_size;
-    float aspect_ratio;
+    int gcd;
+    int reduced_width;
+    int reduced_height;
     bool configured;
     bool frame_wait;
     bool hidden;
@@ -84,6 +85,8 @@ struct vo_wayland_state {
     int mouse_unscaled_y;
     int scaling;
     int touch_entries;
+    int toplevel_width;
+    int toplevel_height;
     uint32_t pointer_id;
     int display_fd;
     struct wl_callback       *frame_callback;
@@ -148,7 +151,7 @@ void vo_wayland_check_events(struct vo *vo);
 void vo_wayland_uninit(struct vo *vo);
 void vo_wayland_wakeup(struct vo *vo);
 void vo_wayland_wait_events(struct vo *vo, int64_t until_time_us);
-void vo_wayland_wait_frame(struct vo_wayland_state *wl, int frame_offset);
+void vo_wayland_wait_frame(struct vo_wayland_state *wl);
 void wayland_sync_swap(struct vo_wayland_state *wl);
 void vo_wayland_sync_shift(struct vo_wayland_state *wl);
 void queue_new_sync(struct vo_wayland_state *wl);

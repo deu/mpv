@@ -1022,11 +1022,10 @@ Currently this happens only in the following cases:
 - if you manually use ``--player-operation-mode=pseudo-gui`` on the command line
 
 This mode applies options from the builtin profile ``builtin-pseudo-gui``, but
-only if these haven't been set in the user's config file or on the command line.
-Also, for compatibility with the old pseudo-gui behavior, the options in the
-``pseudo-gui`` profile are applied unconditionally. In addition, the profile
-makes sure to enable the pseudo-GUI mode, so that ``--profile=pseudo-gui``
-works like in older mpv releases. The profiles are currently defined as follows:
+only if these haven't been set in the user's config file or on the command line,
+which is the main difference to using ``--profile=builtin-pseudo-gui``.
+
+The profile is currently defined as follows:
 
 ::
 
@@ -1035,6 +1034,14 @@ works like in older mpv releases. The profiles are currently defined as follows:
     force-window=yes
     idle=once
     screenshot-directory=~~desktop/
+
+The ``pseudo-gui`` profile exists for compatibility. The options in the
+``pseudo-gui`` profile are applied unconditionally. In addition, the profile
+makes sure to enable the pseudo-GUI mode, so that ``--profile=pseudo-gui``
+works like in older mpv releases:
+
+::
+
     [pseudo-gui]
     player-operation-mode=pseudo-gui
 
@@ -1242,10 +1249,11 @@ For Windows-specifics, see `FILES ON WINDOWS`_ section.
 
 ``~/.config/mpv/scripts/``
     All files in this directory are loaded as if they were passed to the
-    ``--script`` option. They are loaded in alphabetical order. Directory entries
-    other than files are ignored. Files with unknown extension lead to an
-    initialization error. Files with ``.disable`` extension are ignored. The
-    ``--load-scripts=no`` option disables loading these files.
+    ``--script`` option. They are loaded in alphabetical order.
+
+    The ``--load-scripts=no`` option disables loading these files.
+
+    See `Script location`_ for details.
 
 ``~/.config/mpv/watch_later/``
     Contains temporary config files needed for resuming playback of files with

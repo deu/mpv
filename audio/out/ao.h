@@ -97,7 +97,6 @@ void ao_get_format(struct ao *ao,
                    int *samplerate, int *format, struct mp_chmap *channels);
 const char *ao_get_name(struct ao *ao);
 const char *ao_get_description(struct ao *ao);
-bool ao_get_reports_underruns(struct ao *ao);
 bool ao_untimed(struct ao *ao);
 int ao_play(struct ao *ao, void **data, int samples, int flags);
 int ao_control(struct ao *ao, enum aocontrol cmd, void *arg);
@@ -110,7 +109,7 @@ void ao_resume(struct ao *ao);
 void ao_drain(struct ao *ao);
 bool ao_eof_reached(struct ao *ao);
 int ao_query_and_reset_events(struct ao *ao, int events);
-void ao_add_events(struct ao *ao, int events);
+int ao_add_events(struct ao *ao, int events);
 void ao_unblock(struct ao *ao);
 void ao_request_reload(struct ao *ao);
 void ao_hotplug_event(struct ao *ao);

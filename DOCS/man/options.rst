@@ -358,6 +358,14 @@ Playback Control
     The loop-points can be adjusted at runtime with the corresponding
     properties. See also ``ab-loop`` command.
 
+``--ab-loop-count=<N|inf>``
+    Run A-B loops only N times, then ignore the A-B loop points (default: inf).
+    Every finished loop iteration will decrement this option by 1 (unless it is
+    set to ``inf`` or 0). ``inf`` means that looping goes on forever. If this
+    option is set to 0, A-B looping is ignored, and even the ``ab-loop`` command
+    will not enable looping again (the command will show ``(disabled)`` on the
+    OSD message if both loop points are set, but ``ab-loop-count`` is 0).
+
 ``--ordered-chapters``, ``--no-ordered-chapters``
     Enabled by default.
     Disable support for Matroska ordered chapters. mpv will not load or
@@ -664,6 +672,9 @@ Program Behavior
     can be raised via ``--msg-level`` (the option cannot lower it below the
     forced minimum log level).
 
+    A special case is the macOS bundle, it will create a log file at
+    ``~/Library/Logs/mpv.log`` by default.
+
 ``--config-dir=<path>``
     Force a different configuration directory. If this is set, the given
     directory is used to load configuration files, and all other configuration
@@ -883,7 +894,7 @@ Program Behavior
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but
     only by mpv internally, or mpv-provided scripts, config files, or .desktop
-    files.
+    files. See `PSEUDO GUI MODE`_ for details.
 
 Video
 -----
@@ -2212,7 +2223,7 @@ Subtitles
 
 ``--sub-ass-vsfilter-blur-compat=<yes|no>``
     Scale ``\blur`` tags by video resolution instead of script resolution
-    (enabled by default). This is bug in VSFilter, which according to some,
+    (disabled by default). This is bug in VSFilter, which according to some,
     can't be fixed anymore in the name of compatibility.
 
     Note that this uses the actual video resolution for calculating the
@@ -2332,6 +2343,11 @@ Subtitles
 
     This option changed in mpv 0.23.0. Support for the old syntax was fully
     removed in mpv 0.24.0.
+
+    .. note::
+
+        This works for text subtitle files only. Other types of subtitles (in
+        particular subtitles in mkv files) are always assumed to be UTF-8.
 
 
 ``--sub-fix-timing=<yes|no>``
@@ -3372,7 +3388,8 @@ Demuxer
     position (as it removes past packets that are seek points).
 
     If the end of the file is reached, the remaining unused forward buffer space
-    is "donated" to the backbuffer (unless the backbuffer size is set to 0).
+    is "donated" to the backbuffer (unless the backbuffer size is set to 0, or
+    ``--demuxer-donate-buffer`` is set to ``no``).
     This still limits the total cache usage to the sum of the forward and
     backward cache, and effectively makes better use of the total allowed memory
     budget. (The opposite does not happen: free backward buffer is never
@@ -3383,6 +3400,18 @@ Demuxer
     impression about how much data the backbuffer contains.
 
     See ``--list-options`` for defaults and value range.
+
+``--demuxer-donate-buffer=<yes|no>``
+    Whether to let the back buffer use part of the forward buffer (default: yes).
+    If set to ``yes``, the "donation" behavior described in the option
+    description for ``--demuxer-max-back-bytes`` is enabled. This means the
+    back buffer may use up memory up to the sum of the forward and back buffer
+    options, minus the active size of the forward buffer. If set to ``no``, the
+    options strictly limit the forward and back buffer sizes separately.
+
+    Note that if the end of the file is reached, the buffered data stays the
+    same, even if you seek back within the cache. This is because the back
+    buffer is only reduced when new data is read.
 
 ``--demuxer-seekable-cache=<yes|no|auto>``
     This controls whether seeking can use the demuxer cache (default: auto). If
@@ -4005,13 +4034,14 @@ Software Scaler
     VOs like ``drm`` and ``x11`` will benefit a lot from using ``--sws-fast``.
     You may need to set other options, like ``--sws-scaler``. The builtin
     ``sws-fast`` profile sets this option and some others to gain performance
-    for reduced quality.
+    for reduced quality. Also see ``--sws-allow-zimg``.
 
 ``--sws-allow-zimg=<yes|no>``
     Allow using zimg (if the component using the internal swscale wrapper
-    explicitly allows so). In this case, zimg *may* be used, if the internal
-    zimg wrapper supports the input and output formats. It will silently
-    fall back to libswscale if one of these conditions does not apply.
+    explicitly allows so) (default: yes). In this case, zimg *may* be used, if
+    the internal zimg wrapper supports the input and output formats. It will
+    silently or noisily fall back to libswscale if one of these conditions does
+    not apply.
 
     If zimg is used, the other ``--sws-`` options are ignored, and the
     ``--zimg-`` options are used instead.
@@ -4021,6 +4051,13 @@ Software Scaler
     being used.
 
     Most things which need software conversion can make use of this.
+
+    .. note::
+
+        Do note that zimg *may* be slower than libswscale. Usually,
+        it's faster on x86 platforms, but slower on ARM (due to lack of ARM
+        specific optimizations). The mpv zimg wrapper uses unoptimized repacking
+        for some formats, for which zimg cannot be blamed.
 
 ``--zimg-scaler=<point|bilinear|bicubic|spline16|spline36|lanczos>``
     Zimg luma scaler to use (default: lanczos).
@@ -4208,7 +4245,10 @@ Terminal
     Prepend module name to each console message.
 
 ``--msg-time``
-    Prepend timing information to each console message.
+    Prepend timing information to each console message. The time is in
+    microseconds since the player process was started (technically, slightly
+    later actually), using a monotonic time source depending on the OS. This
+    is ``CLOCK_MONOTONIC`` on sane UNIX variants.
 
 Cache
 -----
@@ -4998,15 +5038,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Currently only relevant for ``--gpu-api=d3d11``.
 
-``--wayland-frame-wait-offset=<-500..3000>``
-    Control the amount of offset (in microseconds) to add to wayland's frame wait
-    (default 1000). The wayland context assumes that if frame callback or presentation
-    feedback isn't received within a certain amount of time then the video is being
-    rendered offscreen. The time it waits is equal to how long it takes your monitor
-    to display a frame (i.e. 1/refresh rate) plus the offset. In general, staying
-    close to your monitor's refresh rate is preferred, but with a small offset in
-    case a frame takes a little long to display.
-
 ``--wayland-disable-vsync=<yes|no>``
     Disable vsync for the wayland contexts (default: no). Useful for benchmarking
     the wayland context when combined with ``video-sync=display-desync``,
@@ -5397,7 +5428,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Windows with ANGLE only.
 
-``--cocoa-force-dedicated-gpu=<yes|no>``
+``--macos-force-dedicated-gpu=<yes|no>``
     Deactivates the automatic graphics switching and forces the dedicated GPU.
     (default: no)
 
