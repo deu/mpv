@@ -64,7 +64,6 @@ struct priv {
     bool use_poll;
     bool regular_file;
     bool appending;
-    int64_t cached_size; // -2: invalid, -1: unknown
     int64_t orig_size;
     struct mp_cancel *cancel;
 };
@@ -76,19 +75,19 @@ struct priv {
 static int64_t get_size(stream_t *s)
 {
     struct priv *p = s->priv;
-    if (p->cached_size == -2) {
-        off_t size = lseek(p->fd, 0, SEEK_END);
-        lseek(p->fd, s->pos, SEEK_SET);
-        p->cached_size = size < 0 ? -1 : size;
+    struct stat st;
+    if (fstat(p->fd, &st) == 0) {
+        if (st.st_size <= 0 && !s->seekable)
+            st.st_size = -1;
+        if (st.st_size >= 0)
+            return st.st_size;
     }
-    return p->cached_size;
+    return -1;
 }
 
 static int fill_buffer(stream_t *s, void *buffer, int max_len)
 {
     struct priv *p = s->priv;
-
-    p->cached_size = -2; // always invalidate cached size
 
 #ifndef __MINGW32__
     if (p->use_poll) {
@@ -247,28 +246,30 @@ static bool check_stream_network(int fd)
 }
 #endif
 
-static int open_f(stream_t *stream)
+static int open_f(stream_t *stream, struct stream_open_args *args)
 {
     struct priv *p = talloc_ptrtype(stream, p);
     *p = (struct priv) {
         .fd = -1,
-        .cached_size = -2,
     };
     stream->priv = p;
     stream->is_local_file = true;
 
+    bool strict_fs = args->flags & STREAM_LOCAL_FS_ONLY;
     bool write = stream->mode == STREAM_WRITE;
     int m = O_CLOEXEC | (write ? O_RDWR | O_CREAT | O_TRUNC : O_RDONLY);
 
-    char *filename = mp_file_url_to_filename(stream, bstr0(stream->url));
-    if (filename) {
-        stream->path = filename;
-    } else {
-        filename = stream->path;
+    char *filename = stream->path;
+    char *url = "";
+    if (!strict_fs) {
+        char *fn = mp_file_url_to_filename(stream, bstr0(stream->url));
+        if (fn)
+            filename = stream->path = fn;
+        url = stream->url;
     }
 
-    bool is_fdclose = strncmp(stream->url, "fdclose://", 10) == 0;
-    if (strncmp(stream->url, "fd://", 5) == 0 || is_fdclose) {
+    bool is_fdclose = strncmp(url, "fdclose://", 10) == 0;
+    if (strncmp(url, "fd://", 5) == 0 || is_fdclose) {
         char *begin = strstr(stream->url, "://") + 3, *end = NULL;
         p->fd = strtol(begin, &end, 0);
         if (!end || end == begin || end[0]) {
@@ -277,7 +278,7 @@ static int open_f(stream_t *stream)
         }
         if (is_fdclose)
             p->close = true;
-    } else if (!strcmp(filename, "-")) {
+    } else if (!strict_fs && !strcmp(filename, "-")) {
         if (!write) {
             MP_INFO(stream, "Reading from stdin...\n");
             p->fd = 0;
@@ -308,7 +309,8 @@ static int open_f(stream_t *stream)
     if (fstat(p->fd, &st) == 0) {
         if (S_ISDIR(st.st_mode)) {
             stream->is_directory = true;
-            MP_INFO(stream, "This is a directory - adding to playlist.\n");
+            if (!(args->flags & STREAM_LESS_NOISE))
+                MP_INFO(stream, "This is a directory - adding to playlist.\n");
         } else if (S_ISREG(st.st_mode)) {
             p->regular_file = true;
 #ifndef __MINGW32__
@@ -352,9 +354,17 @@ static int open_f(stream_t *stream)
 
 const stream_info_t stream_info_file = {
     .name = "file",
-    .open = open_f,
-    .protocols = (const char*const[]){ "file", "", "fd", "fdclose",
-                                       "appending", NULL },
+    .open2 = open_f,
+    .protocols = (const char*const[]){ "file", "", "appending", NULL },
     .can_write = true,
+    .local_fs = true,
     .stream_origin = STREAM_ORIGIN_FS,
+};
+
+const stream_info_t stream_info_fd = {
+    .name = "fd",
+    .open2 = open_f,
+    .protocols = (const char*const[]){ "fd", "fdclose", NULL },
+    .can_write = true,
+    .stream_origin = STREAM_ORIGIN_UNSAFE,
 };

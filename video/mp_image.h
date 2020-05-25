@@ -51,6 +51,7 @@ struct mp_image_params {
     // The image should be rotated clockwise (0-359 degrees).
     int rotate;
     enum mp_stereo3d_mode stereo3d; // image is encoded with this mode
+    enum mp_alpha_type alpha;   // usually auto; only set if explicitly known
 };
 
 /* Memory management:
@@ -136,6 +137,8 @@ void mp_image_setrefp(struct mp_image **p_img, struct mp_image *new_value);
 void mp_image_unrefp(struct mp_image **p_img);
 
 void mp_image_clear(struct mp_image *mpi, int x0, int y0, int x1, int y1);
+void mp_image_clear_rc(struct mp_image *mpi, struct mp_rect rc);
+void mp_image_clear_rc_inv(struct mp_image *mpi, struct mp_rect rc);
 void mp_image_crop(struct mp_image *img, int x0, int y0, int x1, int y1);
 void mp_image_crop_rc(struct mp_image *img, struct mp_rect rc);
 void mp_image_vflip(struct mp_image *img);
@@ -183,5 +186,9 @@ void memcpy_pic(void *dst, const void *src, int bytesPerLine, int height,
                 int dstStride, int srcStride);
 void memset_pic(void *dst, int fill, int bytesPerLine, int height, int stride);
 void memset16_pic(void *dst, int fill, int unitsPerLine, int height, int stride);
+
+void *mp_image_pixel_ptr(struct mp_image *img, int plane, int x, int y);
+void *mp_image_pixel_ptr_ny(struct mp_image *img, int plane, int x, int y);
+size_t mp_image_plane_bytes(struct mp_image *img, int plane, int x0, int w);
 
 #endif /* MPLAYER_MP_IMAGE_H */

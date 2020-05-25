@@ -30,6 +30,8 @@ struct playlist_entry {
     struct playlist *pl;
     int pl_index;
 
+    uint64_t id;
+
     char *filename;
 
     struct playlist_param *params;
@@ -71,6 +73,8 @@ struct playlist {
     // current_was_replaced is set to true.
     struct playlist_entry *current;
     bool current_was_replaced;
+
+    uint64_t id_alloc;
 };
 
 void playlist_entry_add_param(struct playlist_entry *e, bstr name, bstr value);
@@ -99,8 +103,8 @@ struct playlist_entry *playlist_entry_get_rel(struct playlist_entry *e,
 void playlist_add_base_path(struct playlist *pl, bstr base_path);
 void playlist_add_redirect(struct playlist *pl, const char *redirected_from);
 void playlist_set_stream_flags(struct playlist *pl, int flags);
-void playlist_transfer_entries(struct playlist *pl, struct playlist *source_pl);
-void playlist_append_entries(struct playlist *pl, struct playlist *source_pl);
+int64_t playlist_transfer_entries(struct playlist *pl, struct playlist *source_pl);
+int64_t playlist_append_entries(struct playlist *pl, struct playlist *source_pl);
 
 int playlist_entry_to_index(struct playlist *pl, struct playlist_entry *e);
 int playlist_entry_count(struct playlist *pl);

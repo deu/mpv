@@ -45,9 +45,11 @@
 #define OPT_BASE_STRUCT struct wayland_opts
 const struct m_sub_options wayland_conf = {
     .opts = (const struct m_option[]) {
-        OPT_FLAG("wayland-disable-vsync", disable_vsync, 0),
-        OPT_INTRANGE("wayland-edge-pixels-pointer", edge_pixels_pointer, 10, 0, INT_MAX),
-        OPT_INTRANGE("wayland-edge-pixels-touch", edge_pixels_touch, 64, 0, INT_MAX),
+        {"wayland-disable-vsync", OPT_FLAG(disable_vsync)},
+        {"wayland-edge-pixels-pointer", OPT_INT(edge_pixels_pointer),
+            M_RANGE(0, INT_MAX)},
+        {"wayland-edge-pixels-touch", OPT_INT(edge_pixels_touch),
+            M_RANGE(0, INT_MAX)},
         {0},
     },
     .size = sizeof(struct wayland_opts),
@@ -242,6 +244,8 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
             xdg_toplevel_resize(wl->xdg_toplevel, wl->seat, serial, edges);
         else
             window_move(wl, serial);
+        // Explictly send an UP event after the client finishes a move/resize
+        mp_input_put_key(wl->vo->input_ctx, button | MP_KEY_STATE_UP);
     }
 }
 
@@ -249,9 +253,8 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
                                 uint32_t time, uint32_t axis, wl_fixed_t value)
 {
     struct vo_wayland_state *wl = data;
-    if (wl_fixed_to_double(value) == 0)
-        return;
-    double val = wl_fixed_to_double(value)/abs(wl_fixed_to_double(value));
+
+    double val = wl_fixed_to_double(value) < 0 ? -1 : 1;
     switch (axis) {
     case WL_POINTER_AXIS_VERTICAL_SCROLL:
         if (value > 0)
@@ -631,6 +634,8 @@ static void output_handle_done(void* data, struct wl_output *wl_output)
                "\tHz: %f\n", o->make, o->model, o->id, o->geometry.x0,
                o->geometry.y0, mp_rect_w(o->geometry), o->phys_width,
                mp_rect_h(o->geometry), o->phys_height, o->scale, o->refresh_rate);
+    
+    o->wl->pending_vo_events |= VO_EVENT_WIN_STATE;
 }
 
 static void output_handle_scale(void* data, struct wl_output *wl_output,
@@ -824,8 +829,8 @@ static void pres_set_clockid(void *data, struct wp_presentation *pres,
 {
     struct vo_wayland_state *wl = data;
     
-    wl->presentation = pres;
-    clockid = CLOCK_MONOTONIC;
+    if (clockid == CLOCK_MONOTONIC)
+        wl->presentation = pres;
 }
 
 static const struct wp_presentation_listener pres_listener = {
@@ -1262,15 +1267,27 @@ void vo_wayland_uninit(struct vo *vo)
     vo->wl = NULL;
 }
 
-static struct vo_wayland_output *find_output(struct vo_wayland_state *wl, int index)
+static bool find_output(struct vo_wayland_state *wl, int index)
 {
     int screen_id = 0;
-    struct vo_wayland_output *output;
+    struct vo_wayland_output *output = NULL;
+    struct vo_wayland_output *fallback_output = NULL;
     wl_list_for_each(output, &wl->output_list, link) {
+        if (screen_id == 0)
+            fallback_output = output;
         if (index == screen_id++)
-            return output;
+            wl->current_output = output;
     }
-    return NULL;
+    if (!wl->current_output) {
+        if (!fallback_output) {
+            MP_ERR(wl, "Screen index %i not found/unavailable!\n", index);
+            return 1;
+        } else {
+            MP_WARN(wl, "Screen index %i not found/unavailable! Falling back to screen 0!\n", index);
+            wl->current_output = fallback_output;
+        }
+    }
+    return 0;
 }
 
 static void greatest_common_divisor(struct vo_wayland_state *wl, int a, int b) {
@@ -1302,20 +1319,11 @@ int vo_wayland_reconfig(struct vo *vo)
         int idx = 0;
         if (wl->vo_opts->fullscreen && (wl->vo_opts->fsscreen_id >= 0))
             idx = wl->vo_opts->fsscreen_id;
-        struct vo_wayland_output *out = find_output(wl, idx);
-        if (!out) {
-            MP_WARN(wl, "Screen index %i not found/unavailable! Falling back to screen 0!\n", idx);
-            out = find_output(wl, 0);
-        }
-        if (!out) {
-            MP_ERR(wl, "Screen index %i not found/unavailable!\n", idx);
+        if (find_output(wl, idx))
             return false;
-        } else {
-            wl->current_output = out;
-            if (!wl->vo_opts->hidpi_window_scale)
-                out->scale = 1;
-            wl->scaling = out->scale;
-        }
+        if (!wl->vo_opts->hidpi_window_scale)
+            wl->current_output->scale = 1;
+        wl->scaling = wl->current_output->scale;
     }
 
     struct vo_win_geometry geo;
@@ -1323,7 +1331,7 @@ int vo_wayland_reconfig(struct vo *vo)
     vo_calc_window_geometry(vo, &screenrc, &geo);
     vo_apply_window_geometry(vo, &geo);
 
-    if (!wl->configured || !wl->vo_opts->window_maximized) {
+    if (!wl->configured) {
         wl->geometry.x0 = 0;
         wl->geometry.y0 = 0;
         wl->geometry.x1 = vo->dwidth  / wl->scaling;
@@ -1335,19 +1343,10 @@ int vo_wayland_reconfig(struct vo *vo)
     wl->reduced_width = vo->dwidth / wl->gcd;
     wl->reduced_height = vo->dheight / wl->gcd;
 
-    if (wl->vo_opts->fullscreen) {
-        /* If already fullscreen, fix resolution for the frame size change */
-        if (wl->current_output) {
-            wl->geometry.x0  = 0;
-            wl->geometry.y0  = 0;
-            wl->geometry.x1  = mp_rect_w(wl->current_output->geometry)/wl->scaling;
-            wl->geometry.y1  = mp_rect_h(wl->current_output->geometry)/wl->scaling;
-        }
-        if (wl->vo_opts->fsscreen_id < 0) {
-            xdg_toplevel_set_fullscreen(wl->xdg_toplevel, NULL);
-        } else {
-            xdg_toplevel_set_fullscreen(wl->xdg_toplevel, wl->current_output->output);
-        }
+    if (wl->vo_opts->fullscreen && wl->vo_opts->fsscreen_id < 0) {
+        xdg_toplevel_set_fullscreen(wl->xdg_toplevel, NULL);
+    } else if (wl->vo_opts->fullscreen && wl->vo_opts->fsscreen_id >= 0) {
+        xdg_toplevel_set_fullscreen(wl->xdg_toplevel, wl->current_output->output);
     }
 
     if (wl->vo_opts->window_maximized)
@@ -1391,10 +1390,14 @@ static void toggle_fullscreen(struct vo_wayland_state *wl)
 {
     if (!wl->xdg_toplevel)
         return;
-    if (wl->vo_opts->fullscreen)
+    if (wl->vo_opts->fullscreen && wl->vo_opts->fsscreen_id < 0) {
         xdg_toplevel_set_fullscreen(wl->xdg_toplevel, NULL);
-    else
+    } else if (wl->vo_opts->fullscreen && wl->vo_opts->fsscreen_id >= 0) {
+        find_output(wl, wl->vo_opts->fsscreen_id);
+        xdg_toplevel_set_fullscreen(wl->xdg_toplevel, wl->current_output->output);
+    } else {
         xdg_toplevel_unset_fullscreen(wl->xdg_toplevel);
+    }
 }
 
 static void toggle_maximized(struct vo_wayland_state *wl)
@@ -1580,16 +1583,19 @@ void queue_new_sync(struct vo_wayland_state *wl)
 void wayland_sync_swap(struct vo_wayland_state *wl)
 {
     int index = wl->sync_size - 1;
+    int64_t mp_time = mp_time_us();
 
     wl->last_skipped_vsyncs = 0;
 
-    // If these are the same (can happen if a frame takes too long), update
-    // the ust/msc/sbc based on when the next frame is expected to arrive.
+    // If these are the same, presentation feedback has not been received.
+    // This will happen if the window is obscured/hidden in some way. Update
+    // the values based on the difference in mp_time.
     if (wl->sync[index].ust == wl->last_ust && wl->last_ust) {
-        wl->sync[index].ust += wl->sync[index].refresh_usec;
+        wl->sync[index].ust += mp_time - wl->sync[index].last_mp_time;
         wl->sync[index].msc += 1;
         wl->sync[index].sbc += 1;
     }
+    wl->sync[index].last_mp_time = mp_time;
 
     int64_t ust_passed = wl->sync[index].ust ? wl->sync[index].ust - wl->last_ust: 0;
     wl->last_ust = wl->sync[index].ust;
@@ -1608,7 +1614,7 @@ void wayland_sync_swap(struct vo_wayland_state *wl)
         }
 
         uint64_t now_monotonic = ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
-        uint64_t ust_mp_time = mp_time_us() - (now_monotonic - wl->sync[index].ust);
+        uint64_t ust_mp_time = mp_time - (now_monotonic - wl->sync[index].ust);
         wl->last_sbc_mp_time = ust_mp_time;
     }
 
@@ -1648,26 +1654,6 @@ void vo_wayland_wait_frame(struct vo_wayland_state *wl)
 
         wl_display_read_events(wl->display);
         wl_display_roundtrip(wl->display);
-    }
-
-    if (wl->frame_wait) {
-        if (!wl->hidden) {
-            wl->timeout_count += 1;
-        } else {
-            wl->timeout_count = 0;
-        }
-    } else {
-        if (wl->hidden) {
-            wl->timeout_count -= 1;
-        } else {
-            wl->timeout_count = 0;
-        }
-    }
-    
-    if (wl->timeout_count > wl->current_output->refresh_rate) {
-        wl->hidden = true;
-    } else if (wl->timeout_count < -1*wl->current_output->refresh_rate) {
-        wl->hidden = false;
     }
 }
 

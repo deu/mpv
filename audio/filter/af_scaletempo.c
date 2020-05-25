@@ -30,6 +30,7 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <float.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -537,7 +538,8 @@ static void reset(struct mp_filter *f)
     s->bytes_queued = 0;
     s->bytes_to_slide = 0;
     s->frames_stride_error = 0;
-    memset(s->buf_overlap, 0, s->bytes_overlap);
+    if (s->buf_overlap && s->bytes_overlap)
+        memset(s->buf_overlap, 0, s->bytes_overlap);
     TA_FREEP(&s->in);
 }
 
@@ -608,15 +610,15 @@ const struct mp_user_filter_entry af_scaletempo = {
             .scale_nominal = 1.0,
         },
         .options = (const struct m_option[]) {
-            OPT_FLOAT("scale", scale_nominal, M_OPT_MIN, .min = 0.01),
-            OPT_FLOAT("stride", ms_stride, M_OPT_MIN, .min = 0.01),
-            OPT_FLOAT("overlap", percent_overlap, M_OPT_RANGE, .min = 0, .max = 1),
-            OPT_FLOAT("search", ms_search, M_OPT_MIN, .min = 0),
-            OPT_CHOICE("speed", speed_opt, 0,
-                       ({"pitch", SCALE_PITCH},
-                        {"tempo", SCALE_TEMPO},
-                        {"none", 0},
-                        {"both", SCALE_TEMPO | SCALE_PITCH})),
+            {"scale", OPT_FLOAT(scale_nominal), M_RANGE(0.01, DBL_MAX)},
+            {"stride", OPT_FLOAT(ms_stride), M_RANGE(0.01, DBL_MAX)},
+            {"overlap", OPT_FLOAT(percent_overlap), M_RANGE(0, 1)},
+            {"search", OPT_FLOAT(ms_search), M_RANGE(0, DBL_MAX)},
+            {"speed", OPT_CHOICE(speed_opt,
+                {"pitch", SCALE_PITCH},
+                {"tempo", SCALE_TEMPO},
+                {"none", 0},
+                {"both", SCALE_TEMPO | SCALE_PITCH})},
             {0}
         },
     },

@@ -128,10 +128,18 @@ class CocoaCB: NSObject {
 
         titleBar = TitleBar(frame: wr, window: window, cocoaCB: self)
 
+        let minimized = Bool(opts.window_minimized)
         window.isRestorable = false
         window.isReleasedWhenClosed = false
+        window.setMaximized(minimized ? false : Bool(opts.window_maximized))
+        window.setMinimized(minimized)
         window.makeMain()
-        window.makeKeyAndOrderFront(nil)
+        window.makeKey()
+
+        if !minimized {
+            window.orderFront(nil)
+        }
+
         NSApp.activate(ignoringOtherApps: true)
 
         if Bool(opts.fullscreen) {
@@ -355,7 +363,7 @@ class CocoaCB: NSObject {
             let displayID = ccb.window?.screen?.displayID ?? display
 
             if displayID == display {
-                ccb.libmpv.sendVerbose("Detected display mode change, updating screen refresh rate");
+                ccb.libmpv.sendVerbose("Detected display mode change, updating screen refresh rate")
                 ccb.flagEvents(VO_EVENT_WIN_STATE)
             }
         }
@@ -490,7 +498,7 @@ class CocoaCB: NSObject {
                              ccb.getTargetScreen(forFullscreen: false)?.backingScaleFactor ??
                              NSScreen.main?.backingScaleFactor ?? 1.0
                 scaleFactor.pointee = Double(factor)
-                return VO_TRUE;
+                return VO_TRUE
             }
             return VO_FALSE
         case VOCTRL_RESTORE_SCREENSAVER:
@@ -508,6 +516,17 @@ class CocoaCB: NSObject {
                 return VO_TRUE
             }
             return VO_FALSE
+        case VOCTRL_GET_UNFS_WINDOW_SIZE:
+            let sizeData = data?.assumingMemoryBound(to: Int32.self)
+            let size = UnsafeMutableBufferPointer(start: sizeData, count: 2)
+            var rect = ccb.window?.unfsContentFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 720)
+            if let screen = ccb.window?.currentScreen, !Bool(ccb.mpv?.opts.hidpi_window_scale ?? 0) {
+                rect = screen.convertRectToBacking(rect)
+            }
+
+            size[0] = Int32(rect.size.width)
+            size[1] = Int32(rect.size.height)
+            return VO_TRUE
         case VOCTRL_SET_UNFS_WINDOW_SIZE:
             if let sizeData = data?.assumingMemoryBound(to: Int32.self) {
                 let size = UnsafeBufferPointer(start: sizeData, count: 2)
@@ -539,7 +558,8 @@ class CocoaCB: NSObject {
         case VOCTRL_UPDATE_WINDOW_TITLE:
             if let titleData = data?.assumingMemoryBound(to: Int8.self) {
                 DispatchQueue.main.async {
-                    ccb.title = String(cString: titleData)
+                    let title = NSString(utf8String: titleData) as String?
+                    ccb.title = title ?? "Unknown Title"
                 }
                 return VO_TRUE
             }

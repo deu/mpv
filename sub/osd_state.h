@@ -23,6 +23,8 @@ struct ass_state {
     struct ass_renderer *render;
     struct ass_library *library;
     int res_x, res_y;
+    bool changed;
+    struct mp_osd_res vo_res; // last known value
 };
 
 struct osd_object {
@@ -47,11 +49,13 @@ struct osd_object {
     // VO cache state
     int vo_change_id;
     struct mp_osd_res vo_res;
+    bool vo_had_output;
 
     // Internally used by osd_libass.c
     bool changed;
     struct ass_state ass;
     struct mp_ass_packer *ass_packer;
+    struct sub_bitmap_copy_cache *copy_cache;
     struct ass_image **ass_imgs;
 };
 
@@ -75,13 +79,14 @@ struct osd_state {
     struct mp_osd_render_opts *opts;
     struct mpv_global *global;
     struct mp_log *log;
+    struct stats_ctx *stats;
 
     struct mp_draw_sub_cache *draw_cache;
 };
 
-// defined in osd_libass.c and osd_dummy.c
-void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
-                            int format, struct sub_bitmaps *out_imgs);
+// defined in osd_libass.c
+struct sub_bitmaps *osd_object_get_bitmaps(struct osd_state *osd,
+                                           struct osd_object *obj, int format);
 void osd_init_backend(struct osd_state *osd);
 void osd_destroy_backend(struct osd_state *osd);
 

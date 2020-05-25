@@ -165,12 +165,19 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 
 ``mp.command_native_async(table [,fn])``
     Like ``mp.command_native()``, but the command is ran asynchronously (as far
-    as possible), and upon completion, fn is called. fn has two arguments:
-    ``fn(success, result, error)``. ``success`` is always a Boolean and is true
-    if the command was successful, otherwise false. The second parameter is
-    the result value (can be nil) in case of success, nil otherwise (as returned
-    by ``mp.command_native()``). The third parameter is the error string in case
-    of an error, nil otherwise.
+    as possible), and upon completion, fn is called. fn has three arguments:
+    ``fn(success, result, error)``:
+
+         ``success``
+            Always a Boolean and is true if the command was successful,
+            otherwise false.
+
+        ``result``
+            The result value (can be nil) in case of success, nil otherwise (as
+            returned by ``mp.command_native()``).
+
+        ``error``
+            The error string in case of an error, nil otherwise.
 
     Returns a table with undefined contents, which can be used as argument for
     ``mp.abort_async_command``.
@@ -294,21 +301,22 @@ The ``mp`` module is preloaded, although it can be loaded manually with
             argument being a table. This table has the following entries (and
             may contain undocumented ones):
 
-            ``event``
-                Set to one of the strings ``down``, ``repeat``, ``up`` or
-                ``press`` (the latter if key up/down can't be tracked).
+                ``event``
+                    Set to one of the strings ``down``, ``repeat``, ``up`` or
+                    ``press`` (the latter if key up/down can't be tracked).
 
-            ``is_mouse``
-                Boolean Whether the event was caused by a mouse button.
+                ``is_mouse``
+                    Boolean Whether the event was caused by a mouse button.
 
-            ``key_name``
-                The name of they key that triggered this, or ``nil`` if invoked
-                artificially. If the key name is unknown, it's an empty string.
+                ``key_name``
+                    The name of they key that triggered this, or ``nil`` if
+                    invoked artificially. If the key name is unknown, it's an
+                    empty string.
 
-            ``key_text``
-                Text if triggered by a text key, otherwise ``nil``. See
-                description of ``script-binding`` command for details (this
-                field is equivalent to the 5th argument).
+                ``key_text``
+                    Text if triggered by a text key, otherwise ``nil``. See
+                    description of ``script-binding`` command for details (this
+                    field is equivalent to the 5th argument).
 
     Internally, key bindings are dispatched via the ``script-message-to`` or
     ``script-binding`` input commands and ``mp.register_script_message``.
@@ -591,6 +599,7 @@ are useful only in special situations.
     ``update()``
         Commit the OSD overlay to the screen, or in other words, run the
         ``osd-overlay`` command with the current fields of the overlay table.
+        Returns the result of the ``osd-overlay`` command itself.
 
     ``remove()``
         Remove the overlay from the screen. A ``update()`` call will add it
@@ -775,7 +784,7 @@ strictly part of the guaranteed API.
 
 ``utils.join_path(p1, p2)``
     Return the concatenation of the 2 paths. Tries to be clever. For example,
-    if ```p2`` is an absolute path, p2 is returned without change.
+    if ``p2`` is an absolute path, ``p2`` is returned without change.
 
 ``utils.subprocess(t)``
     Runs an external process and waits until it exits. Returns process status
@@ -862,116 +871,7 @@ Example:
 
     mp.register_event("file-loaded", my_fn)
 
-
-
-List of events
---------------
-
-``start-file``
-    Happens right before a new file is loaded. When you receive this, the
-    player is loading the file (or possibly already done with it).
-
-``end-file``
-    Happens after a file was unloaded. Typically, the player will load the
-    next file right away, or quit if this was the last file.
-
-    The event has the ``reason`` field, which takes one of these values:
-
-    ``eof``
-        The file has ended. This can (but doesn't have to) include
-        incomplete files or broken network connections under
-        circumstances.
-
-    ``stop``
-        Playback was ended by a command.
-
-    ``quit``
-        Playback was ended by sending the quit command.
-
-    ``error``
-        An error happened. In this case, an ``error`` field is present with
-        the error string.
-
-    ``redirect``
-        Happens with playlists and similar. Details see
-        ``MPV_END_FILE_REASON_REDIRECT`` in the C API.
-
-    ``unknown``
-        Unknown. Normally doesn't happen, unless the Lua API is out of sync
-        with the C API. (Likewise, it could happen that your script gets
-        reason strings that did not exist yet at the time your script was
-        written.)
-
-``file-loaded``
-    Happens after a file was loaded and begins playback.
-
-``seek``
-    Happens on seeking. (This might include cases when the player seeks
-    internally, even without user interaction. This includes e.g. segment
-    changes when playing ordered chapters Matroska files.)
-
-``playback-restart``
-    Start of playback after seek or after file was loaded.
-
-``idle``
-    Idle mode is entered. This happens when playback ended, and the player was
-    started with ``--idle`` or ``--force-window``. This mode is implicitly ended
-    when the ``start-file`` or ``shutdown`` events happen.
-
-``tick``
-    Called after a video frame was displayed. This is a hack, and you should
-    avoid using it. Use timers instead and maybe watch pausing/unpausing events
-    to avoid wasting CPU when the player is paused.
-
-``shutdown``
-    Sent when the player quits, and the script should terminate. Normally
-    handled automatically. See `Details on the script initialization and lifecycle`_.
-
-``log-message``
-    Receives messages enabled with ``mp.enable_messages``. The message data
-    is contained in the table passed as first parameter to the event handler.
-    The table contains, in addition to the default event fields, the following
-    fields:
-
-    ``prefix``
-        The module prefix, identifies the sender of the message. This is what
-        the terminal player puts in front of the message text when using the
-        ``--v`` option, and is also what is used for ``--msg-level``.
-
-    ``level``
-        The log level as string. See ``msg.log`` for possible log level names.
-        Note that later versions of mpv might add new levels or remove
-        (undocumented) existing ones.
-
-    ``text``
-        The log message. The text will end with a newline character. Sometimes
-        it can contain multiple lines.
-
-    Keep in mind that these messages are meant to be hints for humans. You
-    should not parse them, and prefix/level/text of messages might change
-    any time.
-
-``get-property-reply``
-    Undocumented (not useful for Lua scripts).
-
-``set-property-reply``
-    Undocumented (not useful for Lua scripts).
-
-``command-reply``
-    Undocumented (not useful for Lua scripts).
-
-``client-message``
-    Undocumented (used internally).
-
-``video-reconfig``
-    Happens on video output or filter reconfig.
-
-``audio-reconfig``
-    Happens on audio output or filter reconfig.
-
-The following events also happen, but are deprecated: ``tracks-changed``,
-``track-switched``, ``pause``, ``unpause``, ``metadata-update``,
-``chapter-change``. Use ``mp.observe_property()`` instead.
+For the existing event types, see `List of events`_.
 
 Extras
 ------

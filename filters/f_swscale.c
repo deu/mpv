@@ -43,6 +43,8 @@
 int mp_sws_find_best_out_format(struct mp_sws_filter *sws, int in_format,
                                 int *out_formats, int num_out_formats)
 {
+    sws->sws->force_scaler = sws->force_scaler;
+
     int best = 0;
     for (int n = 0; n < num_out_formats; n++) {
         int out_format = out_formats[n];
@@ -73,6 +75,8 @@ static void process(struct mp_filter *f)
     if (!mp_pin_can_transfer_data(f->ppins[1], f->ppins[0]))
         return;
 
+    s->sws->force_scaler = s->force_scaler;
+
     struct mp_frame frame = mp_pin_out_read(f->ppins[0]);
     if (mp_frame_is_signaling(frame)) {
         mp_pin_in_write(f->ppins[1], frame);
@@ -102,11 +106,11 @@ static void process(struct mp_filter *f)
 
     mp_image_copy_attributes(dst, src);
 
-    // If we convert from RGB to YUV, default to limited range.
+    // If we convert from RGB to YUV, guess a default.
     if (mp_imgfmt_get_forced_csp(src->imgfmt) == MP_CSP_RGB &&
         mp_imgfmt_get_forced_csp(dst->imgfmt) == MP_CSP_AUTO)
     {
-        dst->params.color.levels = MP_CSP_LEVELS_TV;
+        dst->params.color.levels = MP_CSP_LEVELS_AUTO;
     }
     if (s->use_out_params)
         dst->params = s->out_params;

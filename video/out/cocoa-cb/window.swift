@@ -337,7 +337,7 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     func aspectFit(rect r: NSRect, in rTarget: NSRect) -> NSRect {
-        var s = rTarget.width / r.width;
+        var s = rTarget.width / r.width
         if r.height*s > rTarget.height {
             s = rTarget.height / r.height
         }
@@ -497,6 +497,10 @@ class Window: NSWindow, NSWindowDelegate {
     func windowDidEndLiveResize(_ notification: Notification) {
         cocoaCB.layer?.inLiveResize = false
         cocoaCB.mpv?.setConfigProperty(maximized: isZoomed)
+
+        if let contentViewFrame = contentView?.frame, !isAnimating {
+            unfsContentFrame = convertToScreen(contentViewFrame)
+        }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {

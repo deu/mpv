@@ -50,11 +50,6 @@
 #include "filter_internal.h"
 #include "user_filters.h"
 
-#if LIBAVFILTER_VERSION_MICRO < 100
-#define av_buffersink_get_frame_flags(a, b, c) av_buffersink_get_frame(a, b)
-#define AV_BUFFERSINK_FLAG_NO_REQUEST 0
-#endif
-
 struct lavfi {
     struct mp_log *log;
     struct mp_filter *f;
@@ -309,7 +304,6 @@ static void precreate_graph(struct lavfi *c, bool first_init)
 error:
     free_graph(c);
     c->failed = true;
-    mp_filter_internal_mark_failed(c->f);
     return;
 }
 
@@ -523,19 +517,16 @@ static bool init_pads(struct lavfi *c)
 error:
     MP_FATAL(c, "could not initialize filter pads\n");
     c->failed = true;
-    mp_filter_internal_mark_failed(c->f);
     return false;
 }
 
 static void dump_graph(struct lavfi *c)
 {
-#if LIBAVFILTER_VERSION_MICRO >= 100
     MP_DBG(c, "Filter graph:\n");
     char *s = avfilter_graph_dump(c->graph, NULL);
     if (s)
         MP_DBG(c, "%s\n", s);
     av_free(s);
-#endif
 }
 
 // Initialize the graph if all inputs have formats set. If it's already
@@ -563,7 +554,6 @@ static void init_graph(struct lavfi *c)
             MP_FATAL(c, "failed to configure the filter graph\n");
             free_graph(c);
             c->failed = true;
-            mp_filter_internal_mark_failed(c->f);
             return;
         }
 
@@ -591,10 +581,7 @@ static bool feed_input_pads(struct lavfi *c)
     for (int n = 0; n < c->num_in_pads; n++) {
         struct lavfi_pad *pad = c->in_pads[n];
 
-        bool requested = true;
-#if LIBAVFILTER_VERSION_MICRO >= 100
-        requested = av_buffersrc_get_nb_failed_requests(pad->buffer) > 0;
-#endif
+        bool requested = av_buffersrc_get_nb_failed_requests(pad->buffer) > 0;
 
         // Always request a frame after EOF so that we can know if the EOF state
         // changes (e.g. for sparse streams with midstream EOF).
@@ -705,9 +692,7 @@ static bool read_output_pads(struct lavfi *c)
         }
 
         if (r >= 0) {
-#if LIBAVUTIL_VERSION_MICRO >= 100
             mp_tags_copy_from_av_dictionary(pad->metadata, c->tmp_frame->metadata);
-#endif
             struct mp_frame frame =
                 mp_frame_from_av(pad->type, c->tmp_frame, &pad->timebase);
             if (c->emulate_audio_pts && frame.type == MP_FRAME_AUDIO) {
@@ -807,12 +792,10 @@ static bool lavfi_command(struct mp_filter *f, struct mp_filter_command *cmd)
         return false;
 
     switch (cmd->type) {
-#if LIBAVFILTER_VERSION_MICRO >= 100
     case MP_FILTER_COMMAND_TEXT: {
         return avfilter_graph_send_command(c->graph, "all", cmd->cmd, cmd->arg,
                                            &(char){0}, 0, 0) >= 0;
     }
-#endif
     case MP_FILTER_COMMAND_GET_META: {
         // We can worry later about what it should do to multi output filters.
         if (c->num_out_pads < 1)
@@ -1108,9 +1091,9 @@ const struct mp_user_filter_entry af_lavfi = {
         .name = "lavfi",
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .options = (const m_option_t[]){
-            OPT_STRING("graph", graph, M_OPT_MIN, .min = 1),
-            OPT_FLAG("fix-pts", fix_pts, 0),
-            OPT_KEYVALUELIST("o", avopts, 0),
+            {"graph", OPT_STRING(graph)},
+            {"fix-pts", OPT_FLAG(fix_pts)},
+            {"o", OPT_KEYVALUELIST(avopts)},
             {0}
         },
         .priv_defaults = &(const OPT_BASE_STRUCT){
@@ -1127,9 +1110,9 @@ const struct mp_user_filter_entry af_lavfi_bridge = {
         .name = "lavfi-bridge",
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .options = (const m_option_t[]){
-            OPT_STRING("name", filter_name, M_OPT_MIN, .min = 1),
-            OPT_KEYVALUELIST("opts", filter_opts, 0),
-            OPT_KEYVALUELIST("o", avopts, 0),
+            {"name", OPT_STRING(filter_name)},
+            {"opts", OPT_KEYVALUELIST(filter_opts)},
+            {"o", OPT_KEYVALUELIST(avopts)},
             {0}
         },
         .priv_defaults = &(const OPT_BASE_STRUCT){
@@ -1147,8 +1130,8 @@ const struct mp_user_filter_entry vf_lavfi = {
         .name = "lavfi",
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .options = (const m_option_t[]){
-            OPT_STRING("graph", graph, M_OPT_MIN, .min = 1),
-            OPT_KEYVALUELIST("o", avopts, 0),
+            {"graph", OPT_STRING(graph)},
+            {"o", OPT_KEYVALUELIST(avopts)},
             {0}
         },
         .priv_defaults = &(const OPT_BASE_STRUCT){
@@ -1165,9 +1148,9 @@ const struct mp_user_filter_entry vf_lavfi_bridge = {
         .name = "lavfi-bridge",
         .priv_size = sizeof(OPT_BASE_STRUCT),
         .options = (const m_option_t[]){
-            OPT_STRING("name", filter_name, M_OPT_MIN, .min = 1),
-            OPT_KEYVALUELIST("opts", filter_opts, 0),
-            OPT_KEYVALUELIST("o", avopts, 0),
+            {"name", OPT_STRING(filter_name)},
+            {"opts", OPT_KEYVALUELIST(filter_opts)},
+            {"o", OPT_KEYVALUELIST(avopts)},
             {0}
         },
         .priv_defaults = &(const OPT_BASE_STRUCT){

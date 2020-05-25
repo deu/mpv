@@ -34,11 +34,10 @@
 #define talloc_ptrtype                  ta_xnew_ptrtype
 #define talloc_array_ptrtype            ta_xnew_array_ptrtype
 
-#define talloc_steal                    ta_xsteal
+#define talloc_steal                    ta_steal
 #define talloc_realloc_size             ta_xrealloc_size
 #define talloc_new                      ta_xnew_context
-#define talloc_set_destructor           ta_xset_destructor
-#define talloc_parent                   ta_find_parent
+#define talloc_set_destructor           ta_set_destructor
 #define talloc_enable_leak_report       ta_enable_leak_report
 #define talloc_size                     ta_xalloc_size
 #define talloc_zero_size                ta_xzalloc_size
@@ -80,8 +79,6 @@ char *ta_talloc_asprintf_append_buffer(char *s, const char *fmt, ...) TA_PRF(2, 
 
 #define TA_FREEP(pctx) do {talloc_free(*(pctx)); *(pctx) = NULL;} while(0)
 
-#define TA_EXPAND_ARGS(...) __VA_ARGS__
-
 // Return number of allocated entries in typed array p[].
 #define MP_TALLOC_AVAIL(p) (talloc_get_size(p) / sizeof((p)[0]))
 
@@ -106,7 +103,7 @@ char *ta_talloc_asprintf_append_buffer(char *s, const char *fmt, ...) TA_PRF(2, 
 #define MP_TARRAY_APPEND(ctx, p, idxvar, ...)       \
     do {                                            \
         MP_TARRAY_GROW(ctx, p, idxvar);             \
-        (p)[(idxvar)] = (TA_EXPAND_ARGS(__VA_ARGS__));\
+        (p)[(idxvar)] = (__VA_ARGS__);              \
         (idxvar)++;                                 \
     } while (0)
 
@@ -121,7 +118,7 @@ char *ta_talloc_asprintf_append_buffer(char *s, const char *fmt, ...) TA_PRF(2, 
         memmove((p) + at_ + 1, (p) + at_,           \
                 ((idxvar) - at_) * sizeof((p)[0])); \
         (idxvar)++;                                 \
-        (p)[at_] = (TA_EXPAND_ARGS(__VA_ARGS__));   \
+        (p)[at_] = (__VA_ARGS__);                   \
     } while (0)
 
 // Given an array p with count idxvar, insert c elements at p[at], so that
@@ -156,8 +153,5 @@ char *ta_talloc_asprintf_append_buffer(char *s, const char *fmt, ...) TA_PRF(2, 
         ? (*(out) = (p)[--(idxvar)], true)          \
         : false                                     \
     )
-
-#define talloc_struct(ctx, type, ...) \
-    talloc_memdup(ctx, &(type) TA_EXPAND_ARGS(__VA_ARGS__), sizeof(type))
 
 #endif

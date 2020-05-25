@@ -222,7 +222,7 @@ def build(ctx):
     ])
 
     subprocess_c = ctx.pick_first_matching_dep([
-        ( "osdep/subprocess-posix.c",            "posix-spawn" ),
+        ( "osdep/subprocess-posix.c",            "posix" ),
         ( "osdep/subprocess-win.c",              "win32-desktop" ),
         ( "osdep/subprocess-dummy.c" ),
     ])
@@ -235,6 +235,7 @@ def build(ctx):
         ( "audio/chmap_sel.c" ),
         ( "audio/decode/ad_lavc.c" ),
         ( "audio/decode/ad_spdif.c" ),
+        ( "audio/filter/af_drop.c" ),
         ( "audio/filter/af_format.c" ),
         ( "audio/filter/af_lavcac3enc.c" ),
         ( "audio/filter/af_rubberband.c",        "rubberband" ),
@@ -255,17 +256,13 @@ def build(ctx):
         ( "audio/out/ao_null.c" ),
         ( "audio/out/ao_openal.c",               "openal" ),
         ( "audio/out/ao_opensles.c",             "opensles" ),
-        ( "audio/out/ao_oss.c",                  "oss-audio" ),
         ( "audio/out/ao_pcm.c" ),
         ( "audio/out/ao_pulse.c",                "pulse" ),
-        ( "audio/out/ao_rsound.c",               "rsound" ),
         ( "audio/out/ao_sdl.c",                  "sdl2-audio" ),
-        ( "audio/out/ao_sndio.c",                "sndio" ),
         ( "audio/out/ao_wasapi.c",               "wasapi" ),
         ( "audio/out/ao_wasapi_changenotify.c",  "wasapi" ),
         ( "audio/out/ao_wasapi_utils.c",         "wasapi" ),
-        ( "audio/out/pull.c" ),
-        ( "audio/out/push.c" ),
+        ( "audio/out/buffer.c" ),
 
         ## Core
         ( "common/av_common.c" ),
@@ -276,6 +273,7 @@ def build(ctx):
         ( "common/msg.c" ),
         ( "common/playlist.c" ),
         ( "common/recorder.c" ),
+        ( "common/stats.c" ),
         ( "common/tags.c" ),
         ( "common/version.c" ),
 
@@ -300,6 +298,7 @@ def build(ctx):
         ( "demux/packet.c" ),
         ( "demux/timeline.c" ),
 
+        ( "filters/f_async_queue.c" ),
         ( "filters/f_autoconvert.c" ),
         ( "filters/f_auto_filters.c" ),
         ( "filters/f_decoder_wrapper.c" ),
@@ -321,7 +320,6 @@ def build(ctx):
         ( "input/ipc.c" ),
         ( ipc_c ),
         ( "input/keycodes.c" ),
-        ( "input/pipe-win32.c",                  "win32-pipes" ),
         ( "input/sdl_gamepad.c",                 "sdl2-gamepad" ),
 
         ## Misc
@@ -338,7 +336,8 @@ def build(ctx):
         ( "misc/thread_tools.c" ),
 
         ## Options
-        ( "options/m_config.c" ),
+        ( "options/m_config_core.c" ),
+        ( "options/m_config_frontend.c" ),
         ( "options/m_option.c" ),
         ( "options/m_property.c" ),
         ( "options/options.c" ),
@@ -382,19 +381,18 @@ def build(ctx):
         ( "stream/stream_memory.c" ),
         ( "stream/stream_mf.c" ),
         ( "stream/stream_null.c" ),
-        ( "stream/stream_smb.c",                 "libsmbclient" ),
 
         ## Subtitles
-        ( "sub/ass_mp.c",                        "libass"),
+        ( "sub/ass_mp.c" ),
         ( "sub/dec_sub.c" ),
         ( "sub/draw_bmp.c" ),
+        ( "sub/filter_regex.c",                  "posix" ),
         ( "sub/filter_sdh.c" ),
         ( "sub/img_convert.c" ),
         ( "sub/lavc_conv.c" ),
         ( "sub/osd.c" ),
-        ( "sub/osd_dummy.c",                     "dummy-osd" ),
-        ( "sub/osd_libass.c",                    "libass-osd" ),
-        ( "sub/sd_ass.c",                        "libass" ),
+        ( "sub/osd_libass.c" ),
+        ( "sub/sd_ass.c" ),
         ( "sub/sd_lavc.c" ),
 
         ## Tests
@@ -404,6 +402,7 @@ def build(ctx):
         ( "test/json.c",                         "tests" ),
         ( "test/linked_list.c",                  "tests" ),
         ( "test/paths.c",                        "tests" ),
+        ( "test/repack.c",                       "tests && zimg" ),
         ( "test/scale_sws.c",                    "tests" ),
         ( "test/scale_test.c",                   "tests" ),
         ( "test/scale_zimg.c",                   "tests && zimg" ),
@@ -445,7 +444,7 @@ def build(ctx):
         ( "video/out/dr_helper.c" ),
         ( "video/out/drm_atomic.c",              "drm" ),
         ( "video/out/drm_common.c",              "drm" ),
-        ( "video/out/drm_prime.c",               "drm && drmprime" ),
+        ( "video/out/drm_prime.c",               "drm" ),
         ( "video/out/filter_kernels.c" ),
         ( "video/out/gpu/context.c" ),
         ( "video/out/gpu/d3d11_helpers.c",       "d3d11 || egl-angle-win32" ),
@@ -486,7 +485,7 @@ def build(ctx):
         ( "video/out/opengl/egl_helpers.c",      "egl-helpers" ),
         ( "video/out/opengl/formats.c",          "gl" ),
         ( "video/out/opengl/hwdec_d3d11egl.c",   "d3d-hwaccel && egl-angle" ),
-        ( "video/out/opengl/hwdec_drmprime_drm.c","drmprime && drm" ),
+        ( "video/out/opengl/hwdec_drmprime_drm.c","drm" ),
         ( "video/out/opengl/hwdec_dxva2egl.c",   "d3d9-hwaccel && egl-angle" ),
         ( "video/out/opengl/hwdec_dxva2gldx.c",  "gl-dxinterop-d3d9" ),
         ( "video/out/opengl/hwdec_ios.m",        "ios-gl" ),
@@ -531,6 +530,7 @@ def build(ctx):
         ( "video/out/win32/droptarget.c",        "win32-desktop" ),
         ( "video/out/win_state.c"),
         ( "video/out/x11_common.c",              "x11" ),
+        ( "video/repack.c" ),
         ( "video/sws_utils.c" ),
         ( "video/zimg.c",                        "zimg" ),
         ( "video/vaapi.c",                       "vaapi" ),
@@ -545,7 +545,6 @@ def build(ctx):
         ( timer_c ),
         ( "osdep/polldev.c",                     "posix" ),
 
-        ( "osdep/android/posix-spawn.c",         "android"),
         ( "osdep/android/strnlen.c",             "android"),
         ( "osdep/glob-win.c",                    "glob-win32" ),
         ( "osdep/macosx_application.m",          "cocoa" ),
@@ -717,7 +716,7 @@ def build(ctx):
             PRIV_LIBS    = get_deps(),
         )
 
-        headers = ["client.h", "qthelper.hpp", "opengl_cb.h", "render.h",
+        headers = ["client.h", "opengl_cb.h", "render.h",
                    "render_gl.h", "stream_cb.h"]
         for f in headers:
             ctx.install_as(ctx.env.INCLUDEDIR + '/mpv/' + f, 'libmpv/' + f)

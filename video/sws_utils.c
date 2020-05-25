@@ -57,27 +57,27 @@ struct sws_opts {
 #define OPT_BASE_STRUCT struct sws_opts
 const struct m_sub_options sws_conf = {
     .opts = (const m_option_t[]) {
-        OPT_CHOICE("scaler", scaler, 0,
-                   ({"fast-bilinear",   SWS_FAST_BILINEAR},
-                    {"bilinear",        SWS_BILINEAR},
-                    {"bicubic",         SWS_BICUBIC},
-                    {"x",               SWS_X},
-                    {"point",           SWS_POINT},
-                    {"area",            SWS_AREA},
-                    {"bicublin",        SWS_BICUBLIN},
-                    {"gauss",           SWS_GAUSS},
-                    {"sinc",            SWS_SINC},
-                    {"lanczos",         SWS_LANCZOS},
-                    {"spline",          SWS_SPLINE})),
-        OPT_FLOATRANGE("lgb", lum_gblur, 0, 0, 100.0),
-        OPT_FLOATRANGE("cgb", chr_gblur, 0, 0, 100.0),
-        OPT_INT("cvs", chr_vshift, 0),
-        OPT_INT("chs", chr_hshift, 0),
-        OPT_FLOATRANGE("ls", lum_sharpen, 0, -100.0, 100.0),
-        OPT_FLOATRANGE("cs", chr_sharpen, 0, -100.0, 100.0),
-        OPT_FLAG("fast", fast, 0),
-        OPT_FLAG("bitexact", bitexact, 0),
-        OPT_FLAG("allow-zimg", zimg, 0),
+        {"scaler", OPT_CHOICE(scaler,
+            {"fast-bilinear",   SWS_FAST_BILINEAR},
+            {"bilinear",        SWS_BILINEAR},
+            {"bicubic",         SWS_BICUBIC},
+            {"x",               SWS_X},
+            {"point",           SWS_POINT},
+            {"area",            SWS_AREA},
+            {"bicublin",        SWS_BICUBLIN},
+            {"gauss",           SWS_GAUSS},
+            {"sinc",            SWS_SINC},
+            {"lanczos",         SWS_LANCZOS},
+            {"spline",          SWS_SPLINE})},
+        {"lgb", OPT_FLOAT(lum_gblur), M_RANGE(0, 100.0)},
+        {"cgb", OPT_FLOAT(chr_gblur), M_RANGE(0, 100.0)},
+        {"cvs", OPT_INT(chr_vshift)},
+        {"chs", OPT_INT(chr_hshift)},
+        {"ls", OPT_FLOAT(lum_sharpen), M_RANGE(-100.0, 100.0)},
+        {"cs", OPT_FLOAT(chr_sharpen), M_RANGE(-100.0, 100.0)},
+        {"fast", OPT_FLAG(fast)},
+        {"bitexact", OPT_FLAG(bitexact)},
+        {"allow-zimg", OPT_FLAG(zimg)},
         {0}
     },
     .size = sizeof(struct sws_opts),
@@ -124,18 +124,30 @@ bool mp_sws_supported_format(int imgfmt)
         && sws_isSupportedOutput(av_format);
 }
 
+static bool allow_zimg(struct mp_sws_context *ctx)
+{
+    return ctx->force_scaler == MP_SWS_ZIMG ||
+           (ctx->force_scaler == MP_SWS_AUTO && ctx->allow_zimg);
+}
+
+static bool allow_sws(struct mp_sws_context *ctx)
+{
+    return ctx->force_scaler == MP_SWS_SWS || ctx->force_scaler == MP_SWS_AUTO;
+}
+
 bool mp_sws_supports_formats(struct mp_sws_context *ctx,
                              int imgfmt_out, int imgfmt_in)
 {
 #if HAVE_ZIMG
-    if (ctx->allow_zimg) {
+    if (allow_zimg(ctx)) {
         if (mp_zimg_supports_in_format(imgfmt_in) &&
             mp_zimg_supports_out_format(imgfmt_out))
             return true;
     }
 #endif
 
-    return sws_isSupportedInput(imgfmt2pixfmt(imgfmt_in)) &&
+    return allow_sws(ctx) &&
+           sws_isSupportedInput(imgfmt2pixfmt(imgfmt_in)) &&
            sws_isSupportedOutput(imgfmt2pixfmt(imgfmt_out));
 }
 
@@ -154,10 +166,8 @@ static bool cache_valid(struct mp_sws_context *ctx)
     return mp_image_params_equal(&ctx->src, &old->src) &&
            mp_image_params_equal(&ctx->dst, &old->dst) &&
            ctx->flags == old->flags &&
-           ctx->brightness == old->brightness &&
-           ctx->contrast == old->contrast &&
-           ctx->saturation == old->saturation &&
            ctx->allow_zimg == old->allow_zimg &&
+           ctx->force_scaler == old->force_scaler &&
            (!ctx->opts_cache || !m_config_cache_update(ctx->opts_cache));
 }
 
@@ -177,8 +187,6 @@ struct mp_sws_context *mp_sws_alloc(void *talloc_ctx)
     *ctx = (struct mp_sws_context) {
         .log = mp_null_log,
         .flags = SWS_BILINEAR,
-        .contrast = 1 << 16,    // 1.0 in 16.16 fixed point
-        .saturation = 1 << 16,
         .force_reload = true,
         .params = {SWS_PARAM_DEFAULT, SWS_PARAM_DEFAULT},
         .cached = talloc_zero(ctx, struct mp_sws_context),
@@ -232,10 +240,12 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
     ctx->zimg_ok = false;
 
 #if HAVE_ZIMG
-    if (ctx->allow_zimg) {
+    if (allow_zimg(ctx)) {
         ctx->zimg->log = ctx->log;
         ctx->zimg->src = *src;
         ctx->zimg->dst = *dst;
+        if (ctx->zimg_opts)
+            ctx->zimg->opts = *ctx->zimg_opts;
         if (mp_zimg_config(ctx->zimg)) {
             ctx->zimg_ok = true;
             MP_VERBOSE(ctx, "Using zimg.\n");
@@ -244,6 +254,11 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
         MP_WARN(ctx, "Not using zimg, falling back to swscale.\n");
     }
 #endif
+
+    if (!allow_sws(ctx)) {
+        MP_ERR(ctx, "No scaler.\n");
+        return -1;
+    }
 
     ctx->sws = sws_alloc_context();
     if (!ctx->sws)
@@ -285,7 +300,6 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
     av_opt_set_double(ctx->sws, "param0", ctx->params[0], 0);
     av_opt_set_double(ctx->sws, "param1", ctx->params[1], 0);
 
-#if LIBAVCODEC_VERSION_MICRO >= 100
     int cr_src = mp_chroma_location_to_av(src->chroma_location);
     int cr_dst = mp_chroma_location_to_av(dst->chroma_location);
     int cr_xpos, cr_ypos;
@@ -297,14 +311,13 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
         av_opt_set_int(ctx->sws, "dst_h_chr_pos", cr_xpos, 0);
         av_opt_set_int(ctx->sws, "dst_v_chr_pos", cr_ypos, 0);
     }
-#endif
 
     // This can fail even with normal operation, e.g. if a conversion path
     // simply does not support these settings.
     int r =
         sws_setColorspaceDetails(ctx->sws, sws_getCoefficients(s_csp), s_range,
                                  sws_getCoefficients(d_csp), d_range,
-                                 ctx->brightness, ctx->contrast, ctx->saturation);
+                                 0, 1 << 16, 1 << 16);
     ctx->supports_csp = r >= 0;
 
     if (sws_init_context(ctx->sws, ctx->src_filter, ctx->dst_filter) < 0)
@@ -380,14 +393,15 @@ static const int endian_swaps[][2] = {
 // might reduce the effective bit depth in some cases.
 struct mp_image *mp_img_swap_to_native(struct mp_image *img)
 {
+    int avfmt = imgfmt2pixfmt(img->imgfmt);
     int to = AV_PIX_FMT_NONE;
     for (int n = 0; endian_swaps[n][0] != AV_PIX_FMT_NONE; n++) {
-        if (endian_swaps[n][0] == img->fmt.avformat)
+        if (endian_swaps[n][0] == avfmt)
             to = endian_swaps[n][1];
     }
     if (to == AV_PIX_FMT_NONE || !mp_image_make_writeable(img))
         return img;
-    int elems = img->fmt.bytes[0] / 2 * img->w;
+    int elems = img->fmt.bpp[0] / 8 / 2 * img->w;
     for (int y = 0; y < img->h; y++) {
         uint16_t *p = (uint16_t *)(img->planes[0] + y * img->stride[0]);
         for (int i = 0; i < elems; i++)

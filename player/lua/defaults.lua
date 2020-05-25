@@ -475,6 +475,15 @@ _G.print = mp.msg.info
 package.loaded["mp"] = mp
 package.loaded["mp.msg"] = mp.msg
 
+function mp.wait_event(t)
+    local r = mp.raw_wait_event(t)
+    if r and r.file_error and not r.error then
+        -- compat; deprecated
+        r.error = r.file_error
+    end
+    return r
+end
+
 _G.mp_event_loop = function()
     mp.dispatch_events(true)
 end
@@ -614,7 +623,7 @@ function overlay_mt.update(ov)
     cmd.name = "osd-overlay"
     cmd.res_x = math.floor(cmd.res_x)
     cmd.res_y = math.floor(cmd.res_y)
-    mp.command_native(cmd)
+    return mp.command_native(cmd)
 end
 
 function overlay_mt.remove(ov)
@@ -631,10 +640,15 @@ function mp.set_osd_ass(res_x, res_y, data)
     if not mp._legacy_overlay then
         mp._legacy_overlay = mp.create_osd_overlay("ass-events")
     end
-    mp._legacy_overlay.res_x = res_x
-    mp._legacy_overlay.res_y = res_y
-    mp._legacy_overlay.data = data
-    mp._legacy_overlay:update()
+    if mp._legacy_overlay.res_x ~= res_x or
+       mp._legacy_overlay.res_y ~= res_y or
+       mp._legacy_overlay.data ~= data
+    then
+        mp._legacy_overlay.res_x = res_x
+        mp._legacy_overlay.res_y = res_y
+        mp._legacy_overlay.data = data
+        mp._legacy_overlay:update()
+    end
 end
 
 function mp.get_osd_size()

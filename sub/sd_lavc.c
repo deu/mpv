@@ -62,6 +62,8 @@ struct sd_lavc_priv {
     AVRational pkt_timebase;
     struct sub subs[MAX_QUEUE]; // most recent event first
     struct sub_bitmap *outbitmaps;
+    struct sub_bitmap *prevret;
+    int prevret_num;
     int64_t displayed_id;
     int64_t new_id;
     struct mp_image_params video_params;
@@ -78,9 +80,7 @@ static int init(struct sd *sd)
     // Supported codecs must be known to decode to paletted bitmaps
     switch (cid) {
     case AV_CODEC_ID_DVB_SUBTITLE:
-#if LIBAVCODEC_VERSION_MICRO >= 100
     case AV_CODEC_ID_DVB_TELETEXT:
-#endif
     case AV_CODEC_ID_HDMV_PGS_SUBTITLE:
     case AV_CODEC_ID_XSUB:
     case AV_CODEC_ID_DVD_SUBTITLE:
@@ -99,9 +99,7 @@ static int init(struct sd *sd)
         goto error;
     mp_lavc_set_extradata(ctx, sd->codec->extradata, sd->codec->extradata_size);
     priv->pkt_timebase = mp_get_codec_timebase(sd->codec);
-#if LIBAVCODEC_VERSION_MICRO >= 100
     ctx->pkt_timebase = priv->pkt_timebase;
-#endif
     if (avcodec_open2(ctx, sub_codec, NULL) < 0)
         goto error;
     priv->avctx = ctx;
@@ -228,6 +226,11 @@ static void read_sub_bitmaps(struct sd *sd, struct sub *sub)
             return;
         }
         talloc_steal(priv, sub->data);
+    }
+
+    if (!mp_image_make_writeable(sub->data)) {
+        sub->count = 0;
+        return;
     }
 
     for (int i = 0; i < sub->count; i++) {
@@ -391,7 +394,7 @@ static struct sub *get_current(struct sd_lavc_priv *priv, double pts)
         if (!sub->valid)
             continue;
         if (pts == MP_NOPTS_VALUE ||
-            ((sub->pts == MP_NOPTS_VALUE || pts >= sub->pts) &&
+            ((sub->pts == MP_NOPTS_VALUE || pts + 1e-6 >= sub->pts) &&
              (sub->endpts == MP_NOPTS_VALUE || pts < sub->endpts)))
         {
             // Ignore "trailing" subtitles with unknown length after 1 minute.
@@ -404,8 +407,8 @@ static struct sub *get_current(struct sd_lavc_priv *priv, double pts)
     return current;
 }
 
-static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
-                        double pts, struct sub_bitmaps *res)
+static struct sub_bitmaps *get_bitmaps(struct sd *sd, struct mp_osd_res d,
+                                       int format, double pts)
 {
     struct sd_lavc_priv *priv = sd->priv;
     struct mp_subtitle_opts *opts = sd->opts;
@@ -415,12 +418,13 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
     struct sub *current = get_current(priv, pts);
 
     if (!current)
-        return;
+        return NULL;
 
     MP_TARRAY_GROW(priv, priv->outbitmaps, current->count);
     for (int n = 0; n < current->count; n++)
         priv->outbitmaps[n] = current->inbitmaps[n];
 
+    struct sub_bitmaps *res = &(struct sub_bitmaps){0};
     res->parts = priv->outbitmaps;
     res->num_parts = current->count;
     if (priv->displayed_id != current->id)
@@ -488,6 +492,29 @@ static void get_bitmaps(struct sd *sd, struct mp_osd_res d, int format,
         }
     }
 
+    if (priv->prevret_num != res->num_parts)
+        res->change_id++;
+
+    if (!res->change_id) {
+        assert(priv->prevret_num == res->num_parts);
+        for (int n = 0; n < priv->prevret_num; n++) {
+            struct sub_bitmap *a = &res->parts[n];
+            struct sub_bitmap *b = &priv->prevret[n];
+
+            if (a->x != b->x || a->y != b->y ||
+                a->dw != b->dw || a->dh != b->dh)
+            {
+                res->change_id++;
+                break;
+            }
+        }
+    }
+
+    priv->prevret_num = res->num_parts;
+    MP_TARRAY_GROW(priv, priv->prevret, priv->prevret_num);
+    memcpy(priv->prevret, res->parts, res->num_parts * sizeof(priv->prevret[0]));
+
+    return sub_bitmaps_copy(NULL, res);
 }
 
 static struct sd_times get_times(struct sd *sd, double pts)

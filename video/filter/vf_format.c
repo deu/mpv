@@ -50,10 +50,12 @@ struct vf_format_opts {
     int chroma_location;
     int stereo_in;
     int rotate;
+    int alpha;
     int w, h;
     int dw, dh;
     double dar;
     int convert;
+    int force_scaler;
 };
 
 static void set_params(struct vf_format_opts *p, struct mp_image_params *out,
@@ -86,6 +88,8 @@ static void set_params(struct vf_format_opts *p, struct mp_image_params *out,
         out->stereo3d = p->stereo_in;
     if (p->rotate >= 0)
         out->rotate = p->rotate;
+    if (p->alpha)
+        out->alpha = p->alpha;
 
     if (p->w > 0 && set_size)
         out->w = p->w;
@@ -123,7 +127,7 @@ static void vf_format_process(struct mp_filter *f)
 
             set_params(priv->opts, &par, true);
 
-            if (par.imgfmt != outfmt) {
+            if (outfmt && par.imgfmt != outfmt) {
                 par.imgfmt = outfmt;
                 par.hw_subfmt = 0;
             }
@@ -175,6 +179,8 @@ static struct mp_filter *vf_format_create(struct mp_filter *parent, void *option
         return NULL;
     }
 
+    priv->conv->force_scaler = priv->opts->force_scaler;
+
     if (priv->opts->fmt)
         mp_autoconvert_add_imgfmt(priv->conv, priv->opts->fmt, 0);
 
@@ -183,24 +189,29 @@ static struct mp_filter *vf_format_create(struct mp_filter *parent, void *option
 
 #define OPT_BASE_STRUCT struct vf_format_opts
 static const m_option_t vf_opts_fields[] = {
-    OPT_IMAGEFORMAT("fmt", fmt, 0),
-    OPT_CHOICE_C("colormatrix", colormatrix, 0, mp_csp_names),
-    OPT_CHOICE_C("colorlevels", colorlevels, 0, mp_csp_levels_names),
-    OPT_CHOICE_C("primaries", primaries, 0, mp_csp_prim_names),
-    OPT_CHOICE_C("gamma", gamma, 0, mp_csp_trc_names),
-    OPT_FLOAT("sig-peak", sig_peak, 0),
-    OPT_CHOICE_C("light", light, 0, mp_csp_light_names),
-    OPT_CHOICE_C("chroma-location", chroma_location, 0, mp_chroma_names),
-    OPT_CHOICE_C("stereo-in", stereo_in, 0, mp_stereo3d_names),
-    OPT_INTRANGE("rotate", rotate, 0, -1, 359),
-    OPT_INT("w", w, 0),
-    OPT_INT("h", h, 0),
-    OPT_INT("dw", dw, 0),
-    OPT_INT("dh", dh, 0),
-    OPT_DOUBLE("dar", dar, 0),
-    OPT_FLAG("convert", convert, 0),
-    OPT_REMOVED("outputlevels", "use the --video-output-levels global option"),
-    OPT_REMOVED("peak", "use sig-peak instead (changed value scale!)"),
+    {"fmt", OPT_IMAGEFORMAT(fmt)},
+    {"colormatrix", OPT_CHOICE_C(colormatrix, mp_csp_names)},
+    {"colorlevels", OPT_CHOICE_C(colorlevels, mp_csp_levels_names)},
+    {"primaries", OPT_CHOICE_C(primaries, mp_csp_prim_names)},
+    {"gamma", OPT_CHOICE_C(gamma, mp_csp_trc_names)},
+    {"sig-peak", OPT_FLOAT(sig_peak)},
+    {"light", OPT_CHOICE_C(light, mp_csp_light_names)},
+    {"chroma-location", OPT_CHOICE_C(chroma_location, mp_chroma_names)},
+    {"stereo-in", OPT_CHOICE_C(stereo_in, mp_stereo3d_names)},
+    {"rotate", OPT_INT(rotate), M_RANGE(-1, 359)},
+    {"alpha", OPT_CHOICE_C(alpha, mp_alpha_names)},
+    {"w", OPT_INT(w)},
+    {"h", OPT_INT(h)},
+    {"dw", OPT_INT(dw)},
+    {"dh", OPT_INT(dh)},
+    {"dar", OPT_DOUBLE(dar)},
+    {"convert", OPT_FLAG(convert)},
+    {"force-scaler", OPT_CHOICE(force_scaler,
+                                {"auto", MP_SWS_AUTO},
+                                {"sws", MP_SWS_SWS},
+                                {"zimg", MP_SWS_ZIMG})},
+    {"outputlevels", OPT_REMOVED("use the --video-output-levels global option")},
+    {"peak", OPT_REMOVED("use sig-peak instead (changed value scale!)")},
     {0}
 };
 

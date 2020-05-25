@@ -20,6 +20,7 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -228,15 +229,15 @@ struct demux_mkv_opts {
 
 const struct m_sub_options demux_mkv_conf = {
     .opts = (const m_option_t[]) {
-        OPT_CHOICE("subtitle-preroll", subtitle_preroll, 0,
-                   ({"no", 0}, {"yes", 1}, {"index", 2})),
-        OPT_DOUBLE("subtitle-preroll-secs", subtitle_preroll_secs,
-                   M_OPT_MIN, .min = 0),
-        OPT_DOUBLE("subtitle-preroll-secs-index", subtitle_preroll_secs_index,
-                   M_OPT_MIN, .min = 0),
-        OPT_CHOICE("probe-video-duration", probe_duration, 0,
-                   ({"no", 0}, {"yes", 1}, {"full", 2})),
-        OPT_FLAG("probe-start-time", probe_start_time, 0),
+        {"subtitle-preroll", OPT_CHOICE(subtitle_preroll,
+            {"no", 0}, {"yes", 1}, {"index", 2})},
+        {"subtitle-preroll-secs", OPT_DOUBLE(subtitle_preroll_secs),
+            M_RANGE(0, DBL_MAX)},
+        {"subtitle-preroll-secs-index", OPT_DOUBLE(subtitle_preroll_secs_index),
+            M_RANGE(0, DBL_MAX)},
+        {"probe-video-duration", OPT_CHOICE(probe_duration,
+            {"no", 0}, {"yes", 1}, {"full", 2})},
+        {"probe-start-time", OPT_FLAG(probe_start_time)},
         {0}
     },
     .size = sizeof(struct demux_mkv_opts),
@@ -244,6 +245,7 @@ const struct m_sub_options demux_mkv_conf = {
         .subtitle_preroll = 2,
         .subtitle_preroll_secs = 1.0,
         .subtitle_preroll_secs_index = 10.0,
+        .probe_start_time = 1,
     },
 };
 
@@ -1101,8 +1103,14 @@ static void process_tags(demuxer_t *demuxer)
         if (dst) {
             for (int j = 0; j < tag.n_simple_tag; j++) {
                 if (tag.simple_tag[j].tag_name && tag.simple_tag[j].tag_string) {
-                    mp_tags_set_str(dst, tag.simple_tag[j].tag_name,
-                                         tag.simple_tag[j].tag_string);
+                    char *name = tag.simple_tag[j].tag_name;
+                    char *val = tag.simple_tag[j].tag_string;
+                    char *old = mp_tags_get_str(dst, name);
+                    if (old)
+                        val = talloc_asprintf(NULL, "%s / %s", old, val);
+                    mp_tags_set_str(dst, name, val);
+                    if (old)
+                        talloc_free(val);
                 }
             }
         }
@@ -1352,6 +1360,7 @@ static const char *const mkv_video_tags[][2] = {
     {"V_MPEGH/ISO/HEVC",    "hevc"},
     {"V_SNOW",              "snow"},
     {"V_AV1",               "av1"},
+    {"V_PNG",               "png"},
     {0}
 };
 
@@ -2993,7 +3002,8 @@ static struct mkv_index *seek_with_cues(struct demuxer *demuxer, int seek_id,
             double secs = mkv_d->opts->subtitle_preroll_secs;
             if (mkv_d->index_has_durations)
                 secs = MPMAX(secs, mkv_d->opts->subtitle_preroll_secs_index);
-            int64_t pre = MPMIN(INT64_MAX, secs * 1e9 / mkv_d->tc_scale);
+            double pre_f = secs * 1e9 / mkv_d->tc_scale;
+            int64_t pre = pre_f >= (double)INT64_MAX ? INT64_MAX : (int64_t)pre_f;
             int64_t min_tc = pre < index->timecode ? index->timecode - pre : 0;
             uint64_t prev_target = 0;
             int64_t prev_tc = 0;
@@ -3211,7 +3221,7 @@ static void probe_first_timestamp(struct demuxer *demuxer)
 
     demuxer->start_time = mkv_d->cluster_tc / 1e9;
 
-    if (demuxer->start_time > 0)
+    if (demuxer->start_time)
         MP_VERBOSE(demuxer, "Start PTS: %f\n", demuxer->start_time);
 }
 

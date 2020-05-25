@@ -27,6 +27,7 @@
 
 #include "options/m_config.h"
 #include "config.h"
+#include "osdep/terminal.h"
 #include "vo.h"
 #include "sub/osd.h"
 #include "video/sws_utils.h"
@@ -58,12 +59,12 @@ struct vo_tct_opts {
 #define OPT_BASE_STRUCT struct vo_tct_opts
 static const struct m_sub_options vo_tct_conf = {
     .opts = (const m_option_t[]) {
-        OPT_CHOICE("vo-tct-algo", algo, 0,
-                   ({"plain", ALGO_PLAIN},
-                    {"half-blocks", ALGO_HALF_BLOCKS})),
-        OPT_INT("vo-tct-width", width, 0),
-        OPT_INT("vo-tct-height", height, 0),
-        OPT_FLAG("vo-tct-256", term256, 0),
+        {"vo-tct-algo", OPT_CHOICE(algo,
+            {"plain", ALGO_PLAIN},
+            {"half-blocks", ALGO_HALF_BLOCKS})},
+        {"vo-tct-width", OPT_INT(width)},
+        {"vo-tct-height", OPT_INT(height)},
+        {"vo-tct-256", OPT_FLAG(term256)},
         {0}
     },
     .defaults = &(const struct vo_tct_opts) {
@@ -179,13 +180,8 @@ static void get_win_size(struct vo *vo, int *out_width, int *out_height) {
     struct priv *p = vo->priv;
     *out_width = DEFAULT_WIDTH;
     *out_height = DEFAULT_HEIGHT;
-#if HAVE_POSIX
-    struct winsize winsize;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsize) >= 0) {
-        *out_width = winsize.ws_col;
-        *out_height = winsize.ws_row;
-    }
-#endif
+
+    terminal_get_size(out_width, out_height);
 
     if (p->opts->width > 0)
         *out_width = p->opts->width;

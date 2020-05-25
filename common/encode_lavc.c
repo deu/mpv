@@ -77,32 +77,33 @@ struct mux_stream {
 #define OPT_BASE_STRUCT struct encode_opts
 const struct m_sub_options encode_config = {
     .opts = (const m_option_t[]) {
-        OPT_STRING("o", file, CONF_NOCFG | CONF_PRE_PARSE | M_OPT_FILE),
-        OPT_STRING("of", format, 0),
-        OPT_KEYVALUELIST("ofopts", fopts, M_OPT_HAVE_HELP),
-        OPT_STRING("ovc", vcodec, 0),
-        OPT_KEYVALUELIST("ovcopts", vopts, M_OPT_HAVE_HELP),
-        OPT_STRING("oac", acodec, 0),
-        OPT_KEYVALUELIST("oacopts", aopts, M_OPT_HAVE_HELP),
-        OPT_FLOATRANGE("ovoffset", voffset, 0, -1000000.0, 1000000.0,
-                       .deprecation_message = "--audio-delay (once unbroken)"),
-        OPT_FLOATRANGE("oaoffset", aoffset, 0, -1000000.0, 1000000.0,
-                       .deprecation_message = "--audio-delay (once unbroken)"),
-        OPT_FLAG("orawts", rawts, 0),
-        OPT_FLAG("ovfirst", video_first, 0,
-                 .deprecation_message = "no replacement"),
-        OPT_FLAG("oafirst", audio_first, 0,
-                 .deprecation_message = "no replacement"),
-        OPT_FLAG("ocopy-metadata", copy_metadata, 0),
-        OPT_KEYVALUELIST("oset-metadata", set_metadata, 0),
-        OPT_STRINGLIST("oremove-metadata", remove_metadata, 0),
+        {"o", OPT_STRING(file), .flags = CONF_NOCFG | CONF_PRE_PARSE | M_OPT_FILE,
+            .deprecation_message = "lack of maintainer"},
+        {"of", OPT_STRING(format)},
+        {"ofopts", OPT_KEYVALUELIST(fopts), .flags = M_OPT_HAVE_HELP},
+        {"ovc", OPT_STRING(vcodec)},
+        {"ovcopts", OPT_KEYVALUELIST(vopts), .flags = M_OPT_HAVE_HELP},
+        {"oac", OPT_STRING(acodec)},
+        {"oacopts", OPT_KEYVALUELIST(aopts), .flags = M_OPT_HAVE_HELP},
+        {"ovoffset", OPT_FLOAT(voffset), M_RANGE(-1000000.0, 1000000.0),
+            .deprecation_message = "--audio-delay (once unbroken)"},
+        {"oaoffset", OPT_FLOAT(aoffset), M_RANGE(-1000000.0, 1000000.0),
+            .deprecation_message = "--audio-delay (once unbroken)"},
+        {"orawts", OPT_FLAG(rawts)},
+        {"ovfirst", OPT_FLAG(video_first),
+            .deprecation_message = "no replacement"},
+        {"oafirst", OPT_FLAG(audio_first),
+            .deprecation_message = "no replacement"},
+        {"ocopy-metadata", OPT_FLAG(copy_metadata)},
+        {"oset-metadata", OPT_KEYVALUELIST(set_metadata)},
+        {"oremove-metadata", OPT_STRINGLIST(remove_metadata)},
 
-        OPT_REMOVED("ocopyts", "ocopyts is now the default"),
-        OPT_REMOVED("oneverdrop", "no replacement"),
-        OPT_REMOVED("oharddup", "use --vf-add=fps=VALUE"),
-        OPT_REMOVED("ofps", "no replacement (use --vf-add=fps=VALUE for CFR)"),
-        OPT_REMOVED("oautofps", "no replacement"),
-        OPT_REMOVED("omaxfps", "no replacement"),
+        {"ocopyts", OPT_REMOVED("ocopyts is now the default")},
+        {"oneverdrop", OPT_REMOVED("no replacement")},
+        {"oharddup", OPT_REMOVED("use --vf-add=fps=VALUE")},
+        {"ofps", OPT_REMOVED("no replacement (use --vf-add=fps=VALUE for CFR)")},
+        {"oautofps", OPT_REMOVED("no replacement")},
+        {"omaxfps", OPT_REMOVED("no replacement")},
         {0}
     },
     .size = sizeof(struct encode_opts),
@@ -394,10 +395,11 @@ void encode_lavc_stream_eof(struct encode_lavc_context *ctx,
 // Signal that you are ready to encode (you provide the codec params etc. too).
 // This returns a muxing handle which you can use to add encodec packets.
 // Can be called only once per stream. info is copied by callee as needed.
-static struct mux_stream *encode_lavc_add_stream(struct encode_lavc_context *ctx,
-                                                 struct encoder_stream_info *info,
-                                                 void (*on_ready)(void *ctx),
-                                                 void *on_ready_ctx)
+static void encode_lavc_add_stream(struct encoder_context *enc,
+                                   struct encode_lavc_context *ctx,
+                                   struct encoder_stream_info *info,
+                                   void (*on_ready)(void *ctx),
+                                   void *on_ready_ctx)
 {
     struct encode_priv *p = ctx->priv;
 
@@ -426,19 +428,18 @@ static struct mux_stream *encode_lavc_add_stream(struct encode_lavc_context *ctx
     // set on the AVStream.
     if (info->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
         dst->st->sample_aspect_ratio = info->codecpar->sample_aspect_ratio;
-    
+
     if (avcodec_parameters_copy(dst->st->codecpar, info->codecpar) < 0)
         MP_HANDLE_OOM(0);
 
     dst->on_ready = on_ready;
     dst->on_ready_ctx = on_ready_ctx;
+    enc->mux_stream = dst;
 
     maybe_init_muxer(ctx);
 
 done:
     pthread_mutex_unlock(&ctx->lock);
-
-    return dst;
 }
 
 // Write a packet. This will take over ownership of `pkt`
@@ -489,6 +490,11 @@ done:
     pthread_mutex_unlock(&ctx->lock);
     if (pkt)
         av_packet_unref(pkt);
+}
+
+AVRational encoder_get_mux_timebase_unlocked(struct encoder_context *p)
+{
+    return p->mux_stream->st->time_base;
 }
 
 void encode_lavc_discontinuity(struct encode_lavc_context *ctx)
@@ -916,8 +922,7 @@ bool encoder_init_codec_and_muxer(struct encoder_context *p,
     if (avcodec_parameters_from_context(p->info.codecpar, p->encoder) < 0)
         goto fail;
 
-    p->mux_stream = encode_lavc_add_stream(p->encode_lavc_ctx, &p->info,
-                                           on_ready, ctx);
+    encode_lavc_add_stream(p, p->encode_lavc_ctx, &p->info, on_ready, ctx);
     if (!p->mux_stream)
         goto fail;
 

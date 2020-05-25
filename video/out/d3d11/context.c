@@ -38,41 +38,43 @@ struct d3d11_opts {
     char *adapter_name;
     int output_format;
     int color_space;
+    int exclusive_fs;
 };
 
 #define OPT_BASE_STRUCT struct d3d11_opts
 const struct m_sub_options d3d11_conf = {
     .opts = (const struct m_option[]) {
-        OPT_CHOICE("d3d11-warp", warp, 0,
-                   ({"auto", -1},
-                    {"no", 0},
-                    {"yes", 1})),
-        OPT_CHOICE("d3d11-feature-level", feature_level, 0,
-                   ({"12_1", D3D_FEATURE_LEVEL_12_1},
-                    {"12_0", D3D_FEATURE_LEVEL_12_0},
-                    {"11_1", D3D_FEATURE_LEVEL_11_1},
-                    {"11_0", D3D_FEATURE_LEVEL_11_0},
-                    {"10_1", D3D_FEATURE_LEVEL_10_1},
-                    {"10_0", D3D_FEATURE_LEVEL_10_0},
-                    {"9_3", D3D_FEATURE_LEVEL_9_3},
-                    {"9_2", D3D_FEATURE_LEVEL_9_2},
-                    {"9_1", D3D_FEATURE_LEVEL_9_1})),
-        OPT_FLAG("d3d11-flip", flip, 0),
-        OPT_INTRANGE("d3d11-sync-interval", sync_interval, 0, 0, 4),
-        OPT_STRING_VALIDATE("d3d11-adapter", adapter_name, 0,
-                            d3d11_validate_adapter),
-        OPT_CHOICE("d3d11-output-format", output_format, 0,
-                   ({"auto",     DXGI_FORMAT_UNKNOWN},
-                    {"rgba8",    DXGI_FORMAT_R8G8B8A8_UNORM},
-                    {"bgra8",    DXGI_FORMAT_B8G8R8A8_UNORM},
-                    {"rgb10_a2", DXGI_FORMAT_R10G10B10A2_UNORM},
-                    {"rgba16f",  DXGI_FORMAT_R16G16B16A16_FLOAT})),
-        OPT_CHOICE("d3d11-output-csp", color_space, 0,
-                   ({"auto", -1},
-                    {"srgb",    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709},
-                    {"linear",  DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709},
-                    {"pq",      DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020},
-                    {"bt.2020", DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020})),
+        {"d3d11-warp", OPT_CHOICE(warp,
+            {"auto", -1},
+            {"no", 0},
+            {"yes", 1})},
+        {"d3d11-feature-level", OPT_CHOICE(feature_level,
+            {"12_1", D3D_FEATURE_LEVEL_12_1},
+            {"12_0", D3D_FEATURE_LEVEL_12_0},
+            {"11_1", D3D_FEATURE_LEVEL_11_1},
+            {"11_0", D3D_FEATURE_LEVEL_11_0},
+            {"10_1", D3D_FEATURE_LEVEL_10_1},
+            {"10_0", D3D_FEATURE_LEVEL_10_0},
+            {"9_3", D3D_FEATURE_LEVEL_9_3},
+            {"9_2", D3D_FEATURE_LEVEL_9_2},
+            {"9_1", D3D_FEATURE_LEVEL_9_1})},
+        {"d3d11-flip", OPT_FLAG(flip)},
+        {"d3d11-sync-interval", OPT_INT(sync_interval), M_RANGE(0, 4)},
+        {"d3d11-adapter", OPT_STRING_VALIDATE(adapter_name,
+                                               d3d11_validate_adapter)},
+        {"d3d11-output-format", OPT_CHOICE(output_format,
+            {"auto",     DXGI_FORMAT_UNKNOWN},
+            {"rgba8",    DXGI_FORMAT_R8G8B8A8_UNORM},
+            {"bgra8",    DXGI_FORMAT_B8G8R8A8_UNORM},
+            {"rgb10_a2", DXGI_FORMAT_R10G10B10A2_UNORM},
+            {"rgba16f",  DXGI_FORMAT_R16G16B16A16_FLOAT})},
+        {"d3d11-output-csp", OPT_CHOICE(color_space,
+            {"auto", -1},
+            {"srgb",    DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709},
+            {"linear",  DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709},
+            {"pq",      DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020},
+            {"bt.2020", DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020})},
+        {"d3d11-exclusive-fs", OPT_FLAG(exclusive_fs)},
         {0}
     },
     .defaults = &(const struct d3d11_opts) {
@@ -83,12 +85,17 @@ const struct m_sub_options d3d11_conf = {
         .adapter_name = NULL,
         .output_format = DXGI_FORMAT_UNKNOWN,
         .color_space = -1,
+        .exclusive_fs = 0,
     },
     .size = sizeof(struct d3d11_opts)
 };
 
 struct priv {
     struct d3d11_opts *opts;
+    struct m_config_cache *opts_cache;
+
+    struct mp_vo_opts *vo_opts;
+    struct m_config_cache *vo_opts_cache;
 
     struct ra_tex *backbuffer;
     ID3D11Device *device;
@@ -231,6 +238,8 @@ static void d3d11_swap_buffers(struct ra_swapchain *sw)
 {
     struct priv *p = sw->priv;
 
+    m_config_cache_update(p->opts_cache);
+
     LARGE_INTEGER perf_count;
     QueryPerformanceCounter(&perf_count);
     p->last_submit_qpc = perf_count.QuadPart;
@@ -243,9 +252,20 @@ static void d3d11_get_vsync(struct ra_swapchain *sw, struct vo_vsync_info *info)
     struct priv *p = sw->priv;
     HRESULT hr;
 
+    m_config_cache_update(p->opts_cache);
+
     // The calculations below are only valid if mpv presents on every vsync
     if (p->opts->sync_interval != 1)
         return;
+
+    // They're also only valid for flip model swapchains
+    DXGI_SWAP_CHAIN_DESC desc;
+    hr = IDXGISwapChain_GetDesc(p->swapchain, &desc);
+    if (FAILED(hr) || (desc.SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL &&
+                       desc.SwapEffect != DXGI_SWAP_EFFECT_FLIP_DISCARD))
+    {
+        return;
+    }
 
     // GetLastPresentCount returns a sequential ID for the frame submitted by
     // the last call to IDXGISwapChain::Present()
@@ -297,10 +317,9 @@ static void d3d11_get_vsync(struct ra_swapchain *sw, struct vo_vsync_info *info)
         stats.PresentRefreshCount && stats.SyncRefreshCount &&
         stats.SyncQPCTime.QuadPart)
     {
-        // PresentRefreshCount and SyncRefreshCount might refer to different
-        // frames (this can definitely occur in bitblt-mode.) Assuming mpv
-        // presents on every frame, guess the present count that relates to
-        // SyncRefreshCount.
+        // It's not clear if PresentRefreshCount and SyncRefreshCount can refer
+        // to different frames, but in case they can, assuming mpv presents on
+        // every frame, guess the present count that relates to SyncRefreshCount.
         unsigned expected_sync_pc = stats.PresentCount +
             (stats.SyncRefreshCount - stats.PresentRefreshCount);
 
@@ -319,9 +338,84 @@ static void d3d11_get_vsync(struct ra_swapchain *sw, struct vo_vsync_info *info)
     }
 }
 
+static bool d3d11_set_fullscreen(struct ra_ctx *ctx)
+{
+    struct priv *p = ctx->priv;
+    HRESULT hr;
+
+    m_config_cache_update(p->opts_cache);
+
+    if (!p->swapchain) {
+        MP_ERR(ctx, "Full screen configuration was requested before D3D11 "
+                    "swap chain was ready!");
+        return false;
+    }
+
+    // we only want exclusive FS if we are entering FS and
+    // exclusive FS is enabled. Otherwise disable exclusive FS.
+    bool enable_exclusive_fs = p->vo_opts->fullscreen &&
+                               p->opts->exclusive_fs;
+
+    MP_VERBOSE(ctx, "%s full-screen exclusive mode while %s fullscreen\n",
+               enable_exclusive_fs ? "Enabling" : "Disabling",
+               ctx->vo->opts->fullscreen ? "entering" : "leaving");
+
+    hr = IDXGISwapChain_SetFullscreenState(p->swapchain,
+                                           enable_exclusive_fs, NULL);
+    if (FAILED(hr))
+        return false;
+
+    if (!resize(ctx))
+        return false;
+
+    return true;
+}
+
 static int d3d11_control(struct ra_ctx *ctx, int *events, int request, void *arg)
 {
-    int ret = vo_w32_control(ctx->vo, events, request, arg);
+    struct priv *p = ctx->priv;
+    int ret = -1;
+    bool fullscreen_switch_needed = false;
+
+    switch (request) {
+    case VOCTRL_VO_OPTS_CHANGED: {
+        void *changed_option;
+
+        while (m_config_cache_get_next_changed(p->vo_opts_cache,
+                                               &changed_option))
+        {
+            struct mp_vo_opts *vo_opts = p->vo_opts_cache->opts;
+
+            if (changed_option == &vo_opts->fullscreen) {
+                fullscreen_switch_needed = true;
+            }
+        }
+
+        break;
+    }
+    default:
+        break;
+    }
+
+    // if leaving full screen, handle d3d11 stuff first, then general
+    // windowing
+    if (fullscreen_switch_needed && !p->vo_opts->fullscreen) {
+        if (!d3d11_set_fullscreen(ctx))
+            return VO_FALSE;
+
+        fullscreen_switch_needed = false;
+    }
+
+    ret = vo_w32_control(ctx->vo, events, request, arg);
+
+    // if entering full screen, handle d3d11 after general windowing stuff
+    if (fullscreen_switch_needed && p->vo_opts->fullscreen) {
+        if (!d3d11_set_fullscreen(ctx))
+            return VO_FALSE;
+
+        fullscreen_switch_needed = false;
+    }
+
     if (*events & VO_EVENT_RESIZE) {
         if (!resize(ctx))
             return VO_ERROR;
@@ -332,6 +426,9 @@ static int d3d11_control(struct ra_ctx *ctx, int *events, int request, void *arg
 static void d3d11_uninit(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv;
+
+    if (p->swapchain)
+        IDXGISwapChain_SetFullscreenState(p->swapchain, FALSE, NULL);
 
     if (ctx->ra)
         ra_tex_free(ctx->ra, &p->backbuffer);
@@ -356,7 +453,11 @@ static const struct ra_swapchain_fns d3d11_swapchain = {
 static bool d3d11_init(struct ra_ctx *ctx)
 {
     struct priv *p = ctx->priv = talloc_zero(ctx, struct priv);
-    p->opts = mp_get_config_group(ctx, ctx->global, &d3d11_conf);
+    p->opts_cache = m_config_cache_alloc(ctx, ctx->global, &d3d11_conf);
+    p->opts = p->opts_cache->opts;
+
+    p->vo_opts_cache = m_config_cache_alloc(ctx, ctx->vo->global, &vo_sub_opts);
+    p->vo_opts = p->vo_opts_cache->opts;
 
     LARGE_INTEGER perf_freq;
     QueryPerformanceFrequency(&perf_freq);

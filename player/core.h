@@ -43,7 +43,7 @@ enum stop_play_reason {
                         // also returned on unrecoverable playback errors
     PT_NEXT_ENTRY,      // prepare to play next entry in playlist
     PT_CURRENT_ENTRY,   // prepare to play mpctx->playlist->current
-    PT_STOP,            // stop playback, or transient state when going to next
+    PT_STOP,            // stop playback / idle mode
     PT_QUIT,            // stop playback, quit player
     PT_ERROR,           // play next playlist entry (due to an error)
 };
@@ -230,7 +230,12 @@ enum playback_status {
     STATUS_EOF,         // playback has ended, or is disabled
 };
 
-#define NUM_PTRACKS 2
+const char *mp_status_str(enum playback_status st);
+
+extern const int num_ptracks[STREAM_TYPE_COUNT];
+
+// Maximum of all num_ptracks[] values.
+#define MAX_PTRACKS 2
 
 typedef struct MPContext {
     bool initialized;
@@ -238,6 +243,7 @@ typedef struct MPContext {
     struct mpv_global *global;
     struct MPOpts *opts;
     struct mp_log *log;
+    struct stats_ctx *stats;
     struct m_config *mconfig;
     struct input_ctx *input;
     struct mp_client_api *clients;
@@ -303,14 +309,12 @@ typedef struct MPContext {
     struct track **tracks;
     int num_tracks;
 
-    int64_t death_hack; // don't fucking ask, just don't
-
     char *track_layout_hash;
 
     // Selected tracks. NULL if no track selected.
-    // There can be NUM_PTRACKS of the same STREAM_TYPE selected at once.
+    // There can be num_ptracks[type] of the same STREAM_TYPE selected at once.
     // Currently, this is used for the secondary subtitle track only.
-    struct track *current_track[NUM_PTRACKS][STREAM_TYPE_COUNT];
+    struct track *current_track[MAX_PTRACKS][STREAM_TYPE_COUNT];
 
     struct mp_filter *filter_root;
 
@@ -343,8 +347,6 @@ typedef struct MPContext {
     int display_sync_drift_dir;
     // Timing error (in seconds) due to rounding on vsync boundaries
     double display_sync_error;
-    double audio_drop_throttle;
-    bool audio_drop_deprecated_msg;
     // Number of mistimed frames.
     int mistimed_frames_total;
     bool hrseek_active;     // skip all data until hrseek_pts
@@ -369,10 +371,8 @@ typedef struct MPContext {
     /* timestamp of video frame currently visible on screen
      * (or at least queued to be flipped by VO) */
     double video_pts;
+    // Last seek target.
     double last_seek_pts;
-    // As video_pts, but is not reset when seeking away. (For the very short
-    // period of time until a new frame is decoded and shown.)
-    double last_vo_pts;
     // Frame duration field from demuxer. Only used for duration of the last
     // video frame.
     double last_frame_duration;
@@ -408,10 +408,6 @@ typedef struct MPContext {
 
     struct seek_params seek;
 
-    // Can be temporarily set to an external audio track after seeks. Then it
-    // must be seeked to the video position once video is done seeking.
-    struct track *seek_slave;
-
     /* Heuristic for relative chapter seeks: keep track which chapter
      * the user wanted to go to, even if we aren't exactly within the
      * boundaries of that chapter due to an inaccurate seek. */
@@ -432,6 +428,7 @@ typedef struct MPContext {
     bool demux_underrun;
     double cache_stop_time;
     int cache_buffer;
+    double cache_update_pts;
 
     // Set after showing warning about decoding being too slow for realtime
     // playback rate. Used to avoid showing it multiple times.
@@ -446,6 +443,8 @@ typedef struct MPContext {
     struct encode_lavc_context *encode_lavc_ctx;
 
     struct mp_ipc_ctx *ipc_ctx;
+
+    int64_t builtin_script_ids[4];
 
     pthread_mutex_t abort_lock;
 
@@ -524,6 +523,8 @@ void mp_abort_trigger_locked(struct MPContext *mpctx,
 void uninit_player(struct MPContext *mpctx, unsigned int mask);
 int mp_add_external_file(struct MPContext *mpctx, char *filename,
                          enum stream_type filter, struct mp_cancel *cancel);
+void mark_track_selection(struct MPContext *mpctx, int order,
+                          enum stream_type type, int value);
 #define FLAG_MARK_SELECTION 1
 void mp_switch_track(struct MPContext *mpctx, enum stream_type type,
                      struct track *track, int flags);
@@ -588,7 +589,6 @@ void mp_wakeup_core(struct MPContext *mpctx);
 void mp_wakeup_core_cb(void *ctx);
 void mp_core_lock(struct MPContext *mpctx);
 void mp_core_unlock(struct MPContext *mpctx);
-void mp_process_input(struct MPContext *mpctx);
 double get_relative_time(struct MPContext *mpctx);
 void reset_playback_state(struct MPContext *mpctx);
 void set_pause_state(struct MPContext *mpctx, bool user_pause);
@@ -630,11 +630,12 @@ struct mp_script_args {
 struct mp_scripting {
     const char *name;       // e.g. "lua script"
     const char *file_ext;   // e.g. "lua"
+    bool no_thread;         // don't run load() on dedicated thread
     int (*load)(struct mp_script_args *args);
 };
 bool mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
-int mp_load_user_script(struct MPContext *mpctx, const char *fname);
+int64_t mp_load_user_script(struct MPContext *mpctx, const char *fname);
 
 // sub.c
 void reset_subtitle_state(struct MPContext *mpctx);

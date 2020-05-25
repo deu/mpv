@@ -162,6 +162,8 @@ struct mp_csp_params {
     float gamma;
     // discard U/V components
     bool gray;
+    // input is already centered and range-expanded
+    bool is_float;
     // texture_bits/input_bits is for rescaling fixed point input to range [0,1]
     int texture_bits;
     int input_bits;
@@ -188,6 +190,14 @@ enum mp_chroma_location {
 };
 
 extern const struct m_opt_choice_alternatives mp_chroma_names[];
+
+enum mp_alpha_type {
+    MP_ALPHA_AUTO,
+    MP_ALPHA_STRAIGHT,
+    MP_ALPHA_PREMUL,
+};
+
+extern const struct m_opt_choice_alternatives mp_alpha_names[];
 
 extern const struct m_sub_options mp_csp_equalizer_conf;
 
@@ -278,6 +288,8 @@ void mp_get_cms_matrix(struct mp_csp_primaries src, struct mp_csp_primaries dest
                        enum mp_render_intent intent, float cms_matrix[3][3]);
 
 double mp_get_csp_mul(enum mp_csp csp, int input_bits, int texture_bits);
+void mp_get_csp_uint_mul(enum mp_csp csp, enum mp_csp_levels levels,
+                         int bits, int component, double *out_m, double *out_o);
 void mp_get_csp_matrix(struct mp_csp_params *params, struct mp_cmat *out);
 
 void mp_invert_matrix3x3(float m[3][3]);

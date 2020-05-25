@@ -21,11 +21,18 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
-#include <sys/vt.h>
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
 #include <time.h>
+
+#include "config.h"
+
+#if HAVE_CONSIO_H
+#include <sys/consio.h>
+#else
+#include <sys/vt.h>
+#endif
 
 #include "drm_common.h"
 
@@ -64,27 +71,27 @@ static double mode_get_Hz(const drmModeModeInfo *mode);
 #define OPT_BASE_STRUCT struct drm_opts
 const struct m_sub_options drm_conf = {
     .opts = (const struct m_option[]) {
-        OPT_STRING_VALIDATE("drm-connector", drm_connector_spec,
-                            0, drm_validate_connector_opt),
-        OPT_STRING_VALIDATE("drm-mode", drm_mode_spec,
-                            0, drm_validate_mode_opt),
-        OPT_CHOICE("drm-atomic", drm_atomic, 0,
-                   ({"no", 0},
-                    {"auto", 1})),
-        OPT_CHOICE_OR_INT("drm-draw-plane", drm_draw_plane, 0, 0, INT_MAX,
-                          ({"primary", DRM_OPTS_PRIMARY_PLANE},
-                           {"overlay", DRM_OPTS_OVERLAY_PLANE})),
-        OPT_CHOICE_OR_INT("drm-drmprime-video-plane", drm_drmprime_video_plane, 0, 0, INT_MAX,
-                          ({"primary", DRM_OPTS_PRIMARY_PLANE},
-                           {"overlay", DRM_OPTS_OVERLAY_PLANE})),
-        OPT_CHOICE("drm-format", drm_format, 0,
-                   ({"xrgb8888",    DRM_OPTS_FORMAT_XRGB8888},
-                    {"xrgb2101010", DRM_OPTS_FORMAT_XRGB2101010})),
-        OPT_SIZE_BOX("drm-draw-surface-size", drm_draw_surface_size, 0),
+        {"drm-connector", OPT_STRING_VALIDATE(drm_connector_spec,
+                                               drm_validate_connector_opt)},
+        {"drm-mode", OPT_STRING_VALIDATE(drm_mode_spec,
+                                          drm_validate_mode_opt)},
+        {"drm-atomic", OPT_CHOICE(drm_atomic, {"no", 0}, {"auto", 1})},
+        {"drm-draw-plane", OPT_CHOICE(drm_draw_plane,
+            {"primary", DRM_OPTS_PRIMARY_PLANE},
+            {"overlay", DRM_OPTS_OVERLAY_PLANE}),
+            M_RANGE(0, INT_MAX)},
+        {"drm-drmprime-video-plane", OPT_CHOICE(drm_drmprime_video_plane,
+            {"primary", DRM_OPTS_PRIMARY_PLANE},
+            {"overlay", DRM_OPTS_OVERLAY_PLANE}),
+            M_RANGE(0, INT_MAX)},
+        {"drm-format", OPT_CHOICE(drm_format,
+            {"xrgb8888",    DRM_OPTS_FORMAT_XRGB8888},
+            {"xrgb2101010", DRM_OPTS_FORMAT_XRGB2101010})},
+        {"drm-draw-surface-size", OPT_SIZE_BOX(drm_draw_surface_size)},
 
-        OPT_REPLACED("drm-osd-plane-id", "drm-draw-plane"),
-        OPT_REPLACED("drm-video-plane-id", "drm-drmprime-video-plane"),
-        OPT_REPLACED("drm-osd-size", "drm-draw-surface-size"),
+        {"drm-osd-plane-id", OPT_REPLACED("drm-draw-plane")},
+        {"drm-video-plane-id", OPT_REPLACED("drm-drmprime-video-plane")},
+        {"drm-osd-size", OPT_REPLACED("drm-draw-surface-size")},
         {0},
     },
     .defaults = &(const struct drm_opts) {
@@ -838,6 +845,9 @@ bool vt_switcher_init(struct vt_switcher *s, struct mp_log *log)
     vt_mode.mode = VT_PROCESS;
     vt_mode.relsig = RELEASE_SIGNAL;
     vt_mode.acqsig = ACQUIRE_SIGNAL;
+    // frsig is a signal for forced release. Not implemented on Linux,
+    // Solaris, BSDs but must be set to a valid signal on some of those.
+    vt_mode.frsig = SIGIO; // unused
     if (ioctl(s->tty_fd, VT_SETMODE, &vt_mode) < 0) {
         MP_ERR(s, "VT_SETMODE failed: %s\n", mp_strerror(errno));
         return false;

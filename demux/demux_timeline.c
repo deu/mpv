@@ -51,12 +51,12 @@ struct virtual_stream {
     struct virtual_source *src; // group this stream is part of
 };
 
-// This represents a single timeline source. (See timeline.next. For each
-// timeline struct there is a virtual_source.)
+// This represents a single timeline source. (See timeline.pars[]. For each
+// timeline_par struct there is a virtual_source.)
 struct virtual_source {
     struct timeline_par *tl;
 
-    bool dash, no_clip;
+    bool dash, no_clip, delay_open;
 
     struct segment **segments;
     int num_segments;
@@ -78,6 +78,7 @@ struct virtual_source {
 
 struct priv {
     struct timeline *tl;
+    bool owns_tl;
 
     double duration;
 
@@ -88,10 +89,6 @@ struct priv {
     struct virtual_source **sources;
     int num_sources;
 };
-
-static bool add_tl(struct demuxer *demuxer, struct timeline_par *par);
-static bool do_read_next_packet(struct demuxer *demuxer,
-                                struct virtual_source *src);
 
 static void update_slave_stats(struct demuxer *demuxer, struct demuxer *slave)
 {
@@ -119,6 +116,7 @@ static void associate_streams(struct demuxer *demuxer,
     for (int n = 0; n < num_streams; n++) {
         struct sh_stream *sh = demux_get_stream(seg->d, n);
         struct virtual_stream *other = NULL;
+
         for (int i = 0; i < src->num_streams; i++) {
             struct virtual_stream *vs = src->streams[i];
 
@@ -135,6 +133,11 @@ static void associate_streams(struct demuxer *demuxer,
             // ordered chapters.
             if (sh->demuxer_id >= 0 && sh->demuxer_id == vs->sh->demuxer_id)
                 other = vs;
+        }
+
+        if (!other) {
+            MP_WARN(demuxer, "Source stream %d (%s) unused and hidden.\n",
+                    n, stream_type_name(sh->type));
         }
 
         MP_TARRAY_APPEND(seg, seg->stream_map, seg->num_stream_map, other);
@@ -207,11 +210,15 @@ static void reopen_lazy_segments(struct demuxer *demuxer,
     if (src->current->d)
         return;
 
-    close_lazy_segments(demuxer, src);
+    // Note: in delay_open mode, we must _not_ close segments during demuxing,
+    // because demuxed packets have demux_packet.codec set to objects owned
+    // by the segments. Closing them would create dangling pointers.
+    if (!src->delay_open)
+        close_lazy_segments(demuxer, src);
 
     struct demuxer_params params = {
         .init_fragment = src->tl->init_fragment,
-        .skip_lavf_probing = true,
+        .skip_lavf_probing = src->tl->dash,
         .stream_flags = demuxer->stream_origin,
     };
     src->current->d = demux_open_url(src->current->url, &params,
@@ -252,6 +259,142 @@ static void switch_segment(struct demuxer *demuxer, struct virtual_source *src,
 
     src->eof_reached = false;
     src->eos_packets = 0;
+}
+
+static void do_read_next_packet(struct demuxer *demuxer,
+                                struct virtual_source *src)
+{
+    if (src->next)
+        return;
+
+    struct segment *seg = src->current;
+    if (!seg || !seg->d) {
+        src->eof_reached = true;
+        return;
+    }
+
+    struct demux_packet *pkt = demux_read_any_packet(seg->d);
+    if (!pkt || (!src->no_clip && pkt->pts >= seg->end))
+        src->eos_packets += 1;
+
+    update_slave_stats(demuxer, seg->d);
+
+    // Test for EOF. Do this here to properly run into EOF even if other
+    // streams are disabled etc. If it somehow doesn't manage to reach the end
+    // after demuxing a high (bit arbitrary) number of packets, assume one of
+    // the streams went EOF early.
+    bool eos_reached = src->eos_packets > 0;
+    if (eos_reached && src->eos_packets < 100) {
+        for (int n = 0; n < src->num_streams; n++) {
+            struct virtual_stream *vs = src->streams[n];
+            if (vs->selected) {
+                int max_packets = 0;
+                if (vs->sh->type == STREAM_AUDIO)
+                    max_packets = 1;
+                if (vs->sh->type == STREAM_VIDEO)
+                    max_packets = 16;
+                eos_reached &= vs->eos_packets >= max_packets;
+            }
+        }
+    }
+
+    src->eof_reached = false;
+
+    if (eos_reached || !pkt) {
+        talloc_free(pkt);
+
+        struct segment *next = NULL;
+        for (int n = 0; n < src->num_segments - 1; n++) {
+            if (src->segments[n] == seg) {
+                next = src->segments[n + 1];
+                break;
+            }
+        }
+        if (!next) {
+            src->eof_reached = true;
+            return;
+        }
+        switch_segment(demuxer, src, next, next->start, 0, true);
+        return; // reader will retry
+    }
+
+    if (pkt->stream < 0 || pkt->stream >= seg->num_stream_map)
+        goto drop;
+
+    if (!src->no_clip || src->delay_open) {
+        pkt->segmented = true;
+        if (!pkt->codec)
+            pkt->codec = demux_get_stream(seg->d, pkt->stream)->codec;
+    }
+    if (!src->no_clip) {
+        if (pkt->start == MP_NOPTS_VALUE || pkt->start < seg->start)
+            pkt->start = seg->start;
+        if (pkt->end == MP_NOPTS_VALUE || pkt->end > seg->end)
+            pkt->end = seg->end;
+    }
+
+    struct virtual_stream *vs = seg->stream_map[pkt->stream];
+    if (!vs)
+        goto drop;
+
+    // for refresh seeks, demux.c prefers monotonically increasing packet pos
+    // since the packet pos is meaningless anyway for timeline, use it
+    if (pkt->pos >= 0)
+        pkt->pos |= (seg->index & 0x7FFFULL) << 48;
+
+    if (pkt->pts != MP_NOPTS_VALUE && !src->no_clip && pkt->pts >= seg->end) {
+        // Trust the keyframe flag. Might not always be a good idea, but will
+        // be sufficient at least with mkv. The problem is that this flag is
+        // not well-defined in libavformat and is container-dependent.
+        if (pkt->keyframe || vs->eos_packets == INT_MAX) {
+            vs->eos_packets = INT_MAX;
+            goto drop;
+        } else {
+            vs->eos_packets += 1;
+        }
+    }
+
+    double dts = pkt->dts != MP_NOPTS_VALUE ? pkt->dts : pkt->pts;
+    if (src->dts == MP_NOPTS_VALUE || (dts != MP_NOPTS_VALUE && dts > src->dts))
+        src->dts = dts;
+
+    pkt->stream = vs->sh->index;
+    src->next = pkt;
+    return;
+
+drop:
+    talloc_free(pkt);
+}
+
+static bool d_read_packet(struct demuxer *demuxer, struct demux_packet **out_pkt)
+{
+    struct priv *p = demuxer->priv;
+    struct virtual_source *src = NULL;
+
+    for (int x = 0; x < p->num_sources; x++) {
+        struct virtual_source *cur = p->sources[x];
+
+        if (!cur->any_selected || cur->eof_reached)
+            continue;
+
+        if (!cur->current)
+            switch_segment(demuxer, cur, cur->segments[0], 0, 0, true);
+
+        if (!cur->any_selected || !cur->current || !cur->current->d)
+            continue;
+
+        if (!src || cur->dts == MP_NOPTS_VALUE ||
+            (src->dts != MP_NOPTS_VALUE && cur->dts < src->dts))
+            src = cur;
+    }
+
+    if (!src)
+        return false;
+
+    do_read_next_packet(demuxer, src);
+    *out_pkt = src->next;
+    src->next = NULL;
+    return true;
 }
 
 static void seek_source(struct demuxer *demuxer, struct virtual_source *src,
@@ -322,144 +465,9 @@ static void d_seek(struct demuxer *demuxer, double seek_pts, int flags)
 
     for (int x = 0; x < p->num_sources; x++) {
         struct virtual_source *src = p->sources[x];
-        if (src != master)
+        if (src != master && src->any_selected)
             seek_source(demuxer, src, seek_pts, flags);
     }
-}
-
-static bool d_read_packet(struct demuxer *demuxer, struct demux_packet **out_pkt)
-{
-    struct priv *p = demuxer->priv;
-
-    struct virtual_source *src = NULL;
-
-    for (int x = 0; x < p->num_sources; x++) {
-        struct virtual_source *cur = p->sources[x];
-
-        if (!cur->any_selected || cur->eof_reached)
-            continue;
-
-        if (!cur->current)
-            switch_segment(demuxer, cur, cur->segments[0], 0, 0, true);
-
-        if (!cur->any_selected || !cur->current || !cur->current->d)
-            continue;
-
-        if (!src || cur->dts == MP_NOPTS_VALUE ||
-            (src->dts != MP_NOPTS_VALUE && cur->dts < src->dts))
-            src = cur;
-    }
-
-    if (!src)
-        return false;
-
-    if (!do_read_next_packet(demuxer, src))
-        return false;
-    *out_pkt = src->next;
-    src->next = NULL;
-    return true;
-}
-
-static bool do_read_next_packet(struct demuxer *demuxer,
-                                struct virtual_source *src)
-{
-    if (src->next)
-        return 1;
-
-    struct segment *seg = src->current;
-    if (!seg || !seg->d)
-        return 0;
-
-    struct demux_packet *pkt = demux_read_any_packet(seg->d);
-    if (!pkt || (!src->no_clip && pkt->pts >= seg->end))
-        src->eos_packets += 1;
-
-    update_slave_stats(demuxer, seg->d);
-
-    // Test for EOF. Do this here to properly run into EOF even if other
-    // streams are disabled etc. If it somehow doesn't manage to reach the end
-    // after demuxing a high (bit arbitrary) number of packets, assume one of
-    // the streams went EOF early.
-    bool eos_reached = src->eos_packets > 0;
-    if (eos_reached && src->eos_packets < 100) {
-        for (int n = 0; n < src->num_streams; n++) {
-            struct virtual_stream *vs = src->streams[n];
-            if (vs->selected) {
-                int max_packets = 0;
-                if (vs->sh->type == STREAM_AUDIO)
-                    max_packets = 1;
-                if (vs->sh->type == STREAM_VIDEO)
-                    max_packets = 16;
-                eos_reached &= vs->eos_packets >= max_packets;
-            }
-        }
-    }
-
-    src->eof_reached = false;
-
-    if (eos_reached || !pkt) {
-        talloc_free(pkt);
-
-        struct segment *next = NULL;
-        for (int n = 0; n < src->num_segments - 1; n++) {
-            if (src->segments[n] == seg) {
-                next = src->segments[n + 1];
-                break;
-            }
-        }
-        if (!next) {
-            src->eof_reached = true;
-            return false;
-        }
-        switch_segment(demuxer, src, next, next->start, 0, true);
-        return true; // reader will retry
-    }
-
-    if (pkt->stream < 0 || pkt->stream >= seg->num_stream_map)
-        goto drop;
-
-    if (!src->no_clip) {
-        pkt->segmented = true;
-        if (!pkt->codec)
-            pkt->codec = demux_get_stream(seg->d, pkt->stream)->codec;
-        if (pkt->start == MP_NOPTS_VALUE || pkt->start < seg->start)
-            pkt->start = seg->start;
-        if (pkt->end == MP_NOPTS_VALUE || pkt->end > seg->end)
-            pkt->end = seg->end;
-    }
-
-    struct virtual_stream *vs = seg->stream_map[pkt->stream];
-    if (!vs)
-        goto drop;
-
-    // for refresh seeks, demux.c prefers monotonically increasing packet pos
-    // since the packet pos is meaningless anyway for timeline, use it
-    if (pkt->pos >= 0)
-        pkt->pos |= (seg->index & 0x7FFFULL) << 48;
-
-    if (pkt->pts != MP_NOPTS_VALUE && !src->no_clip && pkt->pts >= seg->end) {
-        // Trust the keyframe flag. Might not always be a good idea, but will
-        // be sufficient at least with mkv. The problem is that this flag is
-        // not well-defined in libavformat and is container-dependent.
-        if (pkt->keyframe || vs->eos_packets == INT_MAX) {
-            vs->eos_packets = INT_MAX;
-            goto drop;
-        } else {
-            vs->eos_packets += 1;
-        }
-    }
-
-    double dts = pkt->dts != MP_NOPTS_VALUE ? pkt->dts : pkt->pts;
-    if (src->dts == MP_NOPTS_VALUE || (dts != MP_NOPTS_VALUE && dts > src->dts))
-        src->dts = dts;
-
-    pkt->stream = vs->sh->index;
-    src->next = pkt;
-    return true;
-
-drop:
-    talloc_free(pkt);
-    return true;
 }
 
 static void print_timeline(struct demuxer *demuxer)
@@ -498,51 +506,36 @@ static void print_timeline(struct demuxer *demuxer)
     MP_VERBOSE(demuxer, "Total duration: %f\n", p->duration);
 }
 
-static int d_open(struct demuxer *demuxer, enum demux_check check)
+// Copy various (not all) metadata fields from src to dst, but try not to
+// overwrite fields in dst that are unset in src.
+// May keep data from src by reference.
+// Imperfect and arbitrary, only suited for EDL stuff.
+static void apply_meta(struct sh_stream *dst, struct sh_stream *src)
 {
-    struct priv *p = demuxer->priv = talloc_zero(demuxer, struct priv);
-    p->tl = demuxer->params ? demuxer->params->timeline : NULL;
-    if (!p->tl || p->tl->num_pars < 1)
-        return -1;
+    if (src->demuxer_id >= 0)
+        dst->demuxer_id = src->demuxer_id;
+    if (src->title)
+        dst->title = src->title;
+    if (src->lang)
+        dst->lang = src->lang;
+    dst->default_track = src->default_track;
+    dst->forced_track = src->forced_track;
+    if (src->hls_bitrate)
+        dst->hls_bitrate = src->hls_bitrate;
+    dst->missing_timestamps = src->missing_timestamps;
+    if (src->attached_picture)
+        dst->attached_picture = src->attached_picture;
+}
 
-    demuxer->chapters = p->tl->chapters;
-    demuxer->num_chapters = p->tl->num_chapters;
-
-    struct demuxer *meta = p->tl->meta;
-    if (!meta)
-        return -1;
-    demuxer->metadata = meta->metadata;
-    demuxer->attachments = meta->attachments;
-    demuxer->num_attachments = meta->num_attachments;
-    demuxer->editions = meta->editions;
-    demuxer->num_editions = meta->num_editions;
-    demuxer->edition = meta->edition;
-
-    for (int n = 0; n < p->tl->num_pars; n++) {
-        if (!add_tl(demuxer, p->tl->pars[n]))
-            return -1;
+// This is mostly for EDL user-defined metadata.
+static struct sh_stream *find_matching_meta(struct timeline_par *tl, int index)
+{
+    for (int n = 0; n < tl->num_sh_meta; n++) {
+        struct sh_stream *sh = tl->sh_meta[n];
+        if (sh->index == index || sh->index < 0)
+            return sh;
     }
-
-    if (!p->num_sources)
-        return -1;
-
-    demuxer->is_network |= p->tl->is_network;
-    demuxer->is_streaming |= p->tl->is_streaming;
-
-    demuxer->duration = p->duration;
-
-    print_timeline(demuxer);
-
-    demuxer->seekable = true;
-    demuxer->partially_seekable = false;
-
-    demuxer->filetype = talloc_asprintf(p, "%s/%s",
-                        p->tl->format,
-                        meta->filetype ? meta->filetype : meta->desc->name);
-
-    reselect_streams(demuxer);
-
-    return 0;
+    return NULL;
 }
 
 static bool add_tl(struct demuxer *demuxer, struct timeline_par *tl)
@@ -553,11 +546,12 @@ static bool add_tl(struct demuxer *demuxer, struct timeline_par *tl)
     *src = (struct virtual_source){
         .tl = tl,
         .dash = tl->dash,
+        .delay_open = tl->delay_open,
         .no_clip = tl->no_clip || tl->dash,
         .dts = MP_NOPTS_VALUE,
     };
 
-    if (!tl->num_parts || !tl->track_layout)
+    if (!tl->num_parts)
         return false;
 
     MP_TARRAY_APPEND(p, p->sources, p->num_sources, src);
@@ -566,19 +560,33 @@ static bool add_tl(struct demuxer *demuxer, struct timeline_par *tl)
 
     struct demuxer *meta = tl->track_layout;
 
-    int num_streams = demux_get_num_stream(meta);
+    // delay_open streams normally have meta==NULL, and 1 virtual stream
+    int num_streams = 0;
+    if (tl->delay_open) {
+        num_streams = tl->num_sh_meta;
+    } else if (meta) {
+        num_streams = demux_get_num_stream(meta);
+    }
     for (int n = 0; n < num_streams; n++) {
-        struct sh_stream *sh = demux_get_stream(meta, n);
-        struct sh_stream *new = demux_alloc_sh_stream(sh->type);
-        new->demuxer_id = sh->demuxer_id;
-        new->codec = sh->codec;
-        new->title = sh->title;
-        new->lang = sh->lang;
-        new->default_track = sh->default_track;
-        new->forced_track = sh->forced_track;
-        new->hls_bitrate = sh->hls_bitrate;
-        new->missing_timestamps = sh->missing_timestamps;
-        new->attached_picture = sh->attached_picture;
+        struct sh_stream *new = NULL;
+
+        if (tl->delay_open) {
+            struct sh_stream *tsh = tl->sh_meta[n];
+            new = demux_alloc_sh_stream(tsh->type);
+            new->codec = tsh->codec;
+            apply_meta(new, tsh);
+            demuxer->is_network = true;
+            demuxer->is_streaming = true;
+        } else {
+            struct sh_stream *sh = demux_get_stream(meta, n);
+            new = demux_alloc_sh_stream(sh->type);
+            apply_meta(new, sh);
+            new->codec = sh->codec;
+            struct sh_stream *tsh = find_matching_meta(tl, n);
+            if (tsh)
+                apply_meta(new, tsh);
+        }
+
         demux_add_sh_stream(demuxer, new);
         struct virtual_stream *vs = talloc_ptrtype(p, vs);
         *vs = (struct virtual_stream){
@@ -600,6 +608,9 @@ static bool add_tl(struct demuxer *demuxer, struct timeline_par *tl)
             demuxer->is_streaming |= part->source->is_streaming;
         }
 
+        if (!part->source)
+            assert(tl->dash || tl->delay_open);
+
         struct segment *seg = talloc_ptrtype(src, seg);
         *seg = (struct segment){
             .d = part->source,
@@ -616,9 +627,60 @@ static bool add_tl(struct demuxer *demuxer, struct timeline_par *tl)
         MP_TARRAY_APPEND(src, src->segments, src->num_segments, seg);
     }
 
-    demuxer->is_network |= tl->track_layout->is_network;
-    demuxer->is_streaming |= tl->track_layout->is_streaming;
+    if (tl->track_layout) {
+        demuxer->is_network |= tl->track_layout->is_network;
+        demuxer->is_streaming |= tl->track_layout->is_streaming;
+    }
     return true;
+}
+
+static int d_open(struct demuxer *demuxer, enum demux_check check)
+{
+    struct priv *p = demuxer->priv = talloc_zero(demuxer, struct priv);
+    p->tl = demuxer->params ? demuxer->params->timeline : NULL;
+    if (!p->tl || p->tl->num_pars < 1)
+        return -1;
+
+    demuxer->chapters = p->tl->chapters;
+    demuxer->num_chapters = p->tl->num_chapters;
+
+    struct demuxer *meta = p->tl->meta;
+    if (meta) {
+        demuxer->metadata = meta->metadata;
+        demuxer->attachments = meta->attachments;
+        demuxer->num_attachments = meta->num_attachments;
+        demuxer->editions = meta->editions;
+        demuxer->num_editions = meta->num_editions;
+        demuxer->edition = meta->edition;
+    }
+
+    for (int n = 0; n < p->tl->num_pars; n++) {
+        if (!add_tl(demuxer, p->tl->pars[n]))
+            return -1;
+    }
+
+    if (!p->num_sources)
+        return -1;
+
+    demuxer->is_network |= p->tl->is_network;
+    demuxer->is_streaming |= p->tl->is_streaming;
+
+    demuxer->duration = p->duration;
+
+    print_timeline(demuxer);
+
+    demuxer->seekable = true;
+    demuxer->partially_seekable = false;
+
+    const char *format_name = "unknown";
+    if (meta)
+        format_name = meta->filetype ? meta->filetype : meta->desc->name;
+    demuxer->filetype = talloc_asprintf(p, "%s/%s", p->tl->format, format_name);
+
+    reselect_streams(demuxer);
+
+    p->owns_tl = true;
+    return 0;
 }
 
 static void d_close(struct demuxer *demuxer)
@@ -633,9 +695,11 @@ static void d_close(struct demuxer *demuxer)
         close_lazy_segments(demuxer, src);
     }
 
-    struct demuxer *master = p->tl->demuxer;
-    timeline_destroy(p->tl);
-    demux_free(master);
+    if (p->owns_tl) {
+        struct demuxer *master = p->tl->demuxer;
+        timeline_destroy(p->tl);
+        demux_free(master);
+    }
 }
 
 static void d_switched_tracks(struct demuxer *demuxer)

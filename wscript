@@ -206,27 +206,23 @@ main_dependencies = [
         'req': True,
         'fmsg': 'Unable to find pthreads support.'
     }, {
-        'name': 'gnuc',
-        'desc': 'GNU C extensions',
-        'func': check_statement([], "__GNUC__"),
+        # NB: this works only if a source file includes osdep/threads.h
+        #     also, technically, triggers undefined behavior (reserved names)
+        'name': '--pthread-debug',
+        'desc': 'pthread runtime debugging wrappers',
+        'default': 'disable',
+        'func': check_cc(cflags='-DMP_PTHREAD_DEBUG'),
+        # The win32 wrapper defines pthreads symbols as macros only.
+        'deps_neg': 'win32-internal-pthreads',
     }, {
-        'name': 'stdatomic',
-        'desc': 'stdatomic.h',
+        'name': '--stdatomic',
+        'desc': 'C11 stdatomic.h',
         'func': check_libs(['atomic'],
             check_statement('stdatomic.h',
                 'atomic_int_least64_t test = ATOMIC_VAR_INIT(123);'
-                'atomic_fetch_add(&test, 1)'))
-    }, {
-        # C11; technically we require C11, but aligned_alloc() is not in MinGW
-        'name': 'aligned_alloc',
-        'desc': 'C11 aligned_alloc()',
-        'func': check_statement('stdlib.h', 'aligned_alloc(1, 1)'),
-    }, {
-        'name': 'atomics',
-        'desc': 'stdatomic.h support or slow emulation',
-        'func': check_true,
+                'atomic_fetch_add(&test, 1)')),
         'req': True,
-        'deps': 'stdatomic || gnuc',
+        'fmsg': 'C11 atomics are required; you may need a newer compiler',
     }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
@@ -246,27 +242,6 @@ iconv support use --disable-iconv.",
         'deps': 'os-win32 || os-cygwin',
         'func': check_true
     }, {
-        'name': 'posix-spawn-native',
-        'desc': 'spawnp()/kill() POSIX support',
-        'func': check_statement(['spawn.h', 'signal.h'],
-            'posix_spawnp(0,0,0,0,0,0); kill(0,0)'),
-        'deps': '!mingw && !tvos',
-    }, {
-        'name': 'posix-spawn-android',
-        'desc': 'spawnp()/kill() Android replacement',
-        'func': check_true,
-        'deps': 'android && !posix-spawn-native',
-    },{
-        'name': 'posix-spawn',
-        'desc': 'any spawnp()/kill() support',
-        'deps': 'posix-spawn-native || posix-spawn-android',
-        'func': check_true,
-    }, {
-        'name': 'win32-pipes',
-        'desc': 'Windows pipe support',
-        'func': check_true,
-        'deps': 'win32-desktop && !posix',
-    }, {
         'name': 'glob-posix',
         'desc': 'glob() POSIX support',
         'deps': '!(os-win32 || os-cygwin)',
@@ -282,13 +257,15 @@ iconv support use --disable-iconv.",
         'deps': 'glob-posix || glob-win32',
         'func': check_true,
     }, {
-        'name': 'fchmod',
-        'desc': 'fchmod()',
-        'func': check_statement('sys/stat.h', 'fchmod(0, 0)'),
-    }, {
         'name': 'vt.h',
         'desc': 'vt.h',
         'func': check_statement(['sys/vt.h', 'sys/ioctl.h'],
+                                'int m; ioctl(0, VT_GETMODE, &m)'),
+    }, {
+        'name': 'consio.h',
+        'desc': 'consio.h',
+        'deps': '!vt.h',
+        'func': check_statement(['sys/consio.h', 'sys/ioctl.h'],
                                 'int m; ioctl(0, VT_GETMODE, &m)'),
     }, {
         'name': 'gbm.h',
@@ -310,7 +287,7 @@ iconv support use --disable-iconv.",
         'name': 'bsd-thread-name',
         'desc': 'BSD API for setting thread name',
         'deps': '!(glibc-thread-name || osx-thread-name)',
-        'func': check_statement('pthread.h',
+        'func': check_statement(['pthread.h', 'pthread_np.h'],
                                 'pthread_set_name_np(pthread_self(), "ducks")',
                                 use=['pthreads']),
     }, {
@@ -325,19 +302,6 @@ iconv support use --disable-iconv.",
         'func': check_statement('sys/vfs.h',
                                 'struct statfs fs; fstatfs(0, &fs); fs.f_namelen')
     }, {
-        'name': 'memfd_create',
-        'desc': "Linux's memfd_create()",
-        'deps': 'os-linux',
-        'func': check_statement('sys/mman.h',
-                                'memfd_create("mpv", MFD_CLOEXEC | MFD_ALLOW_SEALING)')
-    }, {
-        'name': '--libsmbclient',
-        'desc': 'Samba support (makes mpv GPLv3)',
-        'deps': 'libdl && gpl',
-        'func': check_pkg_config('smbclient'),
-        'default': 'disable',
-        'module': 'input',
-    }, {
         'name' : '--lua',
         'desc' : 'Lua',
         'func': check_lua,
@@ -346,24 +310,13 @@ iconv support use --disable-iconv.",
         'desc' : 'Javascript (MuJS backend)',
         'func': check_pkg_config('mujs', '>= 1.0.0'),
     }, {
-        'name': '--libass',
+        'name': 'libass',
         'desc': 'SSA/ASS support',
         'func': check_pkg_config('libass', '>= 0.12.1'),
         'req': True,
         'fmsg': "Unable to find development files for libass, or the version " +
-                "found is too old. Aborting. If you really mean to compile " +
-                "without libass support use --disable-libass."
+                "found is too old. Aborting."
     }, {
-        'name': '--libass-osd',
-        'desc': 'libass OSD support',
-        'deps': 'libass',
-        'func': check_true,
-    }, {
-        'name': 'dummy-osd',
-        'desc': 'dummy OSD support',
-        'deps': '!libass-osd',
-        'func': check_true,
-    } , {
         'name': '--zlib',
         'desc': 'zlib',
         'func': check_libs(['z'],
@@ -399,7 +352,6 @@ iconv support use --disable-iconv.",
         'func': check_pkg_config('rubberband', '>= 1.8.0'),
     }, {
         'name': '--zimg',
-        'deps': 'aligned_alloc',
         'desc': 'libzimg support (high quality software scaler)',
         'func': check_pkg_config('zimg', '>= 2.9'),
     }, {
@@ -434,69 +386,19 @@ iconv support use --disable-iconv.",
     }
 ]
 
-ffmpeg_pkg_config_checks = [
-    'libavutil',     '>= 56.12.100',
-    'libavcodec',    '>= 58.16.100',
-    'libavformat',   '>= 58.9.100',
-    'libswscale',    '>= 5.0.101',
-    'libavfilter',   '>= 7.14.100',
-    'libswresample', '>= 3.0.100',
-]
-libav_pkg_config_checks = [
-    'libavutil',     '>= 56.6.0',
-    'libavcodec',    '>= 58.8.0',
-    'libavformat',   '>= 58.1.0',
-    'libswscale',    '>= 5.0.0',
-    'libavfilter',   '>= 7.0.0',
-    'libavresample', '>= 4.0.0',
-]
-
-def check_ffmpeg_or_libav_versions():
-    def fn(ctx, dependency_identifier, **kw):
-        versions = ffmpeg_pkg_config_checks
-        if ctx.dependency_satisfied('libav'):
-            versions = libav_pkg_config_checks
-        return check_pkg_config(*versions)(ctx, dependency_identifier, **kw)
-    return fn
-
 libav_dependencies = [
     {
-        'name': 'libavcodec',
-        'desc': 'FFmpeg/Libav present',
-        'func': check_pkg_config('libavcodec'),
-        'req': True,
-        'fmsg': "FFmpeg/Libav development files not found.",
-    }, {
-        'name': 'libavutil',
-        'desc': 'FFmpeg/Libav libavutil present',
-        'func': check_pkg_config('libavutil'),
-        'req': True,
-        'fmsg': "FFmpeg/Libav libavutil not found.",
-    }, {
         'name': 'ffmpeg',
-        'desc': 'libav* is FFmpeg',
-        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
-        'func': check_statement('libavcodec/version.h',
-                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? 1 : -1]',
-                                use='libavcodec'),
-    }, {
-        # This check should always result in the opposite of ffmpeg-*.
-        # Run it to make sure is_ffmpeg didn't fail for some other reason than
-        # the actual version check.
-        'name': 'libav',
-        'desc': 'libav* is Libav',
-        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
-        'func': check_statement('libavcodec/version.h',
-                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? -1 : 1]',
-                                use='libavcodec')
-    }, {
-        'name': 'libav-any',
-        'desc': 'Libav/FFmpeg library versions',
-        'deps': 'ffmpeg || libav',
-        'func': check_ffmpeg_or_libav_versions(),
+        'desc': 'FFmpeg library',
+        'func': check_pkg_config('libavutil',     '>= 56.12.100',
+                                 'libavcodec',    '>= 58.16.100',
+                                 'libavformat',   '>= 58.9.100',
+                                 'libswscale',    '>= 5.0.101',
+                                 'libavfilter',   '>= 7.14.100',
+                                 'libswresample', '>= 3.0.100'),
         'req': True,
         'fmsg': "Unable to find development files for some of the required \
-FFmpeg/Libav libraries. Git master is recommended."
+FFmpeg libraries. Git master is recommended."
     }, {
         'name': '--libavdevice',
         'desc': 'libavdevice',
@@ -515,21 +417,6 @@ audio_output_features = [
         'desc': 'SDL2 audio output',
         'deps': 'sdl2',
         'func': check_true,
-    }, {
-        'name': '--oss-audio',
-        'desc': 'OSS',
-        'func': check_cc(header_name='sys/soundcard.h'),
-        'deps': 'posix && gpl',
-    }, {
-        'name': '--rsound',
-        'desc': 'RSound audio output',
-        'func': check_statement('rsound.h', 'rsd_init(NULL)', lib='rsound')
-    }, {
-        'name': '--sndio',
-        'desc': 'sndio audio input/output',
-        'func': check_statement('sndio.h',
-            'struct sio_par par; sio_initpar(&par); const char *s = SIO_DEVANY', lib='sndio'),
-        'default': 'disable'
     }, {
         'name': '--pulse',
         'desc': 'PulseAudio audio output',
@@ -561,7 +448,6 @@ audio_output_features = [
     }, {
         'name': '--audiounit',
         'desc': 'AudioUnit output for iOS',
-        'deps': 'atomics',
         'func': check_cc(
             fragment=load_fragment('audiounit.c'),
             framework_name=['Foundation', 'AudioToolbox'])
@@ -587,14 +473,8 @@ video_output_features = [
     }, {
         'name': '--drm',
         'desc': 'DRM',
-        'deps': 'vt.h',
+        'deps': 'vt.h || consio.h',
         'func': check_pkg_config('libdrm', '>= 2.4.74'),
-    }, {
-        'name': '--drmprime',
-        'desc': 'DRM Prime ffmpeg support',
-        'func': check_statement('libavutil/pixfmt.h',
-                                'int i = AV_PIX_FMT_DRM_PRIME',
-                                use='libavutil')
     }, {
         'name': '--gbm',
         'desc': 'GBM',
@@ -615,6 +495,12 @@ video_output_features = [
         'func': check_pkg_config('wayland-client', '>= 1.15.0',
                                  'wayland-cursor', '>= 1.15.0',
                                  'xkbcommon',      '>= 0.3.0'),
+    } , {
+        'name': 'memfd_create',
+        'desc': "Linux's memfd_create()",
+        'deps': 'wayland',
+        'func': check_statement('sys/mman.h',
+                                'memfd_create("mpv", MFD_CLOEXEC | MFD_ALLOW_SEALING)')
     } , {
         'name': '--x11',
         'desc': 'X11',
@@ -646,14 +532,19 @@ video_output_features = [
         'func': check_libs(['GL', 'GL Xdamage'],
                    check_cc(fragment=load_fragment('gl_x11.c'),
                             use=['x11', 'libdl', 'pthreads']))
+    }, {
+        'name': '--rpi',
+        'desc': 'Raspberry Pi support',
+        'func': check_egl_provider(name='brcmegl', check=any_check(
+            check_pkg_config('brcmegl'),
+            check_pkg_config('/opt/vc/lib/pkgconfig/brcmegl.pc')
+            )),
+        'default': 'disable',
     } , {
         'name': '--egl',
         'desc': 'EGL 1.4',
         'groups': [ 'gl' ],
-        'func': compose_checks(
-            check_pkg_config('egl'),
-            check_statement(['EGL/egl.h'], 'int x[EGL_VERSION_1_4]')
-            ),
+        'func': check_egl_provider('1.4')
     } , {
         'name': '--egl-x11',
         'desc': 'OpenGL X11 EGL Backend',
@@ -663,16 +554,15 @@ video_output_features = [
     } , {
         'name': '--egl-drm',
         'desc': 'OpenGL DRM EGL Backend',
-        'deps': 'drm && gbm',
+        'deps': 'drm && gbm && egl',
         'groups': [ 'gl' ],
-        'func': check_pkg_config('egl'),
+        'func': check_true,
     } , {
         'name': '--gl-wayland',
         'desc': 'OpenGL Wayland Backend',
-        'deps': 'wayland',
+        'deps': 'wayland && egl',
         'groups': [ 'gl' ],
-        'func': check_pkg_config('wayland-egl', '>= 9.0.0',
-                                 'egl',         '>= 1.5')
+        'func': check_pkg_config('wayland-egl', '>= 9.0.0')
     } , {
         'name': '--gl-win32',
         'desc': 'OpenGL Win32 Backend',
@@ -807,10 +697,6 @@ video_output_features = [
         'desc': 'Direct3D 11 video output',
         'deps': 'win32-desktop && shaderc && spirv-cross',
         'func': check_cc(header_name=['d3d11_1.h', 'dxgi1_6.h']),
-    }, {
-        'name': '--rpi',
-        'desc': 'Raspberry Pi support',
-        'func': check_pkg_config('brcmegl'),
     } , {
         'name': '--ios-gl',
         'desc': 'iOS OpenGL ES hardware decoding interop support',
@@ -848,8 +734,7 @@ video_output_features = [
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
-        'deps': 'egl-x11 || rpi || gl-wayland || egl-drm || ' +
-                'egl-angle-win32 || egl-android',
+        'deps': 'egl || rpi || egl-angle-win32 || egl-android',
         'func': check_true
     }
 ]
@@ -899,7 +784,8 @@ hwaccel_features = [
         'name': '--rpi-mmal',
         'desc': 'Raspberry Pi MMAL hwaccel',
         'deps': 'rpi',
-        'func': check_pkg_config('mmal'),
+        'func': any_check(check_pkg_config('mmal'),
+                          check_pkg_config('/opt/vc/lib/pkgconfig/mmal.pc')),
     }
 ]
 

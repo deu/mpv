@@ -44,30 +44,30 @@
 #define OPT_BASE_STRUCT struct macos_opts
 const struct m_sub_options macos_conf = {
     .opts = (const struct m_option[]) {
-        OPT_CHOICE("macos-title-bar-appearance", macos_title_bar_appearance, 0,
-                   ({"auto", 0}, {"aqua", 1}, {"darkAqua", 2},
-                    {"vibrantLight", 3}, {"vibrantDark", 4},
-                    {"aquaHighContrast", 5}, {"darkAquaHighContrast", 6},
-                    {"vibrantLightHighContrast", 7},
-                    {"vibrantDarkHighContrast", 8})),
-        OPT_CHOICE("macos-title-bar-material", macos_title_bar_material, 0,
-                   ({"titlebar", 0}, {"selection", 1}, {"menu", 2},
-                    {"popover", 3}, {"sidebar", 4}, {"headerView", 5},
-                    {"sheet", 6}, {"windowBackground", 7}, {"hudWindow", 8},
-                    {"fullScreen", 9}, {"toolTip", 10}, {"contentBackground", 11},
-                    {"underWindowBackground", 12}, {"underPageBackground", 13},
-                    {"dark", 14}, {"light", 15}, {"mediumLight", 16},
-                    {"ultraDark", 17})),
-        OPT_COLOR("macos-title-bar-color", macos_title_bar_color, 0),
-        OPT_CHOICE_OR_INT("macos-fs-animation-duration",
-                          macos_fs_animation_duration, 0, 0, 1000,
-                          ({"default", -1})),
-        OPT_FLAG("macos-force-dedicated-gpu", macos_force_dedicated_gpu, 0),
-        OPT_CHOICE("cocoa-cb-sw-renderer", cocoa_cb_sw_renderer, 0,
-                   ({"auto", -1}, {"no", 0}, {"yes", 1})),
-        OPT_FLAG("cocoa-cb-10bit-context", cocoa_cb_10bit_context, 0),
-        OPT_REMOVED("macos-title-bar-style", "Split into --macos-title-bar-appearance "
-                     "and --macos-title-bar-material"),
+        {"macos-title-bar-appearance", OPT_CHOICE(macos_title_bar_appearance,
+            {"auto", 0}, {"aqua", 1}, {"darkAqua", 2},
+            {"vibrantLight", 3}, {"vibrantDark", 4},
+            {"aquaHighContrast", 5}, {"darkAquaHighContrast", 6},
+            {"vibrantLightHighContrast", 7},
+            {"vibrantDarkHighContrast", 8})},
+        {"macos-title-bar-material", OPT_CHOICE(macos_title_bar_material,
+            {"titlebar", 0}, {"selection", 1}, {"menu", 2},
+            {"popover", 3}, {"sidebar", 4}, {"headerView", 5},
+            {"sheet", 6}, {"windowBackground", 7}, {"hudWindow", 8},
+            {"fullScreen", 9}, {"toolTip", 10}, {"contentBackground", 11},
+            {"underWindowBackground", 12}, {"underPageBackground", 13},
+            {"dark", 14}, {"light", 15}, {"mediumLight", 16},
+            {"ultraDark", 17})},
+        {"macos-title-bar-color", OPT_COLOR(macos_title_bar_color)},
+        {"macos-fs-animation-duration",
+            OPT_CHOICE(macos_fs_animation_duration, {"default", -1}),
+            M_RANGE(0, 1000)},
+        {"macos-force-dedicated-gpu", OPT_FLAG(macos_force_dedicated_gpu)},
+        {"cocoa-cb-sw-renderer", OPT_CHOICE(cocoa_cb_sw_renderer,
+            {"auto", -1}, {"no", 0}, {"yes", 1})},
+        {"cocoa-cb-10bit-context", OPT_FLAG(cocoa_cb_10bit_context)},
+        {"macos-title-bar-style", OPT_REMOVED("Split into --macos-title-bar-appearance "
+                     "and --macos-title-bar-material")},
         {0}
     },
     .size = sizeof(struct macos_opts),
@@ -99,15 +99,16 @@ static Application *mpv_shared_app(void)
 
 static void terminate_cocoa_application(void)
 {
-    [NSApp hide:NSApp];
-    [NSApp terminate:NSApp];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp hide:NSApp];
+        [NSApp terminate:NSApp];
+    });
 }
 
 @implementation Application
 @synthesize menuBar = _menu_bar;
 @synthesize openCount = _open_count;
 @synthesize cocoaCB = _cocoa_cb;
-@synthesize remoteCommandCenter = _remoteCommandCenter;
 
 - (void)sendEvent:(NSEvent *)event
 {
@@ -175,12 +176,6 @@ static const char macosx_icon[] =
     if ([self respondsToSelector:@selector(touchBar)])
         [(TouchBar *)self.touchBar processEvent:event];
 #endif
-#if HAVE_MACOS_MEDIA_PLAYER
-    // 10.12.2 runtime availability check
-    if ([self respondsToSelector:@selector(touchBar)]) {
-        [_remoteCommandCenter processEvent:event];
-    }
-#endif
     if (_cocoa_cb) {
         [_cocoa_cb processEvent:event];
     }
@@ -208,11 +203,6 @@ static const char macosx_icon[] =
     [_eventsResponder queueCommand:cmd];
 }
 
-- (void)handleMPKey:(int)key withMask:(int)mask
-{
-    [_eventsResponder handleMPKey:key withMask:mask];
-}
-
 - (void)stopMPV:(char *)cmd
 {
     if (![_eventsResponder queueCommand:cmd])
@@ -226,11 +216,6 @@ static const char macosx_icon[] =
             andSelector:@selector(handleQuitEvent:withReplyEvent:)
           forEventClass:kCoreEventClass
              andEventID:kAEQuitApplication];
-}
-
-- (void)applicationWillBecomeActive:(NSNotification *)notification
-{
-    [_remoteCommandCenter makeCurrent];
 }
 
 - (void)handleQuitEvent:(NSAppleEventDescriptor *)event
@@ -307,13 +292,6 @@ static void init_cocoa_application(bool regular)
     [NSApp setDelegate:NSApp];
     [NSApp setMenuBar:[[MenuBar alloc] init]];
 
-#if HAVE_MACOS_MEDIA_PLAYER
-    // 10.12.2 runtime availability check
-    if ([NSApp respondsToSelector:@selector(touchBar)]) {
-        [NSApp setRemoteCommandCenter:[[RemoteCommandCenter alloc] initWithApp:NSApp]];
-    }
-#endif
-
     // Will be set to Regular from cocoa_common during UI creation so that we
     // don't create an icon when playing audio only files.
     [NSApp setActivationPolicy: regular ?
@@ -324,7 +302,9 @@ static void init_cocoa_application(bool regular)
         // Because activation policy has just been set to behave like a real
         // application, that policy must be reset on exit to prevent, among
         // other things, the menubar created here from remaining on screen.
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        });
     });
 }
 

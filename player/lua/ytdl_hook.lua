@@ -5,15 +5,20 @@ local options = require 'mp.options'
 local o = {
     exclude = "",
     try_ytdl_first = false,
-    use_manifests = false
+    use_manifests = false,
+    all_formats = false,
+    force_all_formats = true,
 }
-options.read_options(o)
 
 local ytdl = {
     path = "youtube-dl",
     searched = false,
     blacklisted = {}
 }
+
+options.read_options(o, nil, function()
+    ytdl.blacklisted = {} -- reparse o.exclude next time
+end)
 
 local chapter_list = {}
 
@@ -23,11 +28,53 @@ function Set (t)
     return set
 end
 
+-- ?: surrogate (keep in mind that there is no lazy evaluation)
+function iif(cond, if_true, if_false)
+    if cond then
+        return if_true
+    end
+    return if_false
+end
+
 local safe_protos = Set {
     "http", "https", "ftp", "ftps",
     "rtmp", "rtmps", "rtmpe", "rtmpt", "rtmpts", "rtmpte",
     "data"
 }
+
+-- For some sites, youtube-dl returns the audio codec (?) only in the "ext" field.
+local ext_map = {
+    ["mp3"]         = "mp3",
+    ["opus"]        = "opus",
+}
+
+local codec_map = {
+    -- src pattern  = mpv codec
+    ["vtt"]         = "webvtt",
+    ["opus"]        = "opus",
+    ["vp9"]         = "vp9",
+    ["avc1%..*"]    = "h264",
+    ["av01%..*"]    = "av1",
+    ["mp4a%..*"]    = "aac",
+}
+
+-- Codec name as reported by youtube-dl mapped to mpv internal codec names.
+-- Fun fact: mpv will not really use the codec, but will still try to initialize
+-- the codec on track selection (just to scrap it), meaning it's only a hint,
+-- but one that may make initialization fail. On the other hand, if the codec
+-- is valid but completely different from the actual media, nothing bad happens.
+local function map_codec_to_mpv(codec)
+    if codec == nil then
+        return nil
+    end
+    for k, v in pairs(codec_map) do
+        local s, e = codec:find(k)
+        if s == 1 and e == #codec then
+            return v
+        end
+    end
+    return nil
+end
 
 local function exec(args)
     local ret = mp.command_native({name = "subprocess",
@@ -283,15 +330,170 @@ local function valid_manifest(json)
         proto:find("^m3u8")
 end
 
+local function as_integer(v, def)
+    def = def or 0
+    local num = math.floor(tonumber(v) or def)
+    if num > -math.huge and num < math.huge then
+        return num
+    end
+    return def
+end
+
+-- Convert a format list from youtube-dl to an EDL URL, or plain URL.
+--  json: full json blob by youtube-dl
+--  formats: format list by youtube-dl
+--  use_all_formats: if=true, then formats is the full format list, and the
+--                   function will attempt to return them as delay-loaded tracks
+-- See res table initialization in the function for result type.
+local function formats_to_edl(json, formats, use_all_formats)
+    local res = {
+        -- the media URL, which may be EDL
+        url = nil,
+        -- for use_all_formats=true: whether any muxed formats are present, and
+        -- at the same time the separate EDL parts don't have both audio/video
+        muxed_needed = false,
+    }
+
+    local default_formats = {}
+    local requested_formats = json["requested_formats"]
+    if use_all_formats and requested_formats then
+        for _, track in ipairs(requested_formats) do
+            local id = track["format_id"]
+            if id then
+                default_formats[id] = true
+            end
+        end
+    end
+
+    local duration = as_integer(json["duration"])
+    local single_url = nil
+    local streams = {}
+
+    local tbr_only = true
+    for index, track in ipairs(formats) do
+        tbr_only = tbr_only and track["tbr"] and
+                   (not track["abr"]) and (not track["vbr"])
+    end
+
+    for index, track in ipairs(formats) do
+        local edl_track = nil
+        edl_track = edl_track_joined(track.fragments,
+            track.protocol, json.is_live,
+            track.fragment_base_url)
+        if not edl_track and not url_is_safe(track.url) then
+            return nil
+        end
+
+        local tracks = {}
+        if track.vcodec and track.vcodec ~= "none" then
+            tracks[#tracks + 1] = {
+                media_type = "video",
+                codec = map_codec_to_mpv(track.vcodec),
+            }
+        end
+        -- Tries to follow the strange logic that vcodec unset means it's
+        -- an audio stream, even if acodec is sometimes unset.
+        if (#tracks == 0) or (track.acodec and track.acodec ~= "none") then
+            tracks[#tracks + 1] = {
+                media_type = "audio",
+                codec = map_codec_to_mpv(track.acodec) or
+                        ext_map[track.ext],
+            }
+        end
+        if #tracks == 0 then
+            return nil
+        end
+
+        local url = edl_track or track.url
+        local hdr = {"!new_stream", "!no_clip", "!no_chapters"}
+        local skip = false
+        local params = ""
+
+        if use_all_formats then
+            for _, sub in ipairs(tracks) do
+                -- A single track that is either audio or video. Delay load it.
+                local props = ""
+                if sub.media_type == "video" then
+                    props = props .. ",w=" .. as_integer(track.width)
+                                  .. ",h=" .. as_integer(track.height)
+                                  .. ",fps=" .. as_integer(track.fps)
+                elseif sub.media_type == "audio" then
+                    props = props .. ",samplerate=" .. as_integer(track.asr)
+                end
+                hdr[#hdr + 1] = "!delay_open,media_type=" .. sub.media_type ..
+                    ",codec=" .. (sub.codec or "null") .. props
+
+                -- Add bitrate information etc. for better user selection.
+                local byterate = 0
+                local rates = {"tbr", "vbr", "abr"}
+                if #tracks > 1 then
+                    rates = {({video = "vbr", audio = "abr"})[sub.media_type]}
+                end
+                if tbr_only then
+                    rates = {"tbr"}
+                end
+                for _, f in ipairs(rates) do
+                    local br = as_integer(track[f])
+                    if br > 0 then
+                        byterate = math.floor(br * 1000 / 8)
+                        break
+                    end
+                end
+                local title = track.format or track.format_note or ""
+                if #tracks > 1 then
+                    if #title > 0 then
+                        title = title .. " "
+                    end
+                    title = title .. "muxed-" .. index
+                end
+                local flags = {}
+                if default_formats[track["format_id"]] then
+                    flags[#flags + 1] = "default"
+                end
+                hdr[#hdr + 1] = "!track_meta,title=" ..
+                    edl_escape(title) .. ",byterate=" .. byterate ..
+                    iif(#flags > 0, ",flags=" .. table.concat(flags, "+"), "")
+            end
+
+            if duration > 0 then
+                params = params .. ",length=" .. duration
+            end
+        end
+
+        hdr[#hdr + 1] = edl_escape(url) .. params
+
+        streams[#streams + 1] = table.concat(hdr, ";")
+        -- In case there is only 1 of these streams.
+        -- Note: assumes it has no important EDL headers
+        single_url = url
+    end
+
+    -- Merge all tracks into a single virtual file, but avoid EDL if it's
+    -- only a single track (i.e. redundant).
+    if #streams == 1 and single_url then
+        res.url = single_url
+    elseif #streams > 0 then
+        res.url = "edl://" .. table.concat(streams, ";")
+    else
+        return nil
+    end
+
+    return res
+end
+
 local function add_single_video(json)
     local streamurl = ""
+    local format_info = ""
     local max_bitrate = 0
-    local reqfmts = json["requested_formats"]
+    local requested_formats = json["requested_formats"]
+    local all_formats = json["formats"]
 
-    -- prefer manifest_url if present
     if o.use_manifests and valid_manifest(json) then
-        local mpd_url = reqfmts and reqfmts[1]["manifest_url"] or
-            json["manifest_url"]
+        -- prefer manifest_url if present
+        format_info = "manifest"
+
+        local mpd_url = requested_formats and
+            requested_formats[1]["manifest_url"] or json["manifest_url"]
         if not mpd_url then
             msg.error("No manifest URL found in JSON data.")
             return
@@ -301,48 +503,47 @@ local function add_single_video(json)
 
         streamurl = mpd_url
 
-        if reqfmts then
-            for _, track in pairs(reqfmts) do
+        if requested_formats then
+            for _, track in pairs(requested_formats) do
                 max_bitrate = track.tbr > max_bitrate and
                     track.tbr or max_bitrate
             end
         elseif json.tbr then
             max_bitrate = json.tbr > max_bitrate and json.tbr or max_bitrate
         end
+    end
 
-    -- DASH/split tracks
-    elseif reqfmts then
-        local streams = {}
+    if streamurl == ""  then
+        -- possibly DASH/split tracks
+        local res = nil
+        local has_requested_formats = requested_formats and #requested_formats > 0
 
-        for _, track in pairs(reqfmts) do
-            local edl_track = nil
-            edl_track = edl_track_joined(track.fragments,
-                track.protocol, json.is_live,
-                track.fragment_base_url)
-            if not edl_track and not url_is_safe(track.url) then
-                return
-            end
-            if track.vcodec and track.vcodec ~= "none" then
-                -- video track
-                streams[#streams + 1] = edl_track or track.url
-            elseif track.vcodec == "none" then
-                -- audio track
-                streams[#streams + 1] = edl_track or track.url
+        -- Not having requested_formats usually hints to HLS master playlist
+        -- usage, which we don't want to split off, at least not yet.
+        if (all_formats and o.all_formats) and
+           (has_requested_formats or o.force_all_formats)
+        then
+            format_info = "all_formats (separate)"
+            res = formats_to_edl(json, all_formats, true)
+            -- Note: since we don't delay-load muxed streams, use normal stream
+            -- selection if we have to use muxed streams.
+            if res and res.muxed_needed then
+                res = nil
             end
         end
 
-        if #streams > 1 then
-            -- merge them via EDL
-            for i = 1, #streams do
-                streams[i] = "!no_clip;!no_chapters;" .. edl_escape(streams[i])
-            end
-            streamurl = "edl://" ..
-                        table.concat(streams, ";!new_stream;") .. ";"
-        else
-            streamurl = streams[1]
+        if (not res) and has_requested_formats then
+            format_info = "youtube-dl (separate)"
+            res = formats_to_edl(json, requested_formats, false)
         end
 
-    elseif not (json.url == nil) then
+        if res then
+            streamurl = res.url
+        end
+    end
+
+    if streamurl == "" and json.url then
+        format_info = "youtube-dl (single)"
         local edl_track = nil
         edl_track = edl_track_joined(json.fragments, json.protocol,
             json.is_live, json.fragment_base_url)
@@ -353,11 +554,14 @@ local function add_single_video(json)
         -- normal video or single track
         streamurl = edl_track or json.url
         set_http_headers(json.http_headers)
-    else
+    end
+
+    if streamurl == "" then
         msg.error("No URL found in JSON data.")
         return
     end
 
+    msg.verbose("format selection: " .. format_info)
     msg.debug("streamurl: " .. streamurl)
 
     mp.set_property("stream-open-filename", streamurl:gsub("^data:", "data://", 1))
@@ -386,8 +590,13 @@ local function add_single_video(json)
             end
 
             if not (sub == nil) then
-                mp.commandv("sub-add", sub,
-                    "auto", sub_info.ext, lang)
+                local edl = "edl://!no_clip;!delay_open,media_type=sub"
+                local codec = map_codec_to_mpv(sub_info.ext)
+                if codec then
+                    edl = edl .. ",codec=" .. codec
+                end
+                edl = edl .. ";" .. edl_escape(sub)
+                mp.commandv("sub-add", edl, "auto", sub_info.ext, lang)
             else
                 msg.verbose("No subtitle data/url for ["..lang.."]")
             end
@@ -509,8 +718,11 @@ function run_ytdl_hook(url)
     if (format == "") then
         format = "bestvideo+bestaudio/best"
     end
-    table.insert(command, "--format")
-    table.insert(command, format)
+
+    if format ~= "ytdl" then
+        table.insert(command, "--format")
+        table.insert(command, format)
+    end
 
     for param, arg in pairs(raw_options) do
         table.insert(command, "--" .. param)
@@ -689,12 +901,6 @@ function run_ytdl_hook(url)
             end
 
             mp.set_property("stream-open-filename", "memory://" .. table.concat(playlist, "\n"))
-
-            -- This disables mpv's mushy playlist security code, which will
-            -- break links that will be resolved to EDL later (because EDL is
-            -- not considered "safe", and the playlist entries got tagged as
-            -- network originating due to the playlist redirection).
-            mp.set_property_native("file-local-options/load-unsafe-playlists", true)
         end
 
     else -- probably a video

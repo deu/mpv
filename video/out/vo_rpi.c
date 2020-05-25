@@ -110,7 +110,7 @@ static void *get_proc_address(const GLubyte *name)
     // EGL 1.4 (supported by the RPI firmware) does not necessarily return
     // function pointers for core functions.
     if (!p) {
-        void *h = dlopen("/opt/vc/lib/libGLESv2.so", RTLD_LAZY);
+        void *h = dlopen("/opt/vc/lib/libbrcmGLESv2.so", RTLD_LAZY);
         if (h) {
             p = dlsym(h, name);
             dlclose(h);
@@ -889,10 +889,10 @@ fail:
 
 #define OPT_BASE_STRUCT struct priv
 static const struct m_option options[] = {
-    OPT_INT("display", display_nr, 0),
-    OPT_INT("layer", layer, 0, OPTDEF_INT(-10)),
-    OPT_FLAG("background", background, 0),
-    OPT_FLAG("osd", enable_osd, 0, OPTDEF_INT(1)),
+    {"display", OPT_INT(display_nr)},
+    {"layer", OPT_INT(layer), OPTDEF_INT(-10)},
+    {"background", OPT_FLAG(background)},
+    {"osd", OPT_FLAG(enable_osd), OPTDEF_INT(1)},
     {0},
 };
 

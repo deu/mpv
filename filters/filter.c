@@ -1,8 +1,11 @@
+#include <math.h>
 #include <pthread.h>
 
 #include "common/common.h"
 #include "common/global.h"
 #include "common/msg.h"
+#include "osdep/atomic.h"
+#include "osdep/timer.h"
 #include "video/hwdec.h"
 
 #include "filter.h"
@@ -65,8 +68,14 @@ struct filter_runner {
 
     struct mp_filter *root_filter;
 
+    double max_run_time;
+    atomic_bool interrupt_flag;
+
     // If we're currently running the filter graph (for avoiding recursion).
     bool filtering;
+
+    // If set, recursive filtering was initiated through this pin.
+    struct mp_pin *recursive;
 
     // Set of filters which need process() to be called. A filter is in this
     // array iff mp_filter_internal.pending==true.
@@ -125,20 +134,32 @@ static void add_pending(struct mp_filter *f)
     // something naive and dumb does the job too.
     f->in->pending = true;
     MP_TARRAY_APPEND(r, r->pending, r->num_pending, f);
+}
+
+static void add_pending_pin(struct mp_pin *p)
+{
+    struct mp_filter *f = p->manual_connection;
+    assert(f);
+
+    if (f->in->pending)
+        return;
+
+    add_pending(f);
 
     // Need to tell user that something changed.
-    if (f == r->root_filter)
-        r->external_pending = true;
+    if (f == f->in->runner->root_filter && p != f->in->runner->recursive)
+        f->in->runner->external_pending = true;
 }
 
 // Possibly enter recursive filtering. This is done as convenience for
 // "external" filter users only. (Normal filtering does this iteratively via
-// mp_filter_run() to avoid filter reentrancy issues and deep call stacks.) If
-// the API users uses an external manually connected pin, do recursive filtering
-// as a not strictly necessary feature which makes outside I/O with filters
-// easier.
-static void filter_recursive(struct mp_filter *f)
+// mp_filter_graph_run() to avoid filter reentrancy issues and deep call
+// stacks.) If the API users uses an external manually connected pin, do
+// recursive filtering as a not strictly necessary feature which makes outside
+// I/O with filters easier.
+static void filter_recursive(struct mp_pin *p)
 {
+    struct mp_filter *f = p->conn->manual_connection;
     assert(f);
     struct filter_runner *r = f->in->runner;
 
@@ -146,9 +167,15 @@ static void filter_recursive(struct mp_filter *f)
     if (r->filtering)
         return;
 
+    assert(!r->recursive);
+    r->recursive = p;
+
     // Also don't lose the pending state, which the user may or may not
     // care about.
-    r->external_pending |= mp_filter_run(r->root_filter);
+    r->external_pending |= mp_filter_graph_run(r->root_filter);
+
+    assert(r->recursive == p);
+    r->recursive = NULL;
 }
 
 void mp_filter_internal_mark_progress(struct mp_filter *f)
@@ -173,9 +200,14 @@ static void flush_async_notifications(struct filter_runner *r)
     pthread_mutex_unlock(&r->async_lock);
 }
 
-bool mp_filter_run(struct mp_filter *filter)
+bool mp_filter_graph_run(struct mp_filter *filter)
 {
     struct filter_runner *r = filter->in->runner;
+    assert(filter == r->root_filter); // user is supposed to call this on root only
+
+    int64_t end_time = 0;
+    if (isfinite(r->max_run_time))
+        end_time = mp_add_timeout(mp_time_us(), MPMAX(r->max_run_time, 0));
 
     // (could happen with separate filter graphs calling each other, for now
     // ignore this issue as we don't use such a setup anywhere)
@@ -185,13 +217,33 @@ bool mp_filter_run(struct mp_filter *filter)
 
     flush_async_notifications(r);
 
-    while (r->num_pending) {
+    while (1) {
+        if (atomic_exchange_explicit(&r->interrupt_flag, false,
+                                     memory_order_acq_rel))
+        {
+            pthread_mutex_lock(&r->async_lock);
+            if (!r->async_wakeup_sent && r->wakeup_cb)
+                r->wakeup_cb(r->wakeup_ctx);
+            r->async_wakeup_sent = true;
+            pthread_mutex_unlock(&r->async_lock);
+            break;
+        }
+
+        if (!r->num_pending) {
+            flush_async_notifications(r);
+            if (!r->num_pending)
+                break;
+        }
+
         struct mp_filter *next = r->pending[r->num_pending - 1];
         r->num_pending -= 1;
         next->in->pending = false;
 
         if (next->in->info->process)
             next->in->info->process(next);
+
+        if (end_time && mp_time_us() >= end_time)
+            mp_filter_graph_interrupt(r->root_filter);
     }
 
     r->filtering = false;
@@ -232,8 +284,8 @@ bool mp_pin_in_write(struct mp_pin *p, struct mp_frame frame)
     assert(p->conn->data.type == MP_FRAME_NONE);
     p->conn->data = frame;
     p->conn->data_requested = false;
-    add_pending(p->conn->manual_connection);
-    filter_recursive(p->conn->manual_connection);
+    add_pending_pin(p->conn);
+    filter_recursive(p);
     return true;
 }
 
@@ -251,9 +303,9 @@ bool mp_pin_out_request_data(struct mp_pin *p)
     if (p->conn && p->conn->manual_connection) {
         if (!p->data_requested) {
             p->data_requested = true;
-            add_pending(p->conn->manual_connection);
+            add_pending_pin(p->conn);
         }
-        filter_recursive(p->conn->manual_connection);
+        filter_recursive(p);
     }
     return mp_pin_out_has_data(p);
 }
@@ -261,7 +313,7 @@ bool mp_pin_out_request_data(struct mp_pin *p)
 void mp_pin_out_request_data_next(struct mp_pin *p)
 {
     if (mp_pin_out_request_data(p))
-        add_pending(p->conn->manual_connection);
+        add_pending_pin(p->conn);
 }
 
 struct mp_frame mp_pin_out_read(struct mp_pin *p)
@@ -311,6 +363,8 @@ static struct mp_pin *find_connected_end(struct mp_pin *p)
 // state flags.
 static void init_connection(struct mp_pin *p)
 {
+    struct filter_runner *runner = p->owner->in->runner;
+
     if (p->dir == MP_PIN_IN)
         p = p->other;
 
@@ -320,6 +374,12 @@ static void init_connection(struct mp_pin *p)
     // These are the "outer" pins by definition, they have no user connections.
     assert(!in->user_conn);
     assert(!out->user_conn);
+
+    // This and similar checks enforce the same root filter requirement.
+    if (in->manual_connection)
+        assert(in->manual_connection->in->runner == runner);
+    if (out->manual_connection)
+        assert(out->manual_connection->in->runner == runner);
 
     // Logicaly, the ends are always manual connections. A pin chain without
     // manual connections at the ends is still disconnected (or if this
@@ -339,6 +399,7 @@ static void init_connection(struct mp_pin *p)
         assert(!cur->data.type); // unused for in pins
         assert(!cur->other->data_requested); // unset for unconnected out pins
         assert(!cur->other->data.type); // unset for unconnected out pins
+        assert(cur->owner->in->runner == runner);
         cur->within_conn = cur->other->within_conn = true;
         cur = cur->other->user_conn;
     }
@@ -614,11 +675,11 @@ static void filter_wakeup(struct mp_filter *f, bool mark_only)
         f->in->async_pending = true;
         // (not using a talloc parent for thread safety reasons)
         MP_TARRAY_APPEND(NULL, r->async_pending, r->num_async_pending, f);
-        if (!mark_only && !r->async_wakeup_sent) {
-            if (r->wakeup_cb)
-                r->wakeup_cb(r->wakeup_ctx);
-            r->async_wakeup_sent = true;
-        }
+    }
+    if (!mark_only && !r->async_wakeup_sent) {
+        if (r->wakeup_cb)
+            r->wakeup_cb(r->wakeup_ctx);
+        r->async_wakeup_sent = true;
     }
     pthread_mutex_unlock(&r->async_lock);
 }
@@ -631,6 +692,20 @@ void mp_filter_wakeup(struct mp_filter *f)
 void mp_filter_mark_async_progress(struct mp_filter *f)
 {
     filter_wakeup(f, true);
+}
+
+void mp_filter_graph_set_max_run_time(struct mp_filter *f, double seconds)
+{
+    struct filter_runner *r = f->in->runner;
+    assert(f == r->root_filter); // user is supposed to call this on root only
+    r->max_run_time = seconds;
+}
+
+void mp_filter_graph_interrupt(struct mp_filter *f)
+{
+    struct filter_runner *r = f->in->runner;
+    assert(f == r->root_filter); // user is supposed to call this on root only
+    atomic_store(&r->interrupt_flag, true);
 }
 
 void mp_filter_free_children(struct mp_filter *f)
@@ -706,6 +781,7 @@ struct mp_filter *mp_filter_create_with_params(struct mp_filter_params *params)
         *f->in->runner = (struct filter_runner){
             .global = params->global,
             .root_filter = f,
+            .max_run_time = INFINITY,
         };
         pthread_mutex_init(&f->in->runner->async_lock, NULL);
     }
@@ -758,10 +834,11 @@ struct mp_filter *mp_filter_create_root(struct mpv_global *global)
     return mp_filter_create_with_params(&params);
 }
 
-void mp_filter_root_set_wakeup_cb(struct mp_filter *root,
-                                  void (*wakeup_cb)(void *ctx), void *ctx)
+void mp_filter_graph_set_wakeup_cb(struct mp_filter *root,
+                                   void (*wakeup_cb)(void *ctx), void *ctx)
 {
     struct filter_runner *r = root->in->runner;
+    assert(root == r->root_filter); // user is supposed to call this on root only
     pthread_mutex_lock(&r->async_lock);
     r->wakeup_cb = wakeup_cb;
     r->wakeup_ctx = ctx;

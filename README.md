@@ -62,7 +62,6 @@ Releases can be found on the [release list][releases].
   output methods can help (such as `--vo=xv` on Linux), but this use is not
   recommended or supported.
 
-
 ## Downloads
 
 

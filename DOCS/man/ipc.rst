@@ -71,6 +71,9 @@ To be able to simultaneously read and write from the IPC pipe, like on Linux,
 it's necessary to write an external program that uses overlapped file I/O (or
 some wrapper like .NET's NamedPipeClientStream.)
 
+You can open the pipe in PuTTY as "serial" device. This is not very
+comfortable, but gives a way to test interactively without having to write code.
+
 Protocol
 --------
 
@@ -133,9 +136,6 @@ Would generate this response:
 
 If you don't specify a ``request_id``, command replies will set it to 0.
 
-Commands may run asynchronously in the future, instead of blocking the  socket
-until a reply is sent.
-
 All commands, replies, and events are separated from each other with a line
 break character (``\n``).
 
@@ -146,6 +146,72 @@ with ``#`` and empty lines are ignored.
 
 Currently, embedded 0 bytes terminate the current line, but you should not
 rely on this.
+
+Data flow
+---------
+
+Currently, the mpv-side IPC implementation does not service the socket while a
+command is executed and the reply is written. It is for example not possible
+that other events, that happened during the execution of the command, are
+written to the socket before the reply is written.
+
+This might change in the future. The only guarantee is that replies to IPC
+messages are sent in sequence.
+
+Also, since socket I/O is inherently asynchronous, it is possible that you read
+unrelated event messages from the socket, before you read the reply to the
+previous command you sent. In this case, these events were queued by the mpv
+side before it read and started processing your command message.
+
+If the mpv-side IPC implementation switches away from blocking writes and
+blocking command execution, it may attempt to send events at any time.
+
+You can also use asynchronous commands, which can return in any order, and
+which do not block IPC protocol interaction at all while the command is
+executed in the background.
+
+Asynchronous commands
+---------------------
+
+Command can be run asynchronously. This behaves exactly as with normal command
+execution, except that execution is not blocking. Other commands can be sent
+while it's executing, and command completion can be arbitrarily reordered.
+
+The ``async`` field controls this. If present, it must be a boolean. If missing,
+``false`` is assumed.
+
+For example, this initiates an asynchronous command:
+
+::
+
+    { "command": ["screenshot"], "request_id": 123, "async": true }
+
+And this is the completion:
+
+::
+
+    {"request_id":123,"error":"success","data":null}
+
+By design, you will not get a confirmation that the command was started. If a
+command is long running, sending the message will lead to any reply until much
+later when the command finishes.
+
+Some commands execute synchronously, but these will behave like asynchronous
+commands that finished execution immediately.
+
+Cancellation of asynchronous commands is available in the libmpv API, but has
+not yet been implemented in the IPC protocol.
+
+Commands with named arguments
+-----------------------------
+
+If the ``command`` field is a JSON object, named arguments are expected. This
+is described in the C API ``mpv_command_node()`` documentation (the
+``MPV_FORMAT_NODE_MAP`` case). In some cases, this may make commands more
+readable, while some obscure commands basically require using named arguments.
+
+Currently, only "proper" commands (as listed by `List of Input Commands`_)
+support named arguments.
 
 Commands
 --------
@@ -297,3 +363,25 @@ Is equivalent to:
 ::
 
     { "objkey": "value\n" }
+
+Alternative ways of starting clients
+------------------------------------
+
+You can create an anonymous IPC connection without having to set
+``--input-ipc-server``. This is achieved through a mpv pseudo scripting backend
+that starts processes.
+
+You can put ``.run`` file extension in the mpv scripts directory in its  config
+directory (see the `FILES`_ section for details), or load them through other
+means (see `Script location`_). These scripts are simply executed with the OS
+native mechanism (as if you ran them in the shell). They must have a proper
+shebang and have the executable bit set.
+
+When executed, a socket (the IPC connection) is passed to them through file
+descriptor inheritance. The file descriptor is indicated as the special command
+line argument ``--mpv-ipc-fd=N``, where ``N`` is the numeric file descriptor.
+
+The rest is the same as with a normal ``--input-ipc-server`` IPC connection. mpv
+does not attempt to observe or other interact with the started script process.
+
+This does not work in Windows yet.

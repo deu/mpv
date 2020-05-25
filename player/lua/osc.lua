@@ -102,8 +102,9 @@ local state = {
     mp_screen_sizeX, mp_screen_sizeY,       -- last screen-resolution, to detect resolution changes to issue reINITs
     initREQ = false,                        -- is a re-init request pending?
     last_mouseX, last_mouseY,               -- last mouse position, to detect significant mouse movement
+    mouse_in_window = false,
     message_text,
-    message_timeout,
+    message_hide_timer,
     fullscreen = false,
     tick_timer = nil,
     tick_last_time = 0,                     -- when the last tick() was run
@@ -160,9 +161,13 @@ end
 
 -- return mouse position in virtual ASS coordinates (playresx/y)
 function get_virt_mouse_pos()
-    local sx, sy = get_virt_scale_factor()
-    local x, y = mp.get_mouse_pos()
-    return x * sx, y * sy
+    if state.mouse_in_window then
+        local sx, sy = get_virt_scale_factor()
+        local x, y = mp.get_mouse_pos()
+        return x * sx, y * sy
+    else
+        return -1, -1
+    end
 end
 
 function set_virt_mouse_area(x0, y0, x1, y1, name)
@@ -911,12 +916,20 @@ function show_message(text, duration)
     text = string.gsub(text, "\n", "\\N")
 
     state.message_text = text
-    state.message_timeout = mp.get_time() + duration
+
+    if not state.message_hide_timer then
+        state.message_hide_timer = mp.add_timeout(0, request_tick)
+    end
+    state.message_hide_timer:kill()
+    state.message_hide_timer.timeout = duration
+    state.message_hide_timer:resume()
+    request_tick()
 end
 
 function render_message(ass)
-    if not(state.message_timeout == nil) and not(state.message_text == nil)
-        and state.message_timeout > mp.get_time() then
+    if state.message_hide_timer and state.message_hide_timer:is_enabled() and
+       state.message_text
+    then
         local _, lines = string.gsub(state.message_text, "\\N", "")
 
         local fontsize = tonumber(mp.get_property("options/osd-font-size"))
@@ -934,7 +947,6 @@ function render_message(ass)
         ass:append(style .. state.message_text)
     else
         state.message_text = nil
-        state.message_timeout = nil
     end
 end
 
@@ -1964,8 +1976,11 @@ function osc_init()
             local seekto = get_slider_value(element)
             if (element.state.lastseek == nil) or
                 (not (element.state.lastseek == seekto)) then
-                    mp.commandv("seek", seekto, "absolute-percent",
-                        user_opts.seekbarkeyframes and "keyframes" or "exact")
+                    local flags = "absolute-percent"
+                    if not user_opts.seekbarkeyframes then
+                        flags = flags .. "+exact"
+                    end
+                    mp.commandv("seek", seekto, flags)
                     element.state.lastseek = seekto
             end
 
@@ -2206,6 +2221,7 @@ function mouse_leave()
     end
     -- reset mouse position
     state.last_mouseX, state.last_mouseY = nil, nil
+    state.mouse_in_window = false
 end
 
 function request_init()
@@ -2443,6 +2459,8 @@ function process_event(source, what)
 
     elseif source == "mouse_move" then
 
+        state.mouse_in_window = true
+
         local mouseX, mouseY = get_virt_mouse_pos()
         if (user_opts.minmousemove == 0) or
             (not ((state.last_mouseX == nil) or (state.last_mouseY == nil)) and
@@ -2572,7 +2590,7 @@ validate_user_opts()
 
 mp.register_event("shutdown", shutdown)
 mp.register_event("start-file", request_init)
-mp.register_event("tracks-changed", request_init)
+mp.observe_property("track-list", nil, request_init)
 mp.observe_property("playlist", nil, request_init)
 
 mp.register_script_message("osc-message", show_message)

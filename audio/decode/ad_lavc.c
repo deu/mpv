@@ -63,16 +63,16 @@ struct ad_lavc_params {
 
 const struct m_sub_options ad_lavc_conf = {
     .opts = (const m_option_t[]) {
-        OPT_FLOATRANGE("ac3drc", ac3drc, 0, 0, 6),
-        OPT_FLAG("downmix", downmix, 0),
-        OPT_INTRANGE("threads", threads, 0, 0, 16),
-        OPT_KEYVALUELIST("o", avopts, 0),
+        {"ac3drc", OPT_FLOAT(ac3drc), M_RANGE(0, 6)},
+        {"downmix", OPT_FLAG(downmix)},
+        {"threads", OPT_INT(threads), M_RANGE(0, 16)},
+        {"o", OPT_KEYVALUELIST(avopts)},
         {0}
     },
     .size = sizeof(struct ad_lavc_params),
     .defaults = &(const struct ad_lavc_params){
         .ac3drc = 0,
-        .downmix = 1,
+        .downmix = 0,
         .threads = 1,
     },
 };
@@ -103,10 +103,7 @@ static bool init(struct mp_filter *da, struct mp_codec_params *codec,
     ctx->avframe = av_frame_alloc();
     lavc_context->codec_type = AVMEDIA_TYPE_AUDIO;
     lavc_context->codec_id = lavc_codec->id;
-
-#if LIBAVCODEC_VERSION_MICRO >= 100
     lavc_context->pkt_timebase = ctx->codec_timebase;
-#endif
 
     if (opts->downmix && mpopts->audio_output_channels.num_chmaps == 1) {
         lavc_context->request_channel_layout =
@@ -117,10 +114,8 @@ static bool init(struct mp_filter *da, struct mp_codec_params *codec,
     av_opt_set_double(lavc_context, "drc_scale", opts->ac3drc,
                       AV_OPT_SEARCH_CHILDREN);
 
-#if LIBAVCODEC_VERSION_MICRO >= 100
     // Let decoder add AV_FRAME_DATA_SKIP_SAMPLES.
     av_opt_set(lavc_context, "flags2", "+skip_manual", AV_OPT_SEARCH_CHILDREN);
-#endif
 
     mp_set_avopts(da->log, lavc_context, opts->avopts);
 
@@ -199,10 +194,8 @@ static int receive_frame(struct mp_filter *da, struct mp_frame *out)
         MP_ERR(da, "Error decoding audio.\n");
     }
 
-#if LIBAVCODEC_VERSION_MICRO >= 100
     if (priv->avframe->flags & AV_FRAME_FLAG_DISCARD)
         av_frame_unref(priv->avframe);
-#endif
 
     if (!priv->avframe->buf[0])
         return ret;
@@ -224,7 +217,6 @@ static int receive_frame(struct mp_filter *da, struct mp_frame *out)
 
     priv->next_pts = mp_aframe_end_pts(mpframe);
 
-#if LIBAVCODEC_VERSION_MICRO >= 100
     AVFrameSideData *sd =
         av_frame_get_side_data(priv->avframe, AV_FRAME_DATA_SKIP_SAMPLES);
     if (sd && sd->size >= 10) {
@@ -232,7 +224,6 @@ static int receive_frame(struct mp_filter *da, struct mp_frame *out)
         priv->skip_samples += AV_RL32(d + 0);
         priv->trim_samples += AV_RL32(d + 4);
     }
-#endif
 
     if (!priv->preroll_done) {
         // Skip only if this isn't already handled by AV_FRAME_DATA_SKIP_SAMPLES.

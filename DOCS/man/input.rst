@@ -377,8 +377,35 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     force
         Terminate playback if the first file is being played.
 
+``playlist-play-index <integer|current|none>``
+    Start (or restart) playback of the given playlist index. In addition to the
+    0-based playlist entry index, it supports the following values:
+
+    <current>
+        The current playlist entry (as in ``playlist-current-pos``) will be
+        played again (unload and reload). If none is set, playback is stopped.
+        (In corner cases, ``playlist-current-pos`` can point to a playlist entry
+        even if playback is currently inactive,
+
+    <none>
+        Playback is stopped. If idle mode (``--idle``) is enabled, the player
+        will enter idle mode, otherwise it will exit.
+
+    This comm and is similar to ``loadfile`` in that it only manipulates the
+    state of what to play next, without waiting until the current file is
+    unloaded, and the next one is loaded.
+
+    Setting ``playlist-pos`` or similar properties can have a similar effect to
+    this command. However, it's more explicit, and guarantees that playback is
+    restarted if for example the new playlist entry is the same as the previous
+    one.
+
 ``loadfile <url> [<flags> [<options>]]``
-    Load the given file or URL and play it.
+    Load the given file or URL and play it. Technically, this is just a playlist
+    manipulation command (which either replaces the playlist or appends an entry
+    to it). Actual file loading happens independently. For example, a
+    ``loadfile`` command that replaces the current file with a new one returns
+    before the current file is stopped, and the new file even begins loading.
 
     Second argument:
 
@@ -393,8 +420,10 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
 
     The third argument is a list of options and values which should be set
     while the file is playing. It is of the form ``opt1=value1,opt2=value2,..``.
-    Not all options can be changed this way. Some options require a restart
-    of the player.
+    When using the client API, this can be a ``MPV_FORMAT_NODE_MAP`` (or a Lua
+    table), however the values themselves must be strings currently. These
+    options are set during playback, and restored to the previous value at end
+    of playback (see `Per-File Options`_).
 
 ``loadlist <url> [<flags>]``
     Load the given playlist file or URL (like ``--playlist``).
@@ -643,10 +672,16 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     Write the resume config file that the ``quit-watch-later`` command writes,
     but continue playback normally.
 
-``stop``
+``stop [<flags>]``
     Stop playback and clear playlist. With default settings, this is
     essentially like ``quit``. Useful for the client API: playback can be
     stopped without terminating the player.
+
+    The first argument is optional, and supports the following flags:
+
+    keep-playlist
+        Do not clear the playlist.
+
 
 ``mouse <x> <y> [<button> [<mode>]]``
     Send a mouse event with given coordinate (``<x>``, ``<y>``).
@@ -753,12 +788,15 @@ Input Commands that are Possibly Subject to Change
         without filter name and parameters as filter entry. This toggles the
         enable/disable flag.
 
+    <remove>
+        Like ``toggle``, but always remove the given filter from the chain.
+
     <del>
         Remove the given filters from the video chain. Unlike in the other
         cases, the second parameter is a comma separated list of filter names
         or integer indexes. ``0`` would denote the first filter. Negative
         indexes start from the last filter, and ``-1`` denotes the last
-        filter. Deprecated.
+        filter. Deprecated, use ``remove``.
 
     <clr>
         Remove all filters. Note that like the other sub-commands, this does
@@ -1019,6 +1057,31 @@ Input Commands that are Possibly Subject to Change
         It's possible that future mpv versions will randomly change how Z order
         between different OSD formats and builtin OSD is handled.
 
+    ``hidden``
+        If set to ``yes``/true, do not display this (default: no).
+
+    ``compute_bounds``
+        If set to ``yes``/true, attempt to determine bounds and write them to
+        the command's result value as ``x0``, ``x1``, ``y0``, ``y1`` rectangle
+        (default: no). If the rectangle is empty, not known, or somehow
+        degenerate, it is not set. ``x1``/``y1`` is the coordinate of the bottom
+        exclusive corner of the rectangle.
+
+        The result value may depend on the VO window size, and is based on the
+        last known window size at the time of the call. This means the results
+        may be different from what is actually rendered.
+
+        For ``ass-events``, the result rectangle is recomputed to ``PlayRes``
+        coordinates (``res_x``/``res_y``). If window size is not known, a
+        fallback is chosen.
+
+        You should be aware that this mechanism is very inefficient, as it
+        renders the full result, and then uses the bounding box of the rendered
+        bitmap list (even if ``hidden`` is set). It will flush various caches.
+        Its results also depend on the used libass version.
+
+        This feature is experimental, and may change in some way again.
+
     Note: always use named arguments (``mpv_command_node()``). Scripts should
     use the ``mp.create_osd_overlay()`` helper instead of invoking this command
     directly.
@@ -1129,6 +1192,10 @@ Input Commands that are Possibly Subject to Change
     the script to finish initialization or not changed multiple times, and the
     future behavior is left undefined.
 
+    On success, returns a ``mpv_node`` with a ``client_id`` field set to the
+    return value of the ``mpv_client_id()`` API call of the newly created script
+    handle.
+
 ``change-list <name> <operation> <value>``
     This command changes list options as described in `List Options`_. The
     ``<name>`` parameter is the normal option name, while ``<operation>`` is
@@ -1215,6 +1282,190 @@ Input Commands that are Possibly Subject to Change
 
 Undocumented commands: ``ao-reload`` (experimental/internal).
 
+List of events
+~~~~~~~~~~~~~~
+
+This is a partial list of events. This section describes what
+``mpv_event_to_node()`` returns, and which is what scripting APIs and the JSON
+IPC sees. Note that the C API has separate C-level declarations with
+``mpv_event``, which may be slightly different.
+
+Note that events are asynchronous: the player core continues running while
+events are delivered to scripts and other clients. In some cases, you can hooks
+to enforce synchronous execution.
+
+All events can have the following fields:
+
+``event``
+    Name as the event (as returned by ``mpv_event_name()``).
+
+``id``
+    The ``reply_userdata`` field (opaque user value). If ``reply_userdata`` is 0,
+    the field is not added.
+
+``error``
+    Set to an error string (as returned by ``mpv_error_string()``). This field
+    is missing if no error happened, or the event type does not report error.
+    Most events leave this unset.
+
+This list uses the event name field value, and the C API symbol in brackets:
+
+``start-file`` (``MPV_EVENT_START_FILE``)
+    Happens right before a new file is loaded. When you receive this, the
+    player is loading the file (or possibly already done with it).
+
+    This has the following fields:
+
+    ``playlist_entry_id``
+        Playlist entry ID of the file being loaded now.
+
+``end-file`` (``MPV_EVENT_END_FILE``)
+    Happens after a file was unloaded. Typically, the player will load the
+    next file right away, or quit if this was the last file.
+
+    The event has the following fields:
+
+    ``reason``
+        Has one of these values:
+
+        ``eof``
+            The file has ended. This can (but doesn't have to) include
+            incomplete files or broken network connections under
+            circumstances.
+
+        ``stop``
+            Playback was ended by a command.
+
+        ``quit``
+            Playback was ended by sending the quit command.
+
+        ``error``
+            An error happened. In this case, an ``error`` field is present with
+            the error string.
+
+        ``redirect``
+            Happens with playlists and similar. Details see
+            ``MPV_END_FILE_REASON_REDIRECT`` in the C API.
+
+        ``unknown``
+            Unknown. Normally doesn't happen, unless the Lua API is out of sync
+            with the C API. (Likewise, it could happen that your script gets
+            reason strings that did not exist yet at the time your script was
+            written.)
+
+    ``playlist_entry_id``
+        Playlist entry ID of the file that was being played or attempted to be
+        played. This has the same value as the ``playlist_entry_id`` field in the
+        corresponding ``start-file`` event.
+
+    ``file_error``
+        Set to mpv error string describing the approximate reason why playback
+        failed. Unset if no error known. (In Lua scripting, this value was set
+        on the ``error`` field directly. This is deprecated since mpv 0.33.0.
+        In the future, this ``error`` field will be unset for this specific
+        event.)
+
+    ``playlist_insert_id``
+        If loading ended, because the playlist entry to be played was for example
+        a playlist, and the current playlist entry is replaced with a number of
+        other entries. This may happen at least with MPV_END_FILE_REASON_REDIRECT
+        (other event types may use this for similar but different purposes in the
+        future). In this case, playlist_insert_id will be set to the playlist
+        entry ID of the first inserted entry, and playlist_insert_num_entries to
+        the total number of inserted playlist entries. Note this in this specific
+        case, the ID of the last inserted entry is playlist_insert_id+num-1.
+        Beware that depending on circumstances, you may observe the new playlist
+        entries before seeing the event (e.g. reading the "playlist" property or
+        getting a property change notification before receiving the event).
+        If this is 0 in the C API, this field isn't added.
+
+    ``playlist_insert_num_entries``
+        See playlist_insert_id. Only present if playlist_insert_id is present.
+
+``file-loaded``  (``MPV_EVENT_FILE_LOADED``)
+    Happens after a file was loaded and begins playback.
+
+``seek`` (``MPV_EVENT_SEEK``)
+    Happens on seeking. (This might include cases when the player seeks
+    internally, even without user interaction. This includes e.g. segment
+    changes when playing ordered chapters Matroska files.)
+
+``playback-restart`` (``MPV_EVENT_PLAYBACK_RESTART``)
+    Start of playback after seek or after file was loaded.
+
+``shutdown`` (``MPV_EVENT_SHUTDOWN``)
+    Sent when the player quits, and the script should terminate. Normally
+    handled automatically. See `Details on the script initialization and lifecycle`_.
+
+``log-message`` (``MPV_EVENT_LOG_MESSAGE``)
+    Receives messages enabled with ``mpv_request_log_messages()`` (Lua:
+    ``mp.enable_messages``).
+
+    This contains, in addition to the default event fields, the following
+    fields:
+
+    ``prefix``
+        The module prefix, identifies the sender of the message. This is what
+        the terminal player puts in front of the message text when using the
+        ``--v`` option, and is also what is used for ``--msg-level``.
+
+    ``level``
+        The log level as string. See ``msg.log`` for possible log level names.
+        Note that later versions of mpv might add new levels or remove
+        (undocumented) existing ones.
+
+    ``text``
+        The log message. The text will end with a newline character. Sometimes
+        it can contain multiple lines.
+
+    Keep in mind that these messages are meant to be hints for humans. You
+    should not parse them, and prefix/level/text of messages might change
+    any time.
+
+``hook``
+    The event has the following fields:
+
+    ``hook_id``
+        ID to pass to ``mpv_hook_continue()``. The Lua scripting wrapper
+        provides a better API around this with ``mp.add_hook()``.
+
+``get-property-reply`` (``MPV_EVENT_GET_PROPERTY_REPLY``)
+    See C API.
+
+``set-property-reply`` (``MPV_EVENT_SET_PROPERTY_REPLY``)
+    See C API.
+
+``command-reply`` (``MPV_EVENT_COMMAND_REPLY``)
+    This is one of the commands for which the ```error`` field is meaningful.
+
+    JSON IPC and Lua and possibly other backends treat this specially and may
+    not pass the actual event to the user. See C API.
+
+    The event has the following fields:
+
+    ``result``
+        The result (on success) of any ``mpv_node`` type, if any.
+
+``client-message`` (``MPV_EVENT_CLIENT_MESSAGE``)
+    Lua and possibly other backends treat this specially and may not pass the
+    actual event to the user.
+
+    The event has the following fields:
+
+    ``args``
+        Array of strings with the message data.
+
+``video-reconfig`` (``MPV_EVENT_VIDEO_RECONFIG``)
+    Happens on video output or filter reconfig.
+
+``audio-reconfig`` (``MPV_EVENT_AUDIO_RECONFIG``)
+    Happens on audio output or filter reconfig.
+
+The following events also happen, but are deprecated: ``tracks-changed``,
+``track-switched``, ``pause``, ``unpause``, ``metadata-update``, ``idle``,
+``tick``, ``chapter-change``. Use ``mpv_observe_property()``
+(Lua: ``mp.observe_property()``) instead.
+
 Hooks
 ~~~~~
 
@@ -1228,6 +1479,12 @@ the player freeze randomly. Basically, nobody should use this API.
 The C API is described in the header files. The Lua API is described in the
 Lua section.
 
+Before a hook is actually invoked on an API clients, it will attempt to return
+new values for all observed properties that were changed before the hook. This
+may make it easier for an application to set defined "barriers" between property
+change notifications by registering hooks. (That means these hooks will have an
+effect, even if you do nothing and make them continue immediately.)
+
 The following hooks are currently defined:
 
 ``on_load``
@@ -1239,12 +1496,17 @@ The following hooks are currently defined:
     ``file-local-options/<option name>``. The player will wait until all
     hooks are run.
 
+    Ordered after ``start-file`` and before ``playback-restart``.
+
 ``on_load_fail``
     Called after after a file has been opened, but failed to. This can be
     used to provide a fallback in case native demuxers failed to recognize
     the file, instead of always running before the native demuxers like
     ``on_load``. Demux will only be retried if ``stream-open-filename``
-    was changed.
+    was changed. If it fails again, this hook is _not_ called again, and
+    loading definitely fails.
+
+    Ordered after ``on_load``, and before ``playback-restart`` and ``end-file``.
 
 ``on_preloaded``
     Called after a file has been opened, and before tracks are selected and
@@ -1257,50 +1519,24 @@ The following hooks are currently defined:
     exactly can be done and not be done, and what information is available and
     what is not yet available yet, is all subject to change.
 
+    Ordered after ``on_load_fail`` etc. and before ``playback-restart``.
+
 ``on_unload``
     Run before closing a file, and before actually uninitializing
     everything. It's not possible to resume playback in this state.
 
-Legacy hook API
-~~~~~~~~~~~~~~~
+    Ordered before ``end-file``. Will also happen in the error case (then after
+    ``on_load_fail``).
 
-.. warning::
+``on_before_start_file``
+    Run before a ``start-file`` event is sent. (If any client changes the
+    current playlist entry, or sends a quit command to the player, the
+    corresponding event will not actually happen after the hook returns.)
+    Useful to drain property changes before a new file is loaded.
 
-    The legacy API is deprecated and will be removed soon.
-
-There are two special commands involved. Also, the client must listen for
-client messages (``MPV_EVENT_CLIENT_MESSAGE`` in the C API).
-
-``hook-add <hook-name> <id> <priority>``
-    Subscribe to the hook identified by the first argument (basically, the
-    name of event). The ``id`` argument is an arbitrary integer chosen by the
-    user. ``priority`` is used to sort all hook handlers globally across all
-    clients. Each client can register multiple hook handlers (even for the
-    same hook-name). Once the hook is registered, it cannot be unregistered.
-
-    When a specific event happens, all registered handlers are run serially.
-    This uses a protocol every client has to follow explicitly. When a hook
-    handler is run, a client message (``MPV_EVENT_CLIENT_MESSAGE``) is sent to
-    the client which registered the hook. This message has the following
-    arguments:
-
-    1. the string ``hook_run``
-    2. the ``id`` argument the hook was registered with as string (this can be
-       used to correctly handle multiple hooks registered by the same client,
-       as long as the ``id`` argument is unique in the client)
-    3. something undefined, used by the hook mechanism to track hook execution
-
-    Upon receiving this message, the client can handle the event. While doing
-    this, the player core will still react to requests, but playback will
-    typically be stopped.
-
-    When the client is done, it must continue the core's hook execution by
-    running the ``hook-ack`` command.
-
-``hook-ack <string>``
-    Run the next hook in the global chain of hooks. The argument is the 3rd
-    argument of the client message that starts hook execution for the
-    current client.
+``on_after_end_file``
+    Run after an ``end-file`` event. Useful to drain property changes after a
+    file has finished.
 
 Input Command Prefixes
 ----------------------
@@ -1755,6 +1991,8 @@ Property list
     This gives the number bytes per seconds over a 1 second window (using
     the type ``MPV_FORMAT_INT64`` for the client API).
 
+    This is the same as ``demuxer-cache-state/raw-input-rate``.
+
 ``demuxer-cache-duration``
     Approximate duration of video buffered in the demuxer, in seconds. The
     guess is very unreliable, and often the property will not be available
@@ -1802,6 +2040,10 @@ Property list
 
     ``cache-duration`` is ``demuxer-cache-duration``. Missing if unavailable.
 
+    ``raw-input-rate`` is the estimated input rate of the network layer (or any
+    other byte-oriented input layer) in bytes per second. May be inaccurate or
+    missing.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1818,6 +2060,7 @@ Property list
             "fw-bytes"          MPV_FORMAT_INT64
             "file-cache-bytes"  MPV_FORMAT_INT64
             "cache-duration"    MPV_FORMAT_DOUBLE
+            "raw-input-rate"    MPV_FORMAT_INT64
 
     Other fields (might be changed or removed in the future):
 
@@ -1995,11 +2238,6 @@ Property list
         Average bits-per-pixel as integer. Subsampled planar formats use a
         different resolution, which is the reason this value can sometimes be
         odd or confusing. Can be unavailable with some formats.
-
-    ``video-params/plane-depth``
-        Bit depth for each color component as integer. This is only exposed
-        for planar or single-component formats, and is unavailable for other
-        formats.
 
     ``video-params/w``, ``video-params/h``
         Video size as integers, with no aspect correction applied.
@@ -2221,6 +2459,19 @@ Property list
 
     This property is experimental and might be removed in the future.
 
+``sub-text-ass``
+    Like ``sub-text``, but return the text in ASS format. Text subtitles in
+    other formats are converted. For native ASS subtitles, events that do
+    not contain any text (but vector drawings etc.) are not filtered out. If
+    multiple events match with the current playback time, they are concatenated
+    with line breaks. Contains only the "Text" part of the events.
+
+    This property is not enough to render ASS subtitles correctly, because ASS
+    header and per-event metadata are not returned. You likely need to do
+    further filtering on the returned string to make it useful.
+
+    This property is experimental and might be removed in the future.
+
 ``sub-start``
     Return the current subtitle start time (in seconds). If there's multiple
     current subtitles, returns the first start time. If no current subtitle is
@@ -2233,11 +2484,59 @@ Property list
     is returned instead.
 
 ``playlist-pos`` (RW)
-    Current position on playlist. The first entry is on position 0. Writing
-    to the property will restart playback at the written entry.
+    Current position on playlist. The first entry is on position 0. Writing to
+    this property may start playback at the new position.
+
+    In some cases, this is not necessarily the currently playing file. See
+    explanation of ``current`` and ``playing`` flags in ``playlist``.
+
+    If there the playlist is empty, or if it's non-empty, but no entry is
+    "current", this property returns -1. Likewise, writing -1 will put the
+    player into idle mode (or exit playback if idle mode is not enabled). If an
+    out of range index is written to the property, this behaves as if writing -1.
+    (Before mpv 0.33.0, instead of returning -1, this property was unavailable
+    if no playlist entry was current.)
+
+    Writing the current value back to the property is subject to change.
+    Currently, it will restart playback of the playlist entry. But in the
+    future, writing the current value will be ignored. Use the
+    ``playlist-play-index`` command to get guaranteed behavior.
 
 ``playlist-pos-1`` (RW)
     Same as ``playlist-pos``, but 1-based.
+
+``playlist-current-pos`` (RW)
+    Index of the "current" item on playlist. This usually, but not necessarily,
+    the currently playing item (see ``playlist-playing-pos``). Depending on the
+    exact internal state of the player, it may refer to the playlist item to
+    play next, or the playlist item used to determine what to play next.
+
+    For reading, this is exactly the same as ``playlist-pos``.
+
+    For writing, this *only* sets the position of the "current" item, without
+    stopping playback of the current file (or starting playback, if this is done
+    in idle mode). Use -1 to remove the current flag.
+
+    This property is only vaguely useful. If set during playback, it will
+    typically cause the playlist entry *after* it to be played next. Another
+    possibly odd observable state is that if ``playlist-next`` is run during
+    playback, this property is set to the playlist entry to play next (unlike
+    the previous case). There is an internal flag that decides whether the
+    current playlist entry or the next one should be played, and this flag is
+    currently inaccessible for API users. (Whether this behavior will kept is
+    possibly subject to change.)
+
+``playlist-playing-pos``
+    Index of the "playing" item on playlist. A playlist item is "playing" if
+    it's being loaded, actually playing, or being unloaded. This property is set
+    during the ``MPV_EVENT_START_FILE`` (``start-file``) and the
+    ``MPV_EVENT_START_END`` (``end-file``) events. Outside of that, it returns
+    -1. If the playlist entry was somehow removed during playback, but playback
+    hasn't stopped yet, or is in progress of being stopped, it also returns -1.
+    (This can happen at least during state transitions.)
+
+    In the "playing" state, this is usually the same as ``playlist-pos``, except
+    during state changes, or if ``playlist-current-pos`` was written explicitly.
 
 ``playlist-count``
     Number of total playlist entries.
@@ -2255,17 +2554,24 @@ Property list
     ``playlist/N/filename``
         Filename of the Nth entry.
 
-    ``playlist/N/current``, ``playlist/N/playing``
-        ``yes`` if this entry is currently playing (or being loaded).
-        Unavailable or ``no`` otherwise. When changing files, ``current`` and
-        ``playing`` can be different, because the currently playing file hasn't
-        been unloaded yet; in this case, ``current`` refers to the new
-        selection. (Since mpv 0.7.0.)
+    ``playlist/N/playing``
+        ``yes`` if the ``playlist-playing-pos`` property points to this entry,
+        unavailable or ``no`` otherwise.
+
+    ``playlist/N/current``
+        ``yes`` if the ``playlist-current-pos`` property points to this entry,
+        unavailable or ``no`` otherwise.
 
     ``playlist/N/title``
         Name of the Nth entry. Only available if the playlist file contains
         such fields, and only if mpv's parser supports it for the given
         playlist format.
+
+    ``playlist/N/id``
+        Unique ID for this entry. This is an automatically assigned integer ID
+        that is unique for the entire life time of the current mpv core
+        instance. Other commands, events, etc. use this as ``playlist_entry_id``
+        fields.
 
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
@@ -2279,6 +2585,7 @@ Property list
                 "current"   MPV_FORMAT_FLAG (might be missing; since mpv 0.7.0)
                 "playing"   MPV_FORMAT_FLAG (same)
                 "title"     MPV_FORMAT_STRING (optional)
+                "id"        MPV_FORMAT_INT64
 
 ``track-list``
     List of audio/video/sub tracks, current entry marked. Currently, the raw
@@ -2579,6 +2886,15 @@ Property list
     Note that directly accessing this structure via subkeys is not supported,
     the only access is through aforementioned ``MPV_FORMAT_NODE``.
 
+``perf-info``
+    Further performance data. Querying this property triggers internal
+    collection of some data, and may slow down the player. Each query will reset
+    some internal state. Property change notification doesn't and won't work.
+    All of this may change in the future, so don't use this. The builtin
+    ``stats`` script is supposed to be the only user; since it's bundled and
+    built with the source code, it can use knowledge of mpv internal to render
+    the information properly. See ``stats`` script description for some details.
+
 ``video-bitrate``, ``audio-bitrate``, ``sub-bitrate``
     Bitrate values calculated on the packet level. This works by dividing the
     bit size of all packets between two keyframes by their presentation
@@ -2728,6 +3044,9 @@ Property list
     List of available libavformat demuxers' names. This can be used to check
     for support for a specific format or use with ``--demuxer-lavf-format``.
 
+``input-key-list``
+    List of `Key names`_, same as output by ``--input-keylist``.
+
 ``mpv-version``
     Return the mpv version/copyright string. Depending on how the binary was
     built, it might contain either a release version, or just a git hash.
@@ -2742,6 +3061,11 @@ Property list
     number, or a git hash. This applies to Libav as well (the property is
     still named the same.) This property is unavailable if mpv is linked against
     older FFmpeg and Libav versions.
+
+``libass-version``
+    Return the value of ``ass_library_version()``. This is an integer, encoded
+    in a somewhat weird form (apparently "hex BCD"), indicating the release
+    version of the libass library linked to mpv.
 
 ``options/<name>`` (RW)
     Read-only access to value of option ``--<name>``. Most options can be

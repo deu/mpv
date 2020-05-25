@@ -27,12 +27,51 @@ Interface changes
 ::
 
  --- mpv 0.33.0 ---
+    - add `--d3d11-exclusive-fs` flag to enable D3D11 exclusive fullscreen mode
+      when the player enters fullscreen.
     - directories in ~/.mpv/scripts/ (or equivalent) now have special semantics
       (see mpv Lua scripting docs)
     - names starting with "." in ~/.mpv/scripts/ (or equivalent) are now ignored
     - js modules: ~~/scripts/modules.js/ is no longer used, global paths can be
       set with custom init (see docs), dir-scripts first look at <dir>/modules/
     - the OSX bundle now logs to "~/Library/Logs/mpv.log" by default
+    - deprecate the --cache-secs option (once removed, the cache cannot be
+      limited by time anymore)
+    - remove deprecated legacy hook API ("hook-add", "hook-ack"). Use either the
+      libmpv API (mpv_hook_add(), mpv_hook_continue()), or the Lua scripting
+      wrappers (mp.add_hook()).
+    - improve how property change notifications are delivered on events and on
+      hooks. In particular, a hook event is only returned to a client after all
+      changes initiated before the hook point were delivered to the same client.
+      In addition, it should no longer happen that events and property change
+      notifications were interleaved in bad ways (it could happen that a
+      property notification delivered after an event contained a value that was
+      valid only before the event happened).
+    - the playlist-pos and playlist-pos-1 properties now can return and accept
+      -1, and are never unavailable. Out of range indexes are now accepted, but
+      behave like writing -1.
+    - the playlist-pos and playlist-pos-1 properties deprecate the current
+      behavior when writing back the current value to the property: currently,
+      this restarts playback, but in the future, it will do nothing.
+      Using the "playlist-play-index" command is recommended instead.
+    - add "playlist-play-index" command
+    - add playlist-current-pos, playlist-playing-pos properties
+    - Lua end-file events set the "error" field; this is deprecated; use the
+      "file_error" instead for this specific event. Scripts relying on the
+      "error" field for end-file will silently break at some point in the
+      future.
+    - deprecate encoding mode (lack of maintainer)
+    - remove deprecated --input-file option, add --input-ipc-client, which is
+      vaguely a replacement of the removed option, but not the same
+    - change another detail for track selection options (see --aid manpage
+      entry)
+    - reading loop-file property as native property or mpv_node will now return
+      "inf" instead of boolean true (also affects loop option)
+    - remove some --vo-direct3d-... options (it got dumbed down; use --vo=gpu)
+    - remove video-params/plane-depth property (was too vaguely defined)
+    - remove --video-sync-adrop-size option (implementation was changed, no
+      replacement for what this option did)
+    - undeprecate --video-sync=display-adrop
  --- mpv 0.32.0 ---
     - change behavior when using legacy option syntax with options that start
       with two dashes (``--`` instead of a ``-``). Now, using the recommended
@@ -54,7 +93,7 @@ Interface changes
       mpv 0.30.0 (related to the previous changelog entry). This affects video
       outputs like vo_x11 and vo_drm, and screenshots, but not much else.
     - deprecate --input-file (there are no plans to remove this short-term,
-      but it will probably eventually go away)
+      but it will probably eventually go away <- that was a lie)
     - deprecate --video-sync=display-adrop (might be removed if it's in the way;
       undeprecated or readded if it's not too much of a problem)
     - deprecate all input section commands (these will be changed/removed, as

@@ -100,6 +100,19 @@ void mp_aframe_unref_data(struct mp_aframe *frame)
     talloc_free(tmp);
 }
 
+// Allocate this much data. Returns false for failure (data already allocated,
+// invalid sample count or format, allocation failures).
+// Normally you're supposed to use a frame pool and mp_aframe_pool_allocate().
+bool mp_aframe_alloc_data(struct mp_aframe *frame, int samples)
+{
+    if (mp_aframe_is_allocated(frame))
+        return false;
+    struct mp_aframe_pool *p = mp_aframe_pool_create(NULL);
+    int r = mp_aframe_pool_allocate(p, frame, samples);
+    talloc_free(p);
+    return r >= 0;
+}
+
 // Return a new reference to the data in av_frame. av_frame itself is not
 // touched. Returns NULL if not representable, or if input is NULL.
 // Does not copy the timestamps.
@@ -121,11 +134,9 @@ struct mp_aframe *mp_aframe_from_avframe(struct AVFrame *av_frame)
     frame->format = format;
     mp_chmap_from_lavc(&frame->chmap, frame->av_frame->channel_layout);
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     if (frame->chmap.num != frame->av_frame->channels)
         mp_chmap_from_channels(&frame->chmap, av_frame->channels);
-#endif
 
     if (av_frame->opaque_ref) {
         struct avframe_opaque *op = (void *)av_frame->opaque_ref->data;
@@ -194,10 +205,8 @@ void mp_aframe_config_copy(struct mp_aframe *dst, struct mp_aframe *src)
     dst->av_frame->sample_rate = src->av_frame->sample_rate;
     dst->av_frame->format = src->av_frame->format;
     dst->av_frame->channel_layout = src->av_frame->channel_layout;
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     dst->av_frame->channels = src->av_frame->channels;
-#endif
 }
 
 // Copy "soft" attributes from src to dst, excluding things which affect
@@ -311,10 +320,8 @@ bool mp_aframe_set_chmap(struct mp_aframe *frame, struct mp_chmap *in)
         return false;
     frame->chmap = *in;
     frame->av_frame->channel_layout = lavc_layout;
-#if LIBAVUTIL_VERSION_MICRO >= 100
     // FFmpeg being a stupid POS again
     frame->av_frame->channels = frame->chmap.num;
-#endif
     return true;
 }
 

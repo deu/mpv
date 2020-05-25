@@ -756,6 +756,16 @@ static void vo_x11_decoration(struct vo *vo, bool d)
                     PropModeReplace, (unsigned char *) &mhints, 5);
 }
 
+static void vo_x11_wm_hints(struct vo *vo, Window window)
+{
+    struct vo_x11_state *x11 = vo->x11;
+    XWMHints hints = {0};
+    hints.flags = InputHint | StateHint;
+    hints.input = 1;
+    hints.initial_state = NormalState;
+    XSetWMHints(x11->display, window, &hints);
+}
+
 static void vo_x11_classhint(struct vo *vo, Window window, const char *name)
 {
     struct vo_x11_state *x11 = vo->x11;
@@ -1308,11 +1318,8 @@ static void vo_x11_sizehint(struct vo *vo, struct mp_rect rc, bool override_pos)
     hint->flags |= PMinSize;
     hint->min_width = hint->min_height = 4;
 
-    // This will use the top/left corner of the window for positioning, instead
-    // of the top/left corner of the client. _NET_MOVERESIZE_WINDOW could be
-    // used to get a different reference point, while keeping gravity.
     hint->flags |= PWinGravity;
-    hint->win_gravity = CenterGravity;
+    hint->win_gravity = StaticGravity;
 
     XSetWMNormalHints(x11->display, x11->window, hint);
     XFree(hint);
@@ -1618,6 +1625,7 @@ bool vo_x11_create_vo_window(struct vo *vo, XVisualInfo *vis,
     if (x11->window == None) {
         vo_x11_create_window(vo, vis, (struct mp_rect){.x1 = 320, .y1 = 200 });
         vo_x11_classhint(vo, x11->window, classname);
+        vo_x11_wm_hints(vo, x11->window);
         x11->window_hidden = true;
     }
 

@@ -29,19 +29,17 @@
 #include "audio/format.h"
 
 #include "options/options.h"
-#include "options/m_config.h"
+#include "options/m_config_frontend.h"
 #include "osdep/endian.h"
 #include "common/msg.h"
 #include "common/common.h"
 #include "common/global.h"
 
-extern const struct ao_driver audio_out_oss;
 extern const struct ao_driver audio_out_audiotrack;
 extern const struct ao_driver audio_out_audiounit;
 extern const struct ao_driver audio_out_coreaudio;
 extern const struct ao_driver audio_out_coreaudio_exclusive;
 extern const struct ao_driver audio_out_rsound;
-extern const struct ao_driver audio_out_sndio;
 extern const struct ao_driver audio_out_pulse;
 extern const struct ao_driver audio_out_jack;
 extern const struct ao_driver audio_out_openal;
@@ -73,9 +71,6 @@ static const struct ao_driver * const audio_out_drivers[] = {
 #if HAVE_WASAPI
     &audio_out_wasapi,
 #endif
-#if HAVE_OSS_AUDIO
-    &audio_out_oss,
-#endif
     // wrappers:
 #if HAVE_JACK
     &audio_out_jack,
@@ -89,18 +84,12 @@ static const struct ao_driver * const audio_out_drivers[] = {
 #if HAVE_SDL2_AUDIO
     &audio_out_sdl,
 #endif
-#if HAVE_SNDIO
-    &audio_out_sndio,
-#endif
     &audio_out_null,
 #if HAVE_COREAUDIO
     &audio_out_coreaudio_exclusive,
 #endif
     &audio_out_pcm,
     &audio_out_lavc,
-#if HAVE_RSOUND
-    &audio_out_rsound,
-#endif
     NULL
 };
 
@@ -136,11 +125,12 @@ static const struct m_obj_list ao_obj_list = {
 #define OPT_BASE_STRUCT struct ao_opts
 const struct m_sub_options ao_conf = {
     .opts = (const struct m_option[]) {
-        OPT_SETTINGSLIST("ao", audio_driver_list, UPDATE_AUDIO, &ao_obj_list, ),
-        OPT_STRING("audio-device", audio_device, UPDATE_AUDIO),
-        OPT_STRING("audio-client-name", audio_client_name, UPDATE_AUDIO),
-        OPT_DOUBLE("audio-buffer", audio_buffer,
-                   UPDATE_AUDIO | M_OPT_MIN | M_OPT_MAX, .min = 0, .max = 10),
+        {"ao", OPT_SETTINGSLIST(audio_driver_list, &ao_obj_list),
+            .flags = UPDATE_AUDIO},
+        {"audio-device", OPT_STRING(audio_device), .flags = UPDATE_AUDIO},
+        {"audio-client-name", OPT_STRING(audio_client_name), .flags = UPDATE_AUDIO},
+        {"audio-buffer", OPT_DOUBLE(audio_buffer),
+            .flags = UPDATE_AUDIO, M_RANGE(0, 10)},
         {0}
     },
     .size = sizeof(OPT_BASE_STRUCT),
@@ -210,12 +200,9 @@ static struct ao *ao_init(bool probing, struct mpv_global *global,
                af_fmt_to_str(ao->format));
 
     ao->device = talloc_strdup(ao, dev);
-
-    ao->api = ao->driver->play ? &ao_api_push : &ao_api_pull;
-    ao->api_priv = talloc_zero_size(ao, ao->api->priv_size);
-    assert(!ao->api->priv_defaults && !ao->api->options);
-
     ao->stream_silence = flags & AO_INIT_STREAM_SILENCE;
+
+    init_buffer_pre(ao);
 
     ao->period_size = 1;
 
@@ -226,13 +213,14 @@ static struct ao *ao_init(bool probing, struct mpv_global *global,
             char redirect[80], rdevice[80];
             snprintf(redirect, sizeof(redirect), "%s", ao->redirect);
             snprintf(rdevice, sizeof(rdevice), "%s", ao->device ? ao->device : "");
-            talloc_free(ao);
+            ao_uninit(ao);
             return ao_init(probing, global, wakeup_cb, wakeup_ctx,
                            encode_lavc_ctx, flags, samplerate, format, channels,
                            rdevice, redirect);
         }
         goto fail;
     }
+    ao->driver_initialized = true;
 
     if (ao->period_size < 1) {
         MP_ERR(ao, "Invalid period size set.\n");
@@ -259,12 +247,12 @@ static struct ao *ao_init(bool probing, struct mpv_global *global,
     ao->buffer = (ao->buffer + align - 1) / align * align;
     MP_VERBOSE(ao, "using soft-buffer of %d samples.\n", ao->buffer);
 
-    if (ao->api->init(ao) < 0)
+    if (!init_buffer_post(ao))
         goto fail;
     return ao;
 
 fail:
-    talloc_free(ao);
+    ao_uninit(ao);
     return NULL;
 }
 
@@ -356,86 +344,6 @@ struct ao *ao_init_best(struct mpv_global *global,
 
     talloc_free(tmp);
     return ao;
-}
-
-// Uninitialize and destroy the AO. Remaining audio must be dropped.
-void ao_uninit(struct ao *ao)
-{
-    if (ao)
-        ao->api->uninit(ao);
-    talloc_free(ao);
-}
-
-// Queue the given audio data. Start playback if it hasn't started yet. Return
-// the number of samples that was accepted (the core will try to queue the rest
-// again later). Should never block.
-//  data: start pointer for each plane. If the audio data is packed, only
-//        data[0] is valid, otherwise there is a plane for each channel.
-//  samples: size of the audio data (see ao->sstride)
-//  flags: currently AOPLAY_FINAL_CHUNK can be set
-int ao_play(struct ao *ao, void **data, int samples, int flags)
-{
-    return ao->api->play(ao, data, samples, flags);
-}
-
-int ao_control(struct ao *ao, enum aocontrol cmd, void *arg)
-{
-    return ao->api->control ? ao->api->control(ao, cmd, arg) : CONTROL_UNKNOWN;
-}
-
-// Return size of the buffered data in seconds. Can include the device latency.
-// Basically, this returns how much data there is still to play, and how long
-// it takes until the last sample in the buffer reaches the speakers. This is
-// used for audio/video synchronization, so it's very important to implement
-// this correctly.
-double ao_get_delay(struct ao *ao)
-{
-    return ao->api->get_delay(ao);
-}
-
-// Return free size of the internal audio buffer. This controls how much audio
-// the core should decode and try to queue with ao_play().
-int ao_get_space(struct ao *ao)
-{
-    return ao->api->get_space(ao);
-}
-
-// Stop playback and empty buffers. Essentially go back to the state after
-// ao->init().
-void ao_reset(struct ao *ao)
-{
-    if (ao->api->reset)
-        ao->api->reset(ao);
-    atomic_fetch_and(&ao->events_, ~(unsigned int)AO_EVENT_UNDERRUN);
-}
-
-// Pause playback. Keep the current buffer. ao_get_delay() must return the
-// same value as before pausing.
-void ao_pause(struct ao *ao)
-{
-    if (ao->api->pause)
-        ao->api->pause(ao);
-}
-
-// Resume playback. Play the remaining buffer. If the driver doesn't support
-// pausing, it has to work around this and e.g. use ao_play_silence() to fill
-// the lost audio.
-void ao_resume(struct ao *ao)
-{
-    if (ao->api->resume)
-        ao->api->resume(ao);
-}
-
-// Block until the current audio buffer has played completely.
-void ao_drain(struct ao *ao)
-{
-    if (ao->api->drain)
-        ao->api->drain(ao);
-}
-
-bool ao_eof_reached(struct ao *ao)
-{
-    return ao->api->get_eof ? ao->api->get_eof(ao) : true;
 }
 
 // Query the AO_EVENT_*s as requested by the events parameter, and return them.

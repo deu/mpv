@@ -20,6 +20,7 @@
 
 #include "android_common.h"
 #include "common/msg.h"
+#include "misc/jni.h"
 #include "options/m_config.h"
 #include "vo.h"
 
@@ -30,7 +31,8 @@ struct android_opts {
 #define OPT_BASE_STRUCT struct android_opts
 const struct m_sub_options android_conf = {
     .opts = (const struct m_option[]) {
-        OPT_SIZE_BOX("android-surface-size", surface_size, UPDATE_VO_RESIZE),
+        {"android-surface-size", OPT_SIZE_BOX(surface_size),
+            .flags = UPDATE_VO_RESIZE},
         {0}
     },
     .size = sizeof(struct android_opts),
@@ -51,18 +53,18 @@ int vo_android_init(struct vo *vo)
         .log = mp_log_new(ctx, vo->log, "android"),
     };
 
-    jobject surface = (jobject)(intptr_t)vo->opts->WinID;
-    JavaVM *vm = (JavaVM *)av_jni_get_java_vm(NULL);
-    JNIEnv *env;
-    int ret = (*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6);
-    if (ret == JNI_EDETACHED) {
-        if ((*vm)->AttachCurrentThread(vm, &env, NULL) != 0) {
-            MP_FATAL(ctx, "Could not attach Java VM.\n");
-            goto fail;
-        }
+    JNIEnv *env = MP_JNI_GET_ENV(ctx);
+    if (!env) {
+        MP_FATAL(ctx, "Could not attach java VM.\n");
+        goto fail;
     }
+
+    jobject surface = (jobject)(intptr_t)vo->opts->WinID;
     ctx->native_window = ANativeWindow_fromSurface(env, surface);
-    (*vm)->DetachCurrentThread(vm);
+    if (!ctx->native_window) {
+        MP_FATAL(ctx, "Failed to create ANativeWindow\n");
+        goto fail;
+    }
 
     return 1;
 fail:

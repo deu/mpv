@@ -4,7 +4,7 @@
 
 #include "common/common.h"
 #include "common/msg.h"
-#include "options/m_config.h"
+#include "options/m_config_frontend.h"
 
 #include "f_lavfi.h"
 #include "user_filters.h"
@@ -39,6 +39,7 @@ const struct mp_user_filter_entry *af_list[] = {
     &af_rubberband,
 #endif
     &af_lavcac3enc,
+    &af_drop,
 };
 
 static bool get_af_desc(struct m_obj_desc *dst, int index)

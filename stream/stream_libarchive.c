@@ -25,6 +25,10 @@
 
 #include "stream_libarchive.h"
 
+#define MP_ARCHIVE_FLAG_MAYBE_ZIP       (MP_ARCHIVE_FLAG_PRIV << 0)
+#define MP_ARCHIVE_FLAG_MAYBE_RAR       (MP_ARCHIVE_FLAG_PRIV << 1)
+#define MP_ARCHIVE_FLAG_MAYBE_VOLUMES   (MP_ARCHIVE_FLAG_PRIV << 2)
+
 struct mp_archive_volume {
     struct mp_archive *mpa;
     int index; // volume number (starting with 0, mp_archive.primary_src)
@@ -40,6 +44,19 @@ static bool probe_rar(struct stream *s)
     if (stream_read_peek(s, buf, sizeof(buf)) != sizeof(buf))
         return false;
     return memcmp(buf, rar_sig, 6) == 0;
+}
+
+static bool probe_multi_rar(struct stream *s)
+{
+    uint8_t hdr[14];
+    if (stream_read_peek(s, hdr, sizeof(hdr)) == sizeof(hdr)) {
+        // Look for rar mark head & main head (assume they're in order).
+        if (hdr[6] == 0x00 && hdr[7 + 2] == 0x73) {
+            int rflags = hdr[7 + 3] | (hdr[7 + 4] << 8);
+            return rflags & 0x100;
+        }
+    }
+    return false;
 }
 
 static bool probe_zip(struct stream *s)
@@ -58,6 +75,21 @@ static bool probe_zip(struct stream *s)
             return true;
     }
     return false;
+}
+
+static int mp_archive_probe(struct stream *src)
+{
+    int flags = 0;
+    assert(stream_tell(src) == 0);
+    if (probe_zip(src))
+        flags |= MP_ARCHIVE_FLAG_MAYBE_ZIP;
+
+    if (probe_rar(src)) {
+        flags |= MP_ARCHIVE_FLAG_MAYBE_RAR;
+        if (probe_multi_rar(src))
+            flags |= MP_ARCHIVE_FLAG_MAYBE_VOLUMES;
+    }
+    return flags;
 }
 
 static bool volume_seek(struct mp_archive_volume *vol)
@@ -247,8 +279,7 @@ static const struct file_pattern patterns[] = {
     { NULL, NULL, NULL, 0, 0 },
 };
 
-static bool find_volumes(struct mp_archive *mpa, bool multivol_hint,
-                         bool *is_multivolume)
+static bool find_volumes(struct mp_archive *mpa, int flags)
 {
     struct bstr primary_url = bstr0(mpa->primary_src->url);
 
@@ -261,7 +292,7 @@ static bool find_volumes(struct mp_archive *mpa, bool multivol_hint,
 
     if (!pattern->match)
         return true;
-    if (pattern->legacy && !multivol_hint)
+    if (pattern->legacy && !(flags & MP_ARCHIVE_FLAG_MAYBE_VOLUMES))
         return true;
 
     struct bstr base = bstr_splice(primary_url, 0, -(int)strlen(pattern->match));
@@ -271,13 +302,19 @@ static bool find_volumes(struct mp_archive *mpa, bool multivol_hint,
         if (!add_volume(mpa, NULL, url, i + 1))
             return false;
     }
-    *is_multivolume = true;
+
+    MP_WARN(mpa, "This appears to be a multi-volume archive.\n"
+            "Support is not very good due to libarchive limitations.\n"
+            "There are known cases of libarchive crashing mpv on these.\n"
+            "This is also an excessively inefficient and stupid way to distribute\n"
+            "media files. People creating them should rethink this.\n");
 
     return true;
 }
 
-struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
-                                  int flags, int max_volumes)
+static struct mp_archive *mp_archive_new_raw(struct mp_log *log,
+                                             struct stream *src,
+                                             int flags, int max_volumes)
 {
     struct mp_archive *mpa = talloc_zero(NULL, struct mp_archive);
     mpa->log = log;
@@ -291,30 +328,17 @@ struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
     mpa->primary_src = src;
     if (!mpa->arch)
         goto err;
+
+    mpa->flags = flags;
     mpa->num_volumes = max_volumes ? max_volumes : INT_MAX;
 
     // first volume is the primary stream
     if (!add_volume(mpa, src, src->url, 0))
         goto err;
 
-    bool maybe_rar = probe_rar(src);
-    bool maybe_zip = probe_zip(src);
-    bool probe_all = flags & MP_ARCHIVE_FLAG_UNSAFE;
-    bool maybe_rar2_multivol = false;
-
-    uint8_t hdr[14];
-    if (maybe_rar && stream_read_peek(src, hdr, sizeof(hdr)) == sizeof(hdr)) {
-        // Look for rar mark head & main head (assume they're in order).
-        if (hdr[6] == 0x00 && hdr[7 + 2] == 0x73) {
-            int rflags = hdr[7 + 3] | (hdr[7 + 4] << 8);
-            maybe_rar2_multivol = rflags & 0x100;
-        }
-    }
-
-    bool is_multivolume = false;
-    if (!(flags & MP_ARCHIVE_FLAG_NO_RAR_VOLUMES)) {
+    if (!(flags & MP_ARCHIVE_FLAG_NO_VOLUMES)) {
         // try to open other volumes
-        if (!find_volumes(mpa, maybe_rar2_multivol, &is_multivolume))
+        if (!find_volumes(mpa, flags))
             goto err;
     }
 
@@ -326,7 +350,7 @@ struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
     // Exclude other formats if it's probably RAR, because other formats may
     // behave suboptimal with multiple volumes exposed, such as opening every
     // single volume by seeking at the end of the file.
-    if (!maybe_rar) {
+    if (!(flags & MP_ARCHIVE_FLAG_MAYBE_RAR)) {
         archive_read_support_format_7zip(mpa->arch);
         archive_read_support_format_iso9660(mpa->arch);
         archive_read_support_filter_bzip2(mpa->arch);
@@ -338,7 +362,7 @@ struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
         // of the file, which may be annoying (HTTP reconnect, volume skipping),
         // so use it only as last resort, or if it's relatively likely that it's
         // really zip.
-        if (maybe_zip || probe_all)
+        if (flags & (MP_ARCHIVE_FLAG_UNSAFE | MP_ARCHIVE_FLAG_MAYBE_ZIP))
             archive_read_support_format_zip_seekable(mpa->arch);
     }
 
@@ -356,20 +380,18 @@ struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
     if (fail)
         goto err;
 
-    if (is_multivolume) {
-        MP_WARN(mpa, "This appears to be a multi-volume rar file. Support is "
-            "not very good due to lack of good libarchive support for them. "
-            "They are also an excessively inefficient and stupid way to "
-            "distribute media files, so tell the people creating these files "
-            "to rethink this.\n");
-        MP_WARN(mpa, "There are known cases of libarchive crashing mpv on these.\n");
-    }
-
     return mpa;
 
 err:
     mp_archive_free(mpa);
     return NULL;
+}
+
+struct mp_archive *mp_archive_new(struct mp_log *log, struct stream *src,
+                                  int flags, int max_volumes)
+{
+    flags |= mp_archive_probe(src);
+    return mp_archive_new_raw(log, src, flags, max_volumes);
 }
 
 // Iterate entries. The first call establishes the first entry. Returns false
@@ -430,10 +452,16 @@ struct priv {
 static int reopen_archive(stream_t *s)
 {
     struct priv *p = s->priv;
-    int num_volumes = p->mpa ? p->mpa->num_volumes : 0;
-    mp_archive_free(p->mpa);
     s->pos = 0;
-    p->mpa = mp_archive_new(s->log, p->src, MP_ARCHIVE_FLAG_UNSAFE, num_volumes);
+    if (!p->mpa) {
+        p->mpa = mp_archive_new(s->log, p->src, MP_ARCHIVE_FLAG_UNSAFE, 0);
+    } else {
+        int flags = p->mpa->flags;
+        int num_volumes = p->mpa->num_volumes;
+        mp_archive_free(p->mpa);
+        p->mpa = mp_archive_new_raw(s->log, p->src, flags, num_volumes);
+    }
+
     if (!p->mpa)
         return STREAM_ERROR;
 
