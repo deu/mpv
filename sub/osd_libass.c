@@ -31,7 +31,7 @@
 #include "osd_state.h"
 
 static const char osd_font_pfb[] =
-#include "sub/osd_font.h"
+#include "generated/sub/osd_font.otf.inc"
 ;
 
 #include "sub/ass_mp.h"
@@ -132,6 +132,7 @@ static void create_ass_track(struct osd_state *osd, struct osd_object *obj,
     track->Timer = 100.;
     track->WrapStyle = 1; // end-of-line wrapping instead of smart wrapping
     track->Kerning = true;
+    track->ScaledBorderAndShadow = true;
 
     update_playres(ass, &obj->vo_res);
 }

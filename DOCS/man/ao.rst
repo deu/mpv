@@ -97,7 +97,7 @@ Available audio output drivers are:
     exclusive mode (bypasses the sound server).
 
 ``openal``
-    OpenAL audio output driver
+    OpenAL audio output driver. This is broken and does not work.
 
     ``--openal-num-buffers=<2-128>``
         Specify the number of audio buffers to use. Lower values are better for
@@ -159,10 +159,6 @@ Available audio output drivers are:
         sound system. Playing a file with ``-v`` will show the requested and
         obtained exact buffer size. A value of 0 selects the sound system
         default.
-
-    ``--sdl-bufcnt=<count>``
-        Sets the number of extra audio buffers in mpv. Usually needs not be
-        changed.
 
 ``null``
     Produces no audio output but maintains video playback speed. You can use

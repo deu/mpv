@@ -399,6 +399,7 @@ void pass_linearize(struct gl_shader_cache *sc, enum mp_csp_trc trc)
               "                exp((color.rgb - vec3(%f)) * vec3(1.0/%f)) + vec3(%f),\n"
               "                lessThan(vec3(0.5), color.rgb));\n",
               HLG_C, HLG_A, HLG_B);
+        GLSLF("color.rgb *= vec3(1.0/%f);\n", MP_REF_WHITE_HLG);
         break;
     case MP_CSP_TRC_V_LOG:
         GLSLF("color.rgb = mix((color.rgb - vec3(0.125)) * vec3(1.0/5.6), \n"
@@ -483,6 +484,7 @@ void pass_delinearize(struct gl_shader_cache *sc, enum mp_csp_trc trc)
         GLSLF("color.rgb = pow(color.rgb, vec3(%f));\n", PQ_M2);
         break;
     case MP_CSP_TRC_HLG:
+        GLSLF("color.rgb *= vec3(%f);\n", MP_REF_WHITE_HLG);
         GLSLF("color.rgb = mix(vec3(0.5) * sqrt(color.rgb),\n"
               "                vec3(%f) * log(color.rgb - vec3(%f)) + vec3(%f),\n"
               "                lessThan(vec3(1.0), color.rgb));\n",
@@ -528,7 +530,7 @@ static void pass_ootf(struct gl_shader_cache *sc, enum mp_csp_light light,
         // HLG OOTF from BT.2100, scaled to the chosen display peak
         float gamma = MPMAX(1.0, 1.2 + 0.42 * log10(peak * MP_REF_WHITE / 1000.0));
         GLSLF("color.rgb *= vec3(%f * pow(dot(src_luma, color.rgb), %f));\n",
-              peak / pow(12, gamma), gamma - 1.0);
+              peak / pow(12.0 / MP_REF_WHITE_HLG, gamma), gamma - 1.0);
         break;
     }
     case MP_CSP_LIGHT_SCENE_709_1886:
@@ -561,7 +563,7 @@ static void pass_inverse_ootf(struct gl_shader_cache *sc, enum mp_csp_light ligh
     {
     case MP_CSP_LIGHT_SCENE_HLG: {
         float gamma = MPMAX(1.0, 1.2 + 0.42 * log10(peak * MP_REF_WHITE / 1000.0));
-        GLSLF("color.rgb *= vec3(1.0/%f);\n", peak / pow(12, gamma));
+        GLSLF("color.rgb *= vec3(1.0/%f);\n", peak / pow(12.0 / MP_REF_WHITE_HLG, gamma));
         GLSLF("color.rgb /= vec3(max(1e-6, pow(dot(src_luma, color.rgb), %f)));\n",
               (gamma - 1.0) / gamma);
         break;
@@ -647,6 +649,15 @@ static void hdr_update_peak(struct gl_shader_cache *sc,
     GLSL(})
 }
 
+static inline float pq_delinearize(float x)
+{
+    x *= MP_REF_WHITE / 10000.0;
+    x = powf(x, PQ_M1);
+    x = (PQ_C1 + PQ_C2 * x) / (1.0 + PQ_C3 * x);
+    x = pow(x, PQ_M2);
+    return x;
+}
+
 // Tone map from a known peak brightness to the range [0,1]. If ref_peak
 // is 0, we will use peak detection instead
 static void pass_tone_map(struct gl_shader_cache *sc,
@@ -668,14 +679,22 @@ static void pass_tone_map(struct gl_shader_cache *sc,
     if (opts->compute_peak >= 0)
         hdr_update_peak(sc, opts);
 
-    GLSLF("vec3 sig = color.rgb;\n");
+    // Always hard-clip the upper bound of the signal range to avoid functions
+    // exploding on inputs greater than 1.0
+    GLSLF("vec3 sig = min(color.rgb, sig_peak);\n");
+
+    // This function always operates on an absolute scale, so ignore the
+    // dst_peak normalization for it
+    float dst_scale = dst_peak;
+    if (opts->curve == TONE_MAPPING_BT_2390)
+        dst_scale = 1.0;
 
     // Rescale the variables in order to bring it into a representation where
     // 1.0 represents the dst_peak. This is because all of the tone mapping
     // algorithms are defined in such a way that they map to the range [0.0, 1.0].
-    if (dst_peak > 1.0) {
-        GLSLF("sig *= 1.0/%f;\n", dst_peak);
-        GLSLF("sig_peak *= 1.0/%f;\n", dst_peak);
+    if (dst_scale > 1.0) {
+        GLSLF("sig *= 1.0/%f;\n", dst_scale);
+        GLSLF("sig_peak *= 1.0/%f;\n", dst_scale);
     }
 
     GLSL(float sig_orig = sig[sig_idx];)
@@ -686,7 +705,7 @@ static void pass_tone_map(struct gl_shader_cache *sc,
     float param = opts->curve_param;
     switch (opts->curve) {
     case TONE_MAPPING_CLIP:
-        GLSLF("sig = %f * sig;\n", isnan(param) ? 1.0 : param);
+        GLSLF("sig = min(%f * sig, 1.0);\n", isnan(param) ? 1.0 : param);
         break;
 
     case TONE_MAPPING_MOBIUS:
@@ -738,25 +757,58 @@ static void pass_tone_map(struct gl_shader_cache *sc,
 
     case TONE_MAPPING_LINEAR: {
         float coeff = isnan(param) ? 1.0 : param;
-        GLSLF("sig = %f / sig_peak * sig;\n", coeff);
+        GLSLF("sig = min(%f / sig_peak, 1.0) * sig;\n", coeff);
         break;
     }
+
+    case TONE_MAPPING_BT_2390:
+        // We first need to encode both sig and sig_peak into PQ space
+        GLSLF("vec4 sig_pq = vec4(sig.rgb, sig_peak);                           \n"
+              "sig_pq *= vec4(1.0/%f);                                          \n"
+              "sig_pq = pow(sig_pq, vec4(%f));                                  \n"
+              "sig_pq = (vec4(%f) + vec4(%f) * sig_pq)                          \n"
+              "          / (vec4(1.0) + vec4(%f) * sig_pq);                     \n"
+              "sig_pq = pow(sig_pq, vec4(%f));                                  \n",
+              10000.0 / MP_REF_WHITE, PQ_M1, PQ_C1, PQ_C2, PQ_C3, PQ_M2);
+        // Encode both the signal and the target brightness to be relative to
+        // the source peak brightness, and figure out the target peak in this space
+        GLSLF("float scale = 1.0 / sig_pq.a;                                    \n"
+              "sig_pq.rgb *= vec3(scale);                                       \n"
+              "float maxLum = %f * scale;                                       \n",
+              pq_delinearize(dst_peak));
+        // Apply piece-wise hermite spline
+        GLSLF("float ks = 1.5 * maxLum - 0.5;                                   \n"
+              "vec3 tb = (sig_pq.rgb - vec3(ks)) / vec3(1.0 - ks);              \n"
+              "vec3 tb2 = tb * tb;                                              \n"
+              "vec3 tb3 = tb2 * tb;                                             \n"
+              "vec3 pb = (2.0 * tb3 - 3.0 * tb2 + vec3(1.0)) * vec3(ks) +       \n"
+              "          (tb3 - 2.0 * tb2 + tb) * vec3(1.0 - ks) +              \n"
+              "          (-2.0 * tb3 + 3.0 * tb2) * vec3(maxLum);               \n"
+              "sig = mix(pb, sig_pq.rgb, lessThan(sig_pq.rgb, vec3(ks)));       \n");
+        // Convert back from PQ space to linear light
+        GLSLF("sig *= vec3(sig_pq.a);                                           \n"
+              "sig = pow(sig, vec3(1.0/%f));                                    \n"
+              "sig = max(sig - vec3(%f), 0.0) /                                 \n"
+              "          (vec3(%f) - vec3(%f) * sig);                           \n"
+              "sig = pow(sig, vec3(1.0/%f));                                    \n"
+              "sig *= vec3(%f);                                                 \n",
+              PQ_M2, PQ_C1, PQ_C2, PQ_C3, PQ_M1, 10000.0 / MP_REF_WHITE);
+        break;
 
     default:
         abort();
     }
 
-    GLSL(sig = min(sig, vec3(1.0));)
     GLSL(vec3 sig_lin = color.rgb * (sig[sig_idx] / sig_orig);)
 
     // Mix between the per-channel tone mapped and the linear tone mapped
     // signal based on the desaturation strength
     if (opts->desat > 0) {
-        float base = 0.18 * dst_peak;
+        float base = 0.18 * dst_scale;
         GLSLF("float coeff = max(sig[sig_idx] - %f, 1e-6) / "
               "              max(sig[sig_idx], 1.0);\n", base);
         GLSLF("coeff = %f * pow(coeff, %f);\n", opts->desat, opts->desat_exp);
-        GLSLF("color.rgb = mix(sig_lin, %f * sig, coeff);\n", dst_peak);
+        GLSLF("color.rgb = mix(sig_lin, %f * sig, coeff);\n", dst_scale);
     } else {
         GLSL(color.rgb = sig_lin;)
     }
@@ -819,6 +871,17 @@ void pass_color_map(struct gl_shader_cache *sc, bool is_linear,
         mp_get_cms_matrix(csp_src, csp_dst, MP_INTENT_RELATIVE_COLORIMETRIC, m);
         gl_sc_uniform_mat3(sc, "cms_matrix", true, &m[0][0]);
         GLSL(color.rgb = cms_matrix * color.rgb;)
+
+        if (opts->gamut_clipping) {
+            GLSL(float cmin = min(min(color.r, color.g), color.b);)
+            GLSL(if (cmin < 0.0) {
+                     float luma = dot(dst_luma, color.rgb);
+                     float coeff = cmin / (cmin - luma);
+                     color.rgb = mix(color.rgb, vec3(luma), coeff);
+                 })
+            GLSL(float cmax = max(max(color.r, color.g), color.b);)
+            GLSL(if (cmax > 1.0) color.rgb /= cmax;)
+        }
     }
 
     if (need_ootf)

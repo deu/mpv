@@ -826,6 +826,10 @@ strictly part of the guaranteed API.
     Returns the process ID of the running mpv process. This can be used to identify
     the calling mpv when launching (detached) subprocesses.
 
+``utils.get_env_list()``
+    Returns the C environment as a list of strings. (Do not confuse this with
+    the Lua "environment", which is an unrelated concept.)
+
 ``utils.parse_json(str [, trail])``
     Parses the given string argument as JSON, and returns it as a Lua table. On
     error, returns ``nil, error``. (Currently, ``error`` is just a string
@@ -885,8 +889,22 @@ guarantee a stable interface.
     their result (normally, the Lua scripting interface is asynchronous from
     the point of view of the player core). ``priority`` is an arbitrary integer
     that allows ordering among hooks of the same kind. Using the value 50 is
-    recommended as neutral default value. ``fn`` is the function that will be
-    called during execution of the hook.
+    recommended as neutral default value.
+
+    ``fn(hook)`` is the function that will be called during execution of the
+    hook. The parameter passed to it (``hook``) is a Lua object that can control
+    further aspects about the currently invoked hook. It provides the following
+    methods:
+
+        ``defer()``
+            Returning from the hook function should not automatically continue
+            the hook. Instead, the API user wants to call ``hook:cont()`` on its
+            own at a later point in time (before or after the function has
+            returned).
+
+        ``cont()``
+            Continue the hook. Doesn't need to be called unless ``defer()`` was
+            called.
 
     See `Hooks`_ for currently existing hooks and what they do - only the hook
     list is interesting; handling hook execution is done by the Lua script

@@ -189,9 +189,11 @@ success, ``fn`` is called always a-sync, ``error`` is empty string on success.
 
 ``mp.utils.subprocess_detached(t)``
 
+``mp.utils.get_env_list()``
+
 ``mp.utils.getpid()`` (LE)
 
-``mp.add_hook(type, priority, fn)``
+``mp.add_hook(type, priority, fn(hook))``
 
 ``mp.options.read_options(obj [, identifier [, on_update]])`` (types:
 string/boolean/number)

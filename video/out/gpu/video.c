@@ -322,7 +322,7 @@ static const struct gl_video_opts gl_video_opts_def = {
     .background = {0, 0, 0, 255},
     .gamma = 1.0f,
     .tone_map = {
-        .curve = TONE_MAPPING_HABLE,
+        .curve = TONE_MAPPING_BT_2390,
         .curve_param = NAN,
         .max_boost = 1.0,
         .decay_rate = 100.0,
@@ -330,6 +330,7 @@ static const struct gl_video_opts gl_video_opts_def = {
         .scene_threshold_high = 10.0,
         .desat = 0.75,
         .desat_exp = 1.5,
+        .gamut_clipping = 1,
     },
     .early_flush = -1,
     .hwdec_interop = "auto",
@@ -382,7 +383,8 @@ const struct m_sub_options gl_video_conf = {
             {"reinhard", TONE_MAPPING_REINHARD},
             {"hable",    TONE_MAPPING_HABLE},
             {"gamma",    TONE_MAPPING_GAMMA},
-            {"linear",   TONE_MAPPING_LINEAR})},
+            {"linear",   TONE_MAPPING_LINEAR},
+            {"bt.2390",  TONE_MAPPING_BT_2390})},
         {"hdr-compute-peak", OPT_CHOICE(tone_map.compute_peak,
             {"auto", 0},
             {"yes", 1},
@@ -400,6 +402,7 @@ const struct m_sub_options gl_video_conf = {
         {"tone-mapping-desaturate-exponent", OPT_FLOAT(tone_map.desat_exp),
             M_RANGE(0.0, 20.0)},
         {"gamut-warning", OPT_FLAG(tone_map.gamut_warning)},
+        {"gamut-clipping", OPT_FLAG(tone_map.gamut_clipping)},
         {"opengl-pbo", OPT_FLAG(pbo)},
         SCALER_OPTS("scale",  SCALER_SCALE),
         SCALER_OPTS("dscale", SCALER_DSCALE),
@@ -3458,6 +3461,7 @@ done:
     talloc_free(nframe);
     ra_tex_free(p->ra, &target);
     gl_video_resize(p, &old_src, &old_dst, &old_osd);
+    gl_video_reset_surfaces(p);
     if (!ok)
         TA_FREEP(&res);
     args->res = res;
@@ -4081,6 +4085,8 @@ static int validate_scaler_opt(struct mp_log *log, const m_option_t *opt,
     bool tscale = bstr_equals0(name, "tscale");
     if (bstr_equals0(param, "help")) {
         r = M_OPT_EXIT;
+    } else if (bstr_equals0(name, "dscale") && !param.len) {
+        return r; // empty dscale means "use same as upscaler"
     } else {
         snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
         if (!handle_scaler_opt(s, tscale))
@@ -4110,6 +4116,8 @@ static int validate_window_opt(struct mp_log *log, const m_option_t *opt,
     int r = 1;
     if (bstr_equals0(param, "help")) {
         r = M_OPT_EXIT;
+    } else if (!param.len) {
+        return r; // empty string means "use preferred window"
     } else {
         snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
         const struct filter_window *window = mp_find_filter_window(s);

@@ -210,11 +210,10 @@ This applies to certain APIs, such as ``mp.command_native()`` (with tables that
 have string keys) in Lua scripting, or ``mpv_command_node()`` (with
 MPV_FORMAT_NODE_MAP) in the C libmpv client API.
 
-Like with array commands, quoting and escaping is inherently not needed in the
-normal case.
-
-The name of each command is defined in each command description in the
-`List of Input Commands`_. ``--input-cmdlist`` also lists them.
+The name of the command is provided with a ``name`` string field. The name of
+each command is defined in each command description in the
+`List of Input Commands`_. ``--input-cmdlist`` also lists them. See the
+``subprocess`` command for an example.
 
 Some commands do not support named arguments (e.g. ``run`` command). You need
 to use APIs that pass arguments as arrays.
@@ -277,6 +276,12 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         Mark the current time position. The next normal ``revert-seek`` command
         will seek back to this point, no matter how many seeks happened since
         last time.
+    mark-permanent
+        If set, mark the current position, and do not change the mark position
+        before the next ``revert-seek`` command that has ``mark`` or
+        ``mark-permanent`` set (or playback of the current file ends). Until
+        this happens, ``revert-seek`` will always seek to the marked point. This
+        flag cannot be combined with ``mark``.
 
     Using it without any arguments gives you the default behavior.
 
@@ -523,12 +528,42 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     ``capture_stderr`` (``MPV_FORMAT_FLAG``)
         Same as ``capture_stdout``, but for stderr.
 
+    ``detach`` (``MPV_FORMAT_FLAG``)
+        Whether to run the process in detached mode (optional, default: no). In
+        this mode, the process is run in a new process session, and the command
+        does not wait for the process to terminate. If neither
+        ``capture_stdout`` nor ``capture_stderr`` have been set to ``yes``,
+        the command returns immediately after the new process has been started,
+        otherwise the command will read as long as the pipes are open.
+
+    ``env`` (``MPV_FORMAT_NODE_ARRAY[MPV_FORMAT_STRING]``)
+        Set a list of environment variables for the new process (default: empty).
+        If an empty list is passed, the environment of the mpv process is used
+        instead. (Unlike the underlying OS mechanisms, the mpv command cannot
+        start a process with empty environment. Fortunately, that is completely
+        useless.) The format of the list is as in the ``execle()`` syscall. Each
+        string item defines an environment variable as in ``NANME=VALUE``.
+
+        On Lua, you may use ``utils.get_env_list()`` to retrieve the current
+        environment if you e.g. simply want to add a new variable.
+
+    ``stdin_data`` (``MPV_FORMAT_STRING``)
+        Feed the given string to the new process' stdin. Since this is a string,
+        you cannot pass arbitrary binary data. If the process terminates or
+        closes the pipe before all data is written, the remaining data is
+        silently discarded. Probably does not work on win32.
+
+    ``passthrough_stdin`` (``MPV_FORMAT_FLAG``)
+        If enabled, wire the new process' stdin to mpv's stdin (default: no).
+        Before mpv 0.33.0, this argument did not exist, but the default was if
+        it was set to ``yes``.
+
     The command returns the following result (as ``MPV_FORMAT_NODE_MAP``):
 
     ``status`` (``MPV_FORMAT_INT64``)
         The raw exit status of the process. It will be negative on error. The
         meaning of negative values is undefined, other than meaning error (and
-        does not necessarily correspond to OS low level exit status values).
+        does not correspond to OS low level exit status values).
 
         On Windows, it can happen that a negative return value is returned
         even if the process exits gracefully, because the win32 ``UINT`` exit
@@ -571,6 +606,23 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         Don't forget to set the ``playback_only`` field if you want the command
         run while the player is in idle mode, or if you don't want that end of
         playback kills the command.
+
+    .. admonition:: Example
+
+        ::
+
+            local r = mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                capture_stdout = true,
+                args = {"cat", "/proc/cpuinfo"},
+            })
+            if r.status == 0 then
+                print("result: " .. r.stdout)
+            end
+
+        This is a fairly useless Lua example, which demonstrates how to run
+        a process in a blocking manner, and retrieving its stdout output.
 
 ``quit [<code>]``
     Exit the player. If an argument is given, it's used as process exit code.
@@ -1179,13 +1231,21 @@ Input Commands that are Possibly Subject to Change
 ``af-command <label> <command> <argument>``
     Same as ``vf-command``, but for audio filters.
 
-``apply-profile <name>``
+``apply-profile <name> [<mode>]``
     Apply the contents of a named profile. This is like using ``profile=name``
     in a config file, except you can map it to a key binding to change it at
     runtime.
 
-    There is no such thing as "unapplying" a profile - applying a profile
-    merely sets all option values listed within the profile.
+    The mode argument:
+
+    ``default``
+        Apply the profile. Default if the argument is omitted.
+
+    ``restore``
+        Restore options set by a previous ``apply-profile`` command for this
+        profile. Only works if the profile has ``profile-restore`` set to a
+        relevant mode. Prints a warning if nothing could be done. See
+        `Runtime profiles`_ for details.
 
 ``load-script <filename>``
     Load a script, similar to the ``--script`` option. Whether this waits for
@@ -2279,6 +2339,11 @@ Property list
         Source file stereo 3D mode. (See the ``format`` video filter's
         ``stereo-in`` option.)
 
+    ``video-params/alpha``
+        Alpha type. If the format has no alpha channel, this will be unavailable
+        (but in future releases, it could change to ``no``). If alpha is
+        present, this is set to ``straight`` or ``premul``.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -2302,6 +2367,8 @@ Property list
             "chroma-location"   MPV_FORMAT_STRING
             "rotate"            MPV_FORMAT_INT64
             "stereo-in"         MPV_FORMAT_STRING
+            "average-bpp"       MPV_FORMAT_INT64
+            "alpha"             MPV_FORMAT_STRING
 
 ``dwidth``, ``dheight``
     Video display size. This is the video size after filters and aspect scaling
@@ -2730,6 +2797,26 @@ Property list
                 "replaygain-track-gain" MPV_FORMAT_DOUBLE
                 "replaygain-album-peak" MPV_FORMAT_DOUBLE
                 "replaygain-album-gain" MPV_FORMAT_DOUBLE
+
+``current-tracks/...``
+    This gives access to currently selected tracks. It redirects to the correct
+    entry in ``track-list``.
+
+    The following sub-entries are defined: ``video``, ``audio``, ``sub``,
+    ``sub2``
+
+    For example, ``current-tracks/audio/lang`` returns the current audio track's
+    language field (the same value as ``track-list/N/lang``).
+
+    A sub-entry is accessible only if a track of that type is actually selected.
+    Tracks selected via ``--lavfi-complex`` never appear under this property.
+    ``current-tracks`` and ``current-tracks/`` are currently not accessible, and
+    will not return anything.
+
+    Scripts etc. should not use this. They should use ``track-list``, loop over
+    all tracks, and inspect the ``selected`` field to test whether a track is
+    selected (or compare the ``id`` field to the ``video`` / ``audio`` etc.
+    options).
 
 ``chapter-list``
     List of chapters, current entry marked. Currently, the raw property value

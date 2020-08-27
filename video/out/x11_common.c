@@ -107,19 +107,19 @@ typedef struct
 } MotifWmHints;
 
 static const char x11_icon_16[] =
-#include "video/out/x11_icon_16.inc"
+#include "generated/etc/mpv-icon-8bit-16x16.png.inc"
 ;
 
 static const char x11_icon_32[] =
-#include "video/out/x11_icon_32.inc"
+#include "generated/etc/mpv-icon-8bit-32x32.png.inc"
 ;
 
 static const char x11_icon_64[] =
-#include "video/out/x11_icon_64.inc"
+#include "generated/etc/mpv-icon-8bit-64x64.png.inc"
 ;
 
 static const char x11_icon_128[] =
-  #include "video/out/x11_icon_128.inc"
+#include "generated/etc/mpv-icon-8bit-128x128.png.inc"
 ;
 
 #define ICON_ENTRY(var) { (char *)var, sizeof(var) }
@@ -527,30 +527,6 @@ static void vo_x11_get_bounding_monitors(struct vo_x11_state *x11, long b[4])
     XFree(screens);
 }
 
-static void *screensaver_thread(void *arg)
-{
-    struct vo_x11_state *x11 = arg;
-
-    for (;;) {
-        sem_wait(&x11->screensaver_sem);
-        // don't queue multiple wakeups
-        while (!sem_trywait(&x11->screensaver_sem)) {}
-
-        if (atomic_load(&x11->screensaver_terminate))
-            break;
-
-        char *args[] = {"xdg-screensaver", "reset", NULL};
-        int status = mp_subprocess(args, NULL, NULL, mp_devnull, mp_devnull, &(char*){0});
-        if (status) {
-            MP_VERBOSE(x11, "Disabling screensaver failed (%d). Make sure the "
-                            "xdg-screensaver script is installed.\n", status);
-            break;
-        }
-    }
-
-    return NULL;
-}
-
 int vo_x11_init(struct vo *vo)
 {
     char *dispName;
@@ -571,13 +547,6 @@ int vo_x11_init(struct vo *vo)
     };
     x11->opts = x11->opts_cache->opts;
     vo->x11 = x11;
-
-    sem_init(&x11->screensaver_sem, 0, 0);
-    if (pthread_create(&x11->screensaver_thread, NULL, screensaver_thread, x11)) {
-        sem_destroy(&x11->screensaver_sem);
-        goto error;
-    }
-    x11->screensaver_thread_running = true;
 
     x11_error_output = x11->log;
     XSetErrorHandler(x11_errorhandler);
@@ -806,13 +775,6 @@ void vo_x11_uninit(struct vo *vo)
         XSetErrorHandler(NULL);
         x11_error_output = NULL;
         XCloseDisplay(x11->display);
-    }
-
-    if (x11->screensaver_thread_running) {
-        atomic_store(&x11->screensaver_terminate, true);
-        sem_post(&x11->screensaver_sem);
-        pthread_join(x11->screensaver_thread, NULL);
-        sem_destroy(&x11->screensaver_sem);
     }
 
     if (x11->wakeup_pipe[0] >= 0) {
@@ -1536,8 +1498,9 @@ static void vo_x11_map_window(struct vo *vo, struct mp_rect rc)
         x11_send_ewmh_msg(x11, "_NET_WM_FULLSCREEN_MONITORS", params);
     }
 
-    if (x11->opts->all_workspaces) {
-        long v = 0xFFFFFFFF;
+    if (x11->opts->all_workspaces || x11->opts->geometry.ws > 0) {
+        long v = x11->opts->all_workspaces
+                ? 0xFFFFFFFF : x11->opts->geometry.ws - 1;
         XChangeProperty(x11->display, x11->window, XA(x11, _NET_WM_DESKTOP),
                         XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&v, 1);
     }
@@ -2013,7 +1976,6 @@ static void xscreensaver_heartbeat(struct vo_x11_state *x11)
         (time - x11->screensaver_time_last) >= 10)
     {
         x11->screensaver_time_last = time;
-        sem_post(&x11->screensaver_sem);
         XResetScreenSaver(x11->display);
     }
 }

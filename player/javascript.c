@@ -51,7 +51,7 @@
 // All these are generated from player/javascript/*.js
 static const char *const builtin_files[][3] = {
     {"@/defaults.js",
-#   include "player/javascript/defaults.js.inc"
+#   include "generated/player/javascript/defaults.js.inc"
     },
     {0}
 };
@@ -939,6 +939,16 @@ static void script_getenv(js_State *J)
     }
 }
 
+// args: none
+static void script_get_env_list(js_State *J)
+{
+    js_newarray(J);
+    for (int n = 0; environ && environ[n]; n++) {
+        js_pushstring(J, environ[n]);
+        js_setindex(J, -2, n);
+    }
+}
+
 // args: as-filename, content-string, returns the compiled result as a function
 static void script_compile_js(js_State *J)
 {
@@ -1149,6 +1159,7 @@ static const struct fn_entry utils_fns[] = {
     AF_ENTRY(join_path, 2),
     AF_ENTRY(get_user_path, 1),
     FN_ENTRY(getpid, 0),
+    FN_ENTRY(get_env_list, 0),
 
     FN_ENTRY(read_file, 2),
     AF_ENTRY(write_file, 2),

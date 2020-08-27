@@ -191,7 +191,7 @@ static void read_sub_bitmaps(struct sd *sd, struct sub *sub)
             MP_ERR(sd, "unsupported subtitle type from libavcodec\n");
             continue;
         }
-        if (!(r->flags & AV_SUBTITLE_FLAG_FORCED) && opts->forced_subs_only)
+        if (!(r->flags & AV_SUBTITLE_FLAG_FORCED) && opts->forced_subs_only_current)
             continue;
         if (r->w <= 0 || r->h <= 0)
             continue;
@@ -472,6 +472,7 @@ static struct sub_bitmaps *get_bitmaps(struct sd *sd, struct mp_osd_res d,
 
             // Allow moving up the subtitle, but only until it clips.
             sub->y = MPMAX(sub->y - offset, 0);
+            sub->y = MPMIN(sub->y + sub->h, h) - sub->h;
         }
     }
 
